@@ -1,0 +1,312 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── 全局基础 ──────────────────────────────────── */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: #05070d;
+  color: #e2e8f0;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* ─── 滚动条 ─────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e2538;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2a3349;
+}
+
+/* ─── 科技感背景网格 ──────────────────────────────── */
+.tech-grid-bg {
+  background-image:
+    linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 255, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.tech-glow-cyan {
+  box-shadow: 0 0 20px rgba(0, 229, 255, 0.15), inset 0 0 20px rgba(0, 229, 255, 0.05);
+}
+
+.tech-glow-purple {
+  box-shadow: 0 0 20px rgba(168, 85, 247, 0.15), inset 0 0 20px rgba(168, 85, 247, 0.05);
+}
+
+/* ─── 渐变文字 ───────────────────────────────────── */
+.gradient-text-cyan {
+  background: linear-gradient(135deg, #00e5ff, #3b82f6);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gradient-text-purple {
+  background: linear-gradient(135deg, #a855f7, #00e5ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* ─── 玻璃态卡片 ─────────────────────────────────── */
+.glass-panel {
+  background: rgba(15, 20, 32, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(30, 37, 56, 0.8);
+}
+
+.glass-panel-hover:hover {
+  border-color: rgba(0, 229, 255, 0.3);
+  box-shadow: 0 0 15px rgba(0, 229, 255, 0.1);
+}
+
+/* ─── 扫描线动画 ─────────────────────────────────── */
+.scan-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(0, 229, 255, 0.6), transparent);
+  pointer-events: none;
+  z-index: 9999;
+  animation: scan-line 4s linear infinite;
+}
+
+/* ─── 代码块 ─────────────────────────────────────── */
+.code-block {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ─── 流式光标 ───────────────────────────────────── */
+.stream-cursor::after {
+  content: '▊';
+  display: inline-block;
+  color: #00e5ff;
+  animation: blink 1s step-end infinite;
+  margin-left: 2px;
+}
+
+/* ─── Markdown 样式 ──────────────────────────────── */
+.markdown-body {
+  font-size: 14px;
+  line-height: 1.7;
+  color: #e2e8f0;
+}
+
+.markdown-body p {
+  margin-bottom: 0.75em;
+}
+
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body h1, .markdown-body h2, .markdown-body h3 {
+  font-weight: 600;
+  margin-top: 1.2em;
+  margin-bottom: 0.6em;
+}
+
+.markdown-body h1 { font-size: 1.5em; }
+.markdown-body h2 { font-size: 1.3em; }
+.markdown-body h3 { font-size: 1.15em; }
+
+.markdown-body ul, .markdown-body ol {
+  padding-left: 1.5em;
+  margin-bottom: 0.75em;
+}
+
+.markdown-body li {
+  margin-bottom: 0.3em;
+}
+
+.markdown-body code:not(pre code) {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+  background: rgba(0, 229, 255, 0.1);
+  color: #00e5ff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 229, 255, 0.2);
+}
+
+.markdown-body pre {
+  margin-bottom: 0.75em;
+}
+
+.markdown-body a {
+  color: #3b82f6;
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+.markdown-body blockquote {
+  border-left: 3px solid #3b82f6;
+  padding-left: 1em;
+  margin: 0.75em 0;
+  color: #94a3b8;
+}
+
+.markdown-body table {
+  border-collapse: collapse;
+  margin-bottom: 0.75em;
+  width: 100%;
+}
+
+.markdown-body th, .markdown-body td {
+  border: 1px solid #2a3349;
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.markdown-body th {
+  background: rgba(0, 229, 255, 0.05);
+}
+
+/* ─── 输入框 ─────────────────────────────────────── */
+input, textarea {
+  font-family: inherit;
+  outline: none;
+}
+
+textarea {
+  user-select: text;
+}
+
+/* ─── 拖拽区域 ───────────────────────────────────── */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ─── 环境光晕漂浮动画 ────────────────────────────── */
+@keyframes orb-float-1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(60px, 40px) scale(1.1); }
+  66% { transform: translate(-30px, 70px) scale(0.95); }
+}
+
+@keyframes orb-float-2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-80px, -50px) scale(1.15); }
+}
+
+@keyframes orb-float-3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(-50px, 30px) scale(1.05); }
+  66% { transform: translate(40px, -60px) scale(0.9); }
+}
+
+.animate-orb-1 { animation: orb-float-1 20s ease-in-out infinite; }
+.animate-orb-2 { animation: orb-float-2 26s ease-in-out infinite; }
+.animate-orb-3 { animation: orb-float-3 22s ease-in-out infinite; }
+
+/* ─── 流式消息霓虹旋转边框 ─────────────────────────── */
+@property --border-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes border-rotate {
+  to { --border-angle: 360deg; }
+}
+
+.streaming-border {
+  position: relative;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(#0f1420, #0f1420) padding-box,
+    conic-gradient(
+      from var(--border-angle),
+      rgba(0, 229, 255, 0.6),
+      rgba(168, 85, 247, 0.6),
+      rgba(59, 130, 246, 0.6),
+      rgba(0, 229, 255, 0.6)
+    ) border-box;
+  animation: border-rotate 3s linear infinite;
+}
+
+/* ─── 输入框聚焦脉冲光环 ───────────────────────────── */
+@keyframes focus-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.25), 0 0 20px rgba(0, 229, 255, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.1), 0 0 35px rgba(0, 229, 255, 0.2);
+  }
+}
+
+.input-focus-glow:focus-within {
+  animation: focus-pulse 2.5s ease-in-out infinite;
+}
+
+/* ─── 发送按钮悬停光环 ─────────────────────────────── */
+.send-btn-glow:hover:not(:disabled) {
+  box-shadow: 0 0 15px rgba(0, 229, 255, 0.35), 0 0 30px rgba(0, 229, 255, 0.15);
+}
+
+.send-btn-glow:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+/* ─── 新消息微光入场 ───────────────────────────────── */
+@keyframes message-glow-in {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: brightness(1.6) drop-shadow(0 0 12px rgba(0, 229, 255, 0.4));
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: brightness(1) drop-shadow(0 0 0 transparent);
+  }
+}
+
+.message-glow-in {
+  animation: message-glow-in 0.5s ease-out;
+}
+
+/* ─── 噪点纹理（轻微颗粒感，提升质感）───────────────── */
+.noise-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
