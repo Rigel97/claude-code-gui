@@ -154,6 +154,14 @@ ipcMain.handle('window:maximize', () => {
 ipcMain.handle('window:close', () => mainWindow && mainWindow.close());
 
 app.whenReady().then(() => {
+  // dev 模式下 macOS Dock 默认显示 Electron 图标，这里换成自定义图标
+  // （打包版由 app bundle 提供图标，build/icon.png 不在包内，existsSync 兜底）
+  if (process.platform === 'darwin' && app.dock) {
+    const iconPath = path.join(__dirname, '../../build/icon.png');
+    if (fs.existsSync(iconPath)) {
+      app.dock.setIcon(iconPath);
+    }
+  }
   runner = new ClaudeRunner();
   store = new Store();
   createWindow();
