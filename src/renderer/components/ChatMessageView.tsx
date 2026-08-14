@@ -11,7 +11,7 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
 
   if (message.role === 'user') {
     return (
-      <div className="flex gap-3 mb-6 message-glow-in">
+      <div id={`msg-${message.id}`} className="flex gap-3 mb-6 message-glow-in rounded-xl">
         <div className="w-8 h-8 rounded-lg bg-accent-blue/20 border border-accent-blue/30 flex items-center justify-center shrink-0">
           <User className="w-4 h-4 text-accent-blue" />
         </div>
@@ -27,7 +27,7 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
 
   // assistant
   return (
-    <div className="flex gap-3 mb-6 message-glow-in">
+    <div id={`msg-${message.id}`} className="flex gap-3 mb-6 message-glow-in rounded-xl">
       <div className="w-8 h-8 rounded-lg bg-accent-cyan/20 border border-accent-cyan/30 flex items-center justify-center shrink-0 tech-glow-cyan">
         <svg className="w-4 h-4 text-accent-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M12 2L2 7l10 5 10-5-10-5z" />

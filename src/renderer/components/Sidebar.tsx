@@ -1,9 +1,11 @@
 import { useStore } from '../store';
-import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3 } from 'lucide-react';
+import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3, Download } from 'lucide-react';
 import { useState } from 'react';
 import { SettingsPanel } from './SettingsPanel';
 import { FileTree } from './FileTree';
 import { CostDashboard } from './CostDashboard';
+import { sessionToMarkdown } from '../utils/exportSession';
+import type { Session } from '../types';
 
 export function Sidebar() {
   const cwd = useStore((s) => s.cwd);
@@ -26,6 +28,13 @@ export function Sidebar() {
       setCwd(dir);
       newSession();
     }
+  };
+
+  // 导出会话为 Markdown 文件
+  const handleExport = async (session: Session) => {
+    const md = sessionToMarkdown(session);
+    const safeName = session.title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 40) || 'session';
+    await (window as any).api.exportMarkdown(`${safeName}.md`, md);
   };
 
   return (
@@ -93,11 +102,12 @@ export function Sidebar() {
               ) : (
                 <div className="space-y-1">
                   {sessions.map((session, i) => (
-                    <button
+                    <div
                       key={session.sessionId}
-                      onClick={() => switchSession(i)}
-                      disabled={isStreaming}
-                      className={`w-full flex items-start gap-2 px-2.5 py-2 rounded-lg transition-all text-left group disabled:opacity-50 disabled:cursor-not-allowed ${
+                      onClick={() => !isStreaming && switchSession(i)}
+                      className={`w-full flex items-start gap-2 px-2.5 py-2 rounded-lg transition-all text-left group ${
+                        isStreaming ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                      } ${
                         i === activeSessionIndex
                           ? 'bg-accent-cyan/10 border border-accent-cyan/30'
                           : 'hover:bg-bg-light border border-transparent'
@@ -116,7 +126,18 @@ export function Sidebar() {
                           ${session.cost.toFixed(4)} · {new Date(session.createdAt).toLocaleTimeString()}
                         </div>
                       </div>
-                    </button>
+                      {/* 导出按钮（hover 显示） */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleExport(session);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-text-dim hover:text-accent-cyan shrink-0 mt-0.5"
+                        title="导出为 Markdown"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}

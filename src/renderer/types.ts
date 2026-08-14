@@ -126,9 +126,18 @@ export interface ChatMessage {
 export type UIBlock =
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
-  | { kind: 'tool_use'; toolName: string; toolId: string; input: Record<string, unknown>; status: 'running' | 'done' | 'error'; result?: string }
+  | { kind: 'tool_use'; toolName: string; toolId: string; input: Record<string, unknown>; status: 'running' | 'done' | 'error'; result?: string; children?: UIBlock[] }
   | { kind: 'stderr'; text: string }
   | { kind: 'stats'; data: ResultMessage };
+
+// ─── 上下文窗口占用 ─────────────────────────────────────
+
+export interface ContextUsage {
+  /** 已占用的 token 数（input + cache_read + cache_creation） */
+  used: number;
+  /** 上下文窗口上限 */
+  limit: number;
+}
 
 // ─── 会话 ───────────────────────────────────────────────
 

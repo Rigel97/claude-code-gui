@@ -28,8 +28,8 @@ const TOOL_COLORS: Record<string, string> = {
   Task: 'text-accent-yellow border-accent-yellow/30 bg-accent-yellow/5',
 };
 
-export function ToolCallView({ block }: { block: Extract<UIBlock, { kind: 'tool_use' }> }) {
-  // Edit/Write 类工具默认展开 diff，一眼看到改动
+export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { kind: 'tool_use' }>; depth?: number }) {
+  // Edit/Write 类工具与含子调用的 Task 默认展开，一眼看到改动/子代理活动
   const [expanded, setExpanded] = useState(() => isEditTool(block.toolName));
 
   const icon = TOOL_ICONS[block.toolName] || <Wrench className="w-4 h-4" />;
@@ -40,6 +40,10 @@ export function ToolCallView({ block }: { block: Extract<UIBlock, { kind: 'tool_
 
   // 提取 diff 数据（Edit / Write / MultiEdit / NotebookEdit）
   const diffs = extractDiffs(block.toolName, block.input);
+
+  // 子代理（Task）的嵌套调用
+  const children = block.children;
+  const childToolCount = children?.filter((c) => c.kind === 'tool_use').length ?? 0;
 
   return (
     <div className={`rounded-xl border overflow-hidden ${colorClass} animate-fade-in`}>
@@ -52,6 +56,13 @@ export function ToolCallView({ block }: { block: Extract<UIBlock, { kind: 'tool_
         <span className="shrink-0">{icon}</span>
         <span className="text-xs font-mono font-semibold uppercase tracking-wider">{block.toolName}</span>
         <span className="text-xs text-text-secondary truncate flex-1 text-left font-mono">{summary}</span>
+
+        {/* 子代理调用计数徽标 */}
+        {childToolCount > 0 && (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-accent-yellow/10 border border-accent-yellow/30 text-accent-yellow shrink-0">
+            {childToolCount} 子调用
+          </span>
+        )}
 
         {/* 状态指示器 */}
         {block.status === 'running' && <Loader className="w-3.5 h-3.5 animate-spin text-accent-yellow shrink-0" />}
@@ -89,6 +100,24 @@ export function ToolCallView({ block }: { block: Extract<UIBlock, { kind: 'tool_
             <div>
               <div className="text-[10px] text-text-dim font-mono uppercase mb-1">RESULT</div>
               <ToolResult result={block.result} toolName={block.toolName} isError={block.status === 'error'} />
+            </div>
+          )}
+
+          {/* 子代理调用树（Task 嵌套的子调用） */}
+          {children && children.length > 0 && (
+            <div>
+              <div className="text-[10px] text-text-dim font-mono uppercase mb-1">SUBAGENT</div>
+              <div className="space-y-1.5 border-l-2 border-accent-yellow/30 pl-2.5">
+                {children.map((child, i) =>
+                  child.kind === 'tool_use' ? (
+                    <ToolCallView key={i} block={child} depth={depth + 1} />
+                  ) : child.kind === 'text' ? (
+                    <div key={i} className="text-xs text-text-muted font-mono whitespace-pre-wrap leading-relaxed px-1 py-0.5">
+                      {child.text.length > 300 ? child.text.slice(0, 300) + '…' : child.text}
+                    </div>
+                  ) : null
+                )}
+              </div>
             </div>
           )}
         </div>

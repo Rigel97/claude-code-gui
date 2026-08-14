@@ -1,5 +1,5 @@
 import { useStore } from '../store';
-import { Circle, Loader, CheckCircle, XCircle, AlertCircle, Pause, Activity, DollarSign, Zap } from 'lucide-react';
+import { Circle, Loader, CheckCircle, XCircle, AlertCircle, Pause, Activity, DollarSign, Zap, Database } from 'lucide-react';
 import type { RunStatus } from '../types';
 
 const STATUS_CONFIG: Record<RunStatus, { icon: React.ReactNode; label: string; color: string }> = {
@@ -19,6 +19,7 @@ export function StatusBar() {
   const totalOutputTokens = useStore((s) => s.totalOutputTokens);
   const cwd = useStore((s) => s.cwd);
   const currentModel = useStore((s) => s.currentModel);
+  const contextUsage = useStore((s) => s.contextUsage);
 
   const config = STATUS_CONFIG[status];
 
@@ -35,6 +36,11 @@ export function StatusBar() {
           <div className="flex items-center gap-1.5 text-accent-purple">
             <span>thinking: {thinkingTokens} tokens</span>
           </div>
+        )}
+
+        {/* 上下文水位计 */}
+        {contextUsage && (
+          <ContextMeter used={contextUsage.used} limit={contextUsage.limit} />
         )}
       </div>
 
@@ -63,6 +69,34 @@ export function StatusBar() {
           <span>${totalCost.toFixed(4)}</span>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** 上下文窗口水位条：>60% 变黄，>85% 变红提醒开新会话 */
+function ContextMeter({ used, limit }: { used: number; limit: number }) {
+  const ratio = Math.min(used / limit, 1);
+  const pct = (ratio * 100).toFixed(1);
+  const color =
+    ratio > 0.85
+      ? { bar: 'bg-accent-red', text: 'text-accent-red', tip: '上下文即将耗尽，建议新开会话' }
+      : ratio > 0.6
+        ? { bar: 'bg-accent-yellow', text: 'text-accent-yellow', tip: '上下文占用较高' }
+        : { bar: 'bg-accent-cyan', text: 'text-accent-cyan', tip: '上下文占用' };
+
+  return (
+    <div
+      className={`flex items-center gap-1.5 ${color.text}`}
+      title={`${color.tip}\n${formatTokens(used)} / ${formatTokens(limit)} tokens (${pct}%)`}
+    >
+      <Database className="w-3 h-3" />
+      <div className="w-16 h-1.5 rounded-full bg-bg-lighter overflow-hidden">
+        <div
+          className={`h-full rounded-full ${color.bar} transition-all duration-500`}
+          style={{ width: `${Math.max(ratio * 100, 2)}%` }}
+        />
+      </div>
+      <span>{pct}%</span>
     </div>
   );
 }

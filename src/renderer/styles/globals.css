@@ -301,6 +301,20 @@ textarea {
   animation: message-glow-in 0.5s ease-out;
 }
 
+/* ─── 搜索跳转高亮闪烁 ───────────────────────────────── */
+@keyframes search-flash {
+  0%, 100% {
+    filter: none;
+  }
+  20% {
+    filter: brightness(1.6) drop-shadow(0 0 14px rgba(251, 191, 36, 0.5));
+  }
+}
+
+.search-flash {
+  animation: search-flash 1.6s ease-out;
+}
+
 /* ─── 噪点纹理（轻微颗粒感，提升质感）───────────────── */
 .noise-overlay {
   position: fixed;

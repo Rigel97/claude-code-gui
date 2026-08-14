@@ -9,6 +9,8 @@ export function ChatArea() {
   const addUserMessage = useStore((s) => s.addUserMessage);
   const status = useStore((s) => s.status);
   const thinkingTokens = useStore((s) => s.thinkingTokens);
+  const highlightMessageId = useStore((s) => s.highlightMessageId);
+  const setHighlightMessage = useStore((s) => s.setHighlightMessage);
   const scrollRef = useRef<HTMLDivElement>(null);
   // 用户是否贴在底部（向上翻阅历史时暂停自动滚动）
   const stickToBottom = useRef(true);
@@ -31,6 +33,22 @@ export function ChatArea() {
     stickToBottom.current = true;
     addUserMessage(text);
   };
+
+  // 搜索跳转：滚动到目标消息并闪烁高亮
+  useEffect(() => {
+    if (!highlightMessageId) return;
+    const timer = setTimeout(() => {
+      const el = document.getElementById(`msg-${highlightMessageId}`);
+      if (el) {
+        stickToBottom.current = false; // 定位期间不被自动滚动干扰
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        el.classList.add('search-flash');
+        setTimeout(() => el.classList.remove('search-flash'), 1600);
+      }
+      setHighlightMessage(null);
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [highlightMessageId, setHighlightMessage]);
 
   const isEmpty = messages.length === 0 && !streamingMessage;
 

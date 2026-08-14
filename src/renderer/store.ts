@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ChatMessage, Session, SessionEvent, RunStatus, StreamMessage, UIBlock } from './types';
+import type { ChatMessage, ContextUsage, Session, SessionEvent, RunStatus, StreamMessage, UIBlock } from './types';
 
 interface AppState {
   // 当前工作目录
@@ -38,6 +38,22 @@ interface AppState {
   injectedText: { text: string; nonce: number } | null;
   injectText: (text: string) => void;
 
+  // 上下文窗口占用（水位计）
+  contextUsage: ContextUsage | null;
+
+  // 待发消息队列（生成中输入的消息排队，完成后自动续发）
+  queue: string[];
+  enqueueMessage: (text: string) => void;
+  dequeueMessage: () => string | null;
+  removeQueuedMessage: (index: number) => void;
+
+  // 搜索面板
+  searchOpen: boolean;
+  setSearchOpen: (open: boolean) => void;
+  // 搜索跳转后需要高亮的消息
+  highlightMessageId: string | null;
+  setHighlightMessage: (id: string | null) => void;
+
   // 操作
   newSession: () => void;
   switchSession: (index: number) => void;
@@ -69,15 +85,27 @@ function extractToolResultText(content: unknown): string {
     : text;
 }
 
+/** 递归查找 tool_use 块（含子代理 children） */
+function findToolBlock(blocks: UIBlock[], toolId: string): Extract<UIBlock, { kind: 'tool_use' }> | null {
+  for (const b of blocks) {
+    if (b.kind === 'tool_use') {
+      if (b.toolId === toolId) return b;
+      if (b.children) {
+        const hit = findToolBlock(b.children, toolId);
+        if (hit) return hit;
+      }
+    }
+  }
+  return null;
+}
+
 /** 将 tool_result 写回流式消息中对应的 tool_use 块 */
 function applyToolResult(
   streaming: ChatMessage,
   block: { tool_use_id: string; content: unknown; is_error?: boolean }
 ): void {
-  const toolBlock = streaming.blocks.find(
-    (b) => b.kind === 'tool_use' && b.toolId === block.tool_use_id
-  );
-  if (toolBlock && toolBlock.kind === 'tool_use') {
+  const toolBlock = findToolBlock(streaming.blocks, block.tool_use_id);
+  if (toolBlock) {
     toolBlock.status = block.is_error ? 'error' : 'done';
     toolBlock.result = extractToolResultText(block.content);
   }
@@ -130,6 +158,23 @@ export const useStore = create<AppState>((set, get) => ({
   injectedText: null,
   injectText: (text) => set({ injectedText: { text, nonce: Date.now() } }),
 
+  contextUsage: null,
+
+  queue: [],
+  enqueueMessage: (text) => set({ queue: [...get().queue, text] }),
+  dequeueMessage: () => {
+    const [first, ...rest] = get().queue;
+    if (first === undefined) return null;
+    set({ queue: rest });
+    return first;
+  },
+  removeQueuedMessage: (index) => set({ queue: get().queue.filter((_, i) => i !== index) }),
+
+  searchOpen: false,
+  setSearchOpen: (searchOpen) => set({ searchOpen }),
+  highlightMessageId: null,
+  setHighlightMessage: (highlightMessageId) => set({ highlightMessageId }),
+
   newSession: () => {
     // 生成中禁止新建会话，否则后续流事件会写入错误的会话
     const status = get().status;
@@ -141,6 +186,7 @@ export const useStore = create<AppState>((set, get) => ({
       streamingMessage: null,
       messages: [],
       thinkingTokens: 0,
+      contextUsage: null,
     });
   },
 
@@ -214,17 +260,28 @@ export const useStore = create<AppState>((set, get) => ({
           };
         }
 
+        // 子代理（Task）内部产生的消息：挂到父工具块的 children 下
+        const parentId = msg.parent_tool_use_id;
+        let parentBlock: Extract<UIBlock, { kind: 'tool_use' }> | null = null;
+        let container = streaming.blocks;
+        if (parentId) {
+          parentBlock = findToolBlock(streaming.blocks, parentId);
+          if (parentBlock) {
+            container = parentBlock.children ?? [];
+          }
+        }
+
         const newBlocks: UIBlock[] = [];
         for (const block of msg.message.content) {
           if (block.type === 'text') {
-            const existingText = streaming.blocks.find((b) => b.kind === 'text');
+            const existingText = container.find((b) => b.kind === 'text');
             if (existingText && existingText.kind === 'text') {
               existingText.text += block.text;
             } else {
               newBlocks.push({ kind: 'text', text: block.text });
             }
           } else if (block.type === 'thinking') {
-            const existingThinking = streaming.blocks.find((b) => b.kind === 'thinking');
+            const existingThinking = container.find((b) => b.kind === 'thinking');
             if (existingThinking && existingThinking.kind === 'thinking') {
               existingThinking.text += block.thinking;
             } else {
@@ -243,8 +300,27 @@ export const useStore = create<AppState>((set, get) => ({
           }
         }
 
-        streaming.blocks = [...streaming.blocks, ...newBlocks];
-        set({ streamingMessage: { ...streaming } });
+        const updatedContainer = [...container, ...newBlocks];
+        if (parentBlock) {
+          parentBlock.children = updatedContainer;
+        } else {
+          streaming.blocks = updatedContainer;
+        }
+
+        // 上下文占用采样：assistant 消息的 usage 反映当前上下文体量
+        let contextUsage = state.contextUsage;
+        const usage = msg.message.usage as Record<string, number> | undefined;
+        if (usage) {
+          const used =
+            (usage.input_tokens || 0) +
+            (usage.cache_read_input_tokens || 0) +
+            (usage.cache_creation_input_tokens || 0);
+          if (used > 0) {
+            contextUsage = { used, limit: contextUsage?.limit || 200000 };
+          }
+        }
+
+        set({ streamingMessage: { ...streaming }, contextUsage });
         break;
       }
 
@@ -273,6 +349,17 @@ export const useStore = create<AppState>((set, get) => ({
         // 归档会话（标题取第一条用户消息）
         const firstUserMsg = state.messages.find((m) => m.role === 'user');
         const title = firstUserMsg?.blocks.find((b) => b.kind === 'text')?.text?.slice(0, 50) || 'Session';
+
+        // 用 result 中的真实 contextWindow 校准水位上限
+        let contextUsage = state.contextUsage;
+        const modelUsage = msg.modelUsage ? Object.values(msg.modelUsage)[0] : undefined;
+        if (modelUsage?.contextWindow) {
+          const used =
+            msg.usage.input_tokens +
+            (msg.usage.cache_read_input_tokens || 0) +
+            (msg.usage.cache_creation_input_tokens || 0);
+          contextUsage = { used: Math.max(used, contextUsage?.used || 0), limit: modelUsage.contextWindow };
+        }
 
         // 本轮执行的成本事件（仪表盘按时间聚合用）
         const event: SessionEvent = {
@@ -319,6 +406,7 @@ export const useStore = create<AppState>((set, get) => ({
           totalInputTokens: state.totalInputTokens + msg.usage.input_tokens,
           totalOutputTokens: state.totalOutputTokens + msg.usage.output_tokens,
           sessions: trimmedSessions,
+          contextUsage,
         });
         break;
       }

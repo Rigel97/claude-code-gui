@@ -6,6 +6,7 @@ import { StatusBar } from './components/StatusBar';
 import { TitleBar } from './components/TitleBar';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { ParticleField } from './components/ParticleField';
+import { SearchPanel } from './components/SearchPanel';
 
 export default function App() {
   const cwd = useStore((s) => s.cwd);
@@ -57,6 +58,13 @@ export default function App() {
 
     const removeStatus = (window as any).api.claude.onStatusChange((status: string) => {
       setStatus(status as any);
+      // 任务完成且窗口不在前台时，发系统通知
+      if (status === 'completed' && document.visibilityState !== 'visible') {
+        const state = useStore.getState();
+        const lastUserMsg = [...state.messages].reverse().find((m) => m.role === 'user');
+        const snippet = lastUserMsg?.blocks.find((b) => b.kind === 'text')?.text?.slice(0, 60) || '';
+        (window as any).api.notify('Claude 任务完成', snippet);
+      }
     });
 
     return () => {
@@ -64,6 +72,18 @@ export default function App() {
       removeStatus();
     };
   }, [handleStream, setStatus]);
+
+  // Cmd/Ctrl+F 打开搜索面板
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        useStore.getState().setSearchOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   return (
     <div className="flex flex-col h-screen tech-grid-bg bg-bg-deepest">
@@ -92,6 +112,9 @@ export default function App() {
         {/* 底部状态栏 */}
         <StatusBar />
       </div>
+
+      {/* 消息搜索面板 */}
+      <SearchPanel />
     </div>
   );
 }

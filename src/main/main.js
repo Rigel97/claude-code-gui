@@ -1,7 +1,7 @@
 // 清除可能存在的 ELECTRON_RUN_AS_NODE，确保以完整 Electron 模式运行
 delete process.env.ELECTRON_RUN_AS_NODE;
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { ClaudeRunner } = require('./runner');
@@ -43,6 +43,11 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  // 窗口聚焦时清除 Dock 角标
+  mainWindow.on('focus', () => {
+    if (app.dock) app.dock.setBadge('');
   });
 
   const devServerUp = await isDevServerRunning();
@@ -107,6 +112,34 @@ ipcMain.handle('fs:read-dir', async (_e, dirPath) => {
   } catch {
     return [];
   }
+});
+
+// ─── IPC: 系统通知（长任务完成提醒）────────────────────
+ipcMain.handle('app:notify', (_e, { title, body }) => {
+  if (!Notification.isSupported()) return false;
+  const notification = new Notification({ title, body });
+  notification.on('click', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+  notification.show();
+  // macOS Dock 角标提醒
+  if (app.dock) app.dock.setBadge('●');
+  return true;
+});
+
+// ─── IPC: 导出会话为 Markdown ─────────────────────────
+ipcMain.handle('export:save-markdown', async (_e, { defaultName, content }) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: defaultName,
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+  fs.writeFileSync(result.filePath, content, 'utf8');
+  return result.filePath;
 });
 
 // ─── IPC: 窗口控制 ──────────────────────────────────────

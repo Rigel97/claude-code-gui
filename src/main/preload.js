@@ -29,6 +29,10 @@ const api = {
     readDir: (dirPath) => ipcRenderer.invoke('fs:read-dir', dirPath),
   },
 
+  notify: (title, body) => ipcRenderer.invoke('app:notify', { title, body }),
+
+  exportMarkdown: (defaultName, content) => ipcRenderer.invoke('export:save-markdown', { defaultName, content }),
+
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     maximize: () => ipcRenderer.invoke('window:maximize'),

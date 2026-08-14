@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useStore } from '../store';
-import { Send, Square, Loader2, Sparkles } from 'lucide-react';
+import { Send, Square, Sparkles, X, ListOrdered } from 'lucide-react';
 
 // ─── 斜杠命令定义 ──────────────────────────────────────
 interface SlashCommand {
@@ -26,7 +26,6 @@ const SLASH_COMMANDS: SlashCommand[] = [
 
 export function InputBar({ onSend }: { onSend: (text: string) => void }) {
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -39,6 +38,10 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
   const permissionMode = useStore((s) => s.permissionMode);
   const injectedText = useStore((s) => s.injectedText);
   const newSession = useStore((s) => s.newSession);
+  const queue = useStore((s) => s.queue);
+  const enqueueMessage = useStore((s) => s.enqueueMessage);
+  const dequeueMessage = useStore((s) => s.dequeueMessage);
+  const removeQueuedMessage = useStore((s) => s.removeQueuedMessage);
   const displayModel = model || currentModel;
 
   const isStreaming = status === 'streaming' || status === 'starting';
@@ -57,37 +60,52 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
     textareaRef.current?.focus();
   }, [injectedText]);
 
-  const handleSend = useCallback(async () => {
-    if (!input.trim() || isStreaming) return;
+  /** 实际发送一条消息（不经过队列） */
+  const sendPrompt = useCallback((prompt: string) => {
+    onSend(prompt);
+    // 不 await：send 的 Promise 在整个对话完成后才 resolve
+    void (window as any).api.claude.send({
+      prompt,
+      cwd,
+      sessionId: sessionId || undefined,
+      // 已有会话 ID 时必须用 --resume 续接，否则多轮上下文会丢失
+      resume: !!sessionId,
+      options: { ...(model ? { model } : {}), permissionMode },
+    }).catch((err: unknown) => console.error('Send failed:', err));
+  }, [cwd, sessionId, model, permissionMode, onSend]);
+
+  // 生成结束后自动发送队列中的下一条
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if ((prev === 'streaming' || prev === 'starting') && status === 'completed') {
+      const next = dequeueMessage();
+      if (next) {
+        sendPrompt(next);
+      }
+    }
+  }, [status, dequeueMessage, sendPrompt]);
+
+  const handleSend = useCallback(() => {
+    if (!input.trim()) return;
 
     const prompt = input.trim();
     setInput('');
     setSlashOpen(false);
-    setIsLoading(true);
 
-    // 通知 store 添加用户消息
-    onSend(prompt);
-
-    // 自动调整高度
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
 
-    try {
-      await (window as any).api.claude.send({
-        prompt,
-        cwd,
-        sessionId: sessionId || undefined,
-        // 已有会话 ID 时必须用 --resume 续接，否则多轮上下文会丢失
-        resume: !!sessionId,
-        options: { ...(model ? { model } : {}), permissionMode },
-      });
-    } catch (err) {
-      console.error('Send failed:', err);
-    } finally {
-      setIsLoading(false);
+    // 生成中：进入队列，等当前轮结束后自动续发
+    if (isStreaming) {
+      enqueueMessage(prompt);
+      return;
     }
-  }, [input, isStreaming, cwd, sessionId, model, permissionMode, onSend]);
+
+    sendPrompt(prompt);
+  }, [input, isStreaming, enqueueMessage, sendPrompt]);
 
   const handleAbort = useCallback(() => {
     (window as any).api.claude.abort();
@@ -164,6 +182,32 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
   return (
     <div className="px-6 py-4 border-t border-border/30 bg-bg-deep/50 backdrop-blur-sm">
       <div className="relative">
+        {/* 待发队列 */}
+        {queue.length > 0 && (
+          <div className="mb-2 space-y-1 animate-fade-in">
+            <div className="flex items-center gap-1.5 px-1 text-[10px] text-text-dim font-mono uppercase tracking-wider">
+              <ListOrdered className="w-3 h-3" />
+              排队中 · {queue.length} 条
+            </div>
+            {queue.map((text, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-accent-yellow/5 border border-accent-yellow/20"
+              >
+                <span className="text-[10px] font-mono text-accent-yellow/70 shrink-0">#{i + 1}</span>
+                <span className="flex-1 text-xs text-text-secondary truncate">{text}</span>
+                <button
+                  onClick={() => removeQueuedMessage(i)}
+                  className="text-text-dim hover:text-accent-red transition-colors shrink-0"
+                  title="移出队列"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* 斜杠命令面板 */}
         {showSlash && (
           <div className="absolute bottom-full left-0 right-0 mb-2 glass-panel rounded-xl border border-border overflow-hidden z-20 animate-fade-in">
@@ -204,10 +248,9 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
             value={input}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
-            placeholder={isStreaming ? 'Claude 正在生成中... (ESC 中断)' : '输入指令，/ 唤起快捷命令，Enter 发送'}
-            disabled={isStreaming}
+            placeholder={isStreaming ? '生成中仍可输入，Enter 加入队列… (ESC 中断)' : '输入指令，/ 唤起快捷命令，Enter 发送'}
             rows={1}
-            className="w-full bg-transparent text-sm text-text-primary placeholder-text-dim resize-none px-4 py-3 pr-28 max-h-48 overflow-y-auto font-sans disabled:cursor-not-allowed"
+            className="w-full bg-transparent text-sm text-text-primary placeholder-text-dim resize-none px-4 py-3 pr-28 max-h-48 overflow-y-auto font-sans"
             style={{ minHeight: '44px' }}
           />
 
@@ -231,14 +274,10 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!input.trim() || isLoading}
+                disabled={!input.trim()}
                 className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-gradient-to-r from-accent-cyan/20 to-accent-blue/20 hover:from-accent-cyan/30 hover:to-accent-blue/30 border border-accent-cyan/40 hover:border-accent-cyan/60 text-accent-cyan transition-all disabled:opacity-30 disabled:cursor-not-allowed group send-btn-glow"
               >
-                {isLoading ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Send className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-                )}
+                <Send className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
                 <span className="text-xs font-medium">发送</span>
               </button>
             )}
@@ -248,9 +287,10 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
         {/* 底部提示 */}
         <div className="flex items-center justify-between mt-2 px-2">
           <div className="flex items-center gap-3 text-[10px] text-text-dim font-mono">
-            <span>⏎ 发送</span>
+            <span>⏎ {isStreaming ? '排队' : '发送'}</span>
             <span>⇧⏎ 换行</span>
             <span>/ 命令</span>
+            <span>⌘F 搜索</span>
             {isStreaming && <span className="text-accent-red/70">ESC 中断</span>}
             <span className="text-accent-cyan/50">● {sessionId ? sessionId.slice(0, 8) : 'new session'}</span>
           </div>
