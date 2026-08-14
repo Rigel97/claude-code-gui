@@ -45,11 +45,43 @@ interface AppState {
   handleStream: (msg: StreamMessage) => void;
   setStatus: (status: RunStatus) => void;
   clearMessages: () => void;
-  hydrate: (data: Partial<Pick<AppState, 'cwd' | 'sessions' | 'totalCost' | 'totalInputTokens' | 'totalOutputTokens' | 'model' | 'permissionMode' | 'showThinking'>>) => void;
+  hydrate: (data: Partial<Pick<AppState, 'cwd' | 'sessions' | 'messages' | 'activeSessionIndex' | 'currentSessionId' | 'totalCost' | 'totalInputTokens' | 'totalOutputTokens' | 'model' | 'permissionMode' | 'showThinking'>>) => void;
 }
 
 let msgCounter = 0;
 const genId = () => `msg-${++msgCounter}-${Date.now()}`;
+
+/** 持久化保留的最大会话数，防止配置文件无限膨胀 */
+const MAX_SESSIONS = 50;
+/** 单条工具结果的最大保留长度（Bash 输出可能非常大） */
+const MAX_TOOL_RESULT = 20000;
+
+/** 提取并截断工具结果文本 */
+function extractToolResultText(content: unknown): string {
+  let text = '';
+  if (typeof content === 'string') {
+    text = content;
+  } else if (Array.isArray(content)) {
+    text = content.map((c: { text?: string }) => c?.text || '').join('');
+  }
+  return text.length > MAX_TOOL_RESULT
+    ? text.slice(0, MAX_TOOL_RESULT) + '\n… (输出过长，已截断)'
+    : text;
+}
+
+/** 将 tool_result 写回流式消息中对应的 tool_use 块 */
+function applyToolResult(
+  streaming: ChatMessage,
+  block: { tool_use_id: string; content: unknown; is_error?: boolean }
+): void {
+  const toolBlock = streaming.blocks.find(
+    (b) => b.kind === 'tool_use' && b.toolId === block.tool_use_id
+  );
+  if (toolBlock && toolBlock.kind === 'tool_use') {
+    toolBlock.status = block.is_error ? 'error' : 'done';
+    toolBlock.result = extractToolResultText(block.content);
+  }
+}
 
 /**
  * 将流式消息归档到消息列表
@@ -99,6 +131,9 @@ export const useStore = create<AppState>((set, get) => ({
   injectText: (text) => set({ injectedText: { text, nonce: Date.now() } }),
 
   newSession: () => {
+    // 生成中禁止新建会话，否则后续流事件会写入错误的会话
+    const status = get().status;
+    if (status === 'streaming' || status === 'starting') return;
     set({
       currentSessionId: null,
       activeSessionIndex: -1,
@@ -110,6 +145,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   switchSession: (index) => {
+    // 生成中禁止切换会话，防止消息归档错乱
+    const status = get().status;
+    if (status === 'streaming' || status === 'starting') return;
     const session = get().sessions[index];
     if (session) {
       set({
@@ -201,18 +239,7 @@ export const useStore = create<AppState>((set, get) => ({
               status: 'running',
             });
           } else if (block.type === 'tool_result') {
-            const toolBlock = streaming.blocks.find(
-              (b) => b.kind === 'tool_use' && b.toolId === block.tool_use_id
-            );
-            if (toolBlock && toolBlock.kind === 'tool_use') {
-              const resultText = typeof block.content === 'string'
-                ? block.content
-                : Array.isArray(block.content)
-                  ? block.content.map((c) => c.text || '').join('')
-                  : '';
-              toolBlock.status = block.is_error ? 'error' : 'done';
-              toolBlock.result = resultText;
-            }
+            applyToolResult(streaming, block);
           }
         }
 
@@ -227,18 +254,7 @@ export const useStore = create<AppState>((set, get) => ({
         if (streaming && msg.message?.content) {
           for (const block of msg.message.content) {
             if (block.type === 'tool_result') {
-              const toolBlock = streaming.blocks.find(
-                (b) => b.kind === 'tool_use' && b.toolId === block.tool_use_id
-              );
-              if (toolBlock && toolBlock.kind === 'tool_use') {
-                const resultText = typeof block.content === 'string'
-                  ? block.content
-                  : Array.isArray(block.content)
-                    ? block.content.map((c) => c.text || '').join('')
-                    : '';
-                toolBlock.status = block.is_error ? 'error' : 'done';
-                toolBlock.result = resultText;
-              }
+              applyToolResult(streaming, block);
             }
           }
           set({ streamingMessage: { ...streaming } });
@@ -293,13 +309,16 @@ export const useStore = create<AppState>((set, get) => ({
             } : s))
           : [newSession, ...state.sessions];
 
+        // 限制会话数量，超出部分丢弃最旧的
+        const trimmedSessions = sessions.slice(0, MAX_SESSIONS);
+
         set({
           ...archived,
           status: msg.is_error ? 'error' : 'completed',
           totalCost: state.totalCost + msg.total_cost_usd,
           totalInputTokens: state.totalInputTokens + msg.usage.input_tokens,
           totalOutputTokens: state.totalOutputTokens + msg.usage.output_tokens,
-          sessions,
+          sessions: trimmedSessions,
         });
         break;
       }
@@ -333,6 +352,14 @@ export const useStore = create<AppState>((set, get) => ({
 
   hydrate: (data) => {
     const sessions = data.sessions || [];
+    // 恢复上次活跃的会话索引（越界则回退到最新会话）
+    let idx = typeof data.activeSessionIndex === 'number' ? data.activeSessionIndex : 0;
+    if (idx < 0 || idx >= sessions.length) idx = sessions.length > 0 ? 0 : -1;
+    const active = idx >= 0 ? sessions[idx] : null;
+    // 优先用持久化的 messages（可能包含未归档的中断对话），否则取活跃会话的消息
+    const messages = data.messages && data.messages.length > 0
+      ? data.messages
+      : active?.messages || [];
     set({
       cwd: data.cwd || '',
       sessions,
@@ -342,10 +369,9 @@ export const useStore = create<AppState>((set, get) => ({
       model: data.model || '',
       permissionMode: data.permissionMode || 'bypassPermissions',
       showThinking: data.showThinking !== false,
-      // 自动恢复最近一个会话的对话内容
-      activeSessionIndex: sessions.length > 0 ? 0 : -1,
-      currentSessionId: sessions.length > 0 ? sessions[0].sessionId : null,
-      messages: sessions.length > 0 ? sessions[0].messages : [],
+      activeSessionIndex: idx,
+      currentSessionId: data.currentSessionId ?? active?.sessionId ?? null,
+      messages,
     });
   },
 }));

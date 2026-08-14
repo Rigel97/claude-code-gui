@@ -13,6 +13,8 @@ export function Sidebar() {
   const activeSessionIndex = useStore((s) => s.activeSessionIndex);
   const newSession = useStore((s) => s.newSession);
   const totalCost = useStore((s) => s.totalCost);
+  const status = useStore((s) => s.status);
+  const isStreaming = status === 'streaming' || status === 'starting';
 
   const [showSettings, setShowSettings] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
@@ -54,7 +56,8 @@ export function Sidebar() {
         <div className="p-3 pb-2">
           <button
             onClick={newSession}
-            disabled={!cwd}
+            disabled={!cwd || isStreaming}
+            title={isStreaming ? '生成中，请先停止或等待完成' : undefined}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r from-accent-cyan/10 to-accent-blue/10 hover:from-accent-cyan/20 hover:to-accent-blue/20 border border-accent-cyan/30 hover:border-accent-cyan/50 transition-all disabled:opacity-40 disabled:cursor-not-allowed group"
           >
             <Plus className="w-4 h-4 text-accent-cyan group-hover:rotate-90 transition-transform" />
@@ -93,7 +96,8 @@ export function Sidebar() {
                     <button
                       key={session.sessionId}
                       onClick={() => switchSession(i)}
-                      className={`w-full flex items-start gap-2 px-2.5 py-2 rounded-lg transition-all text-left group ${
+                      disabled={isStreaming}
+                      className={`w-full flex items-start gap-2 px-2.5 py-2 rounded-lg transition-all text-left group disabled:opacity-50 disabled:cursor-not-allowed ${
                         i === activeSessionIndex
                           ? 'bg-accent-cyan/10 border border-accent-cyan/30'
                           : 'hover:bg-bg-light border border-transparent'

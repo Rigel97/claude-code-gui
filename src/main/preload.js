@@ -11,8 +11,6 @@ const api = {
   claude: {
     send: (payload) => ipcRenderer.invoke('claude:send', payload),
     abort: () => ipcRenderer.invoke('claude:abort'),
-    listSessions: (cwd) => ipcRenderer.invoke('claude:list-sessions', cwd),
-    resumeSession: (payload) => ipcRenderer.invoke('claude:resume-session', payload),
 
     onStream: (callback) => {
       const handler = (_e, data) => callback(data);

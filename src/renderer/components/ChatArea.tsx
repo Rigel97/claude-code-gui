@@ -10,13 +10,27 @@ export function ChatArea() {
   const status = useStore((s) => s.status);
   const thinkingTokens = useStore((s) => s.thinkingTokens);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 用户是否贴在底部（向上翻阅历史时暂停自动滚动）
+  const stickToBottom = useRef(true);
 
-  // 自动滚动到底部
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+
+  // 仅在贴底时自动滚动，避免打断用户阅读历史
   useEffect(() => {
-    if (scrollRef.current) {
+    if (stickToBottom.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, streamingMessage, thinkingTokens]);
+
+  // 用户发送新消息时强制回到底部
+  const handleSend = (text: string) => {
+    stickToBottom.current = true;
+    addUserMessage(text);
+  };
 
   const isEmpty = messages.length === 0 && !streamingMessage;
 
@@ -25,6 +39,7 @@ export function ChatArea() {
       {/* 消息流 */}
       <div
         ref={scrollRef}
+        onScroll={handleScroll}
         className="flex-1 overflow-y-auto px-6 py-4"
       >
         {/* 历史消息 */}
@@ -67,7 +82,7 @@ export function ChatArea() {
       </div>
 
       {/* 输入栏 */}
-      <InputBar onSend={addUserMessage} />
+      <InputBar onSend={handleSend} />
     </div>
   );
 }

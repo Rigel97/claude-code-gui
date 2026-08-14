@@ -81,21 +81,6 @@ ipcMain.handle('claude:abort', () => {
   return true;
 });
 
-// ─── IPC: 获取历史会话列表 ──────────────────────────────
-ipcMain.handle('claude:list-sessions', async (_e, cwd) => {
-  return runner.listSessions(cwd);
-});
-
-// ─── IPC: 恢复历史会话 ──────────────────────────────────
-ipcMain.handle('claude:resume-session', async (_e, payload) => {
-  return runner.send({
-    prompt: '',
-    cwd: payload.cwd,
-    sessionId: payload.sessionId,
-    resume: true,
-  });
-});
-
 // ─── IPC: 文件树（懒加载目录）──────────────────────────
 const FS_IGNORE = new Set([
   'node_modules', '.git', 'dist', 'dist-renderer', 'build', 'out', '.next',

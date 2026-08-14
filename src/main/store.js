@@ -23,7 +23,10 @@ class Store {
 
   save() {
     try {
-      fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
+      // 原子写：先写临时文件再 rename，避免写入中途崩溃导致整个配置损坏
+      const tmpPath = this.filePath + '.tmp';
+      fs.writeFileSync(tmpPath, JSON.stringify(this.data));
+      fs.renameSync(tmpPath, this.filePath);
     } catch (err) {
       console.error('Failed to save config:', err);
     }

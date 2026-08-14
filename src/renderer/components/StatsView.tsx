@@ -36,7 +36,7 @@ export function StatsView({ data }: { data: ResultMessage }) {
     {
       icon: <Zap className="w-3.5 h-3.5" />,
       label: 'TTFT',
-      value: `${data.ttft_ms}ms`,
+      value: `${data.ttft_ms ?? 0}ms`,
       color: 'text-accent-yellow',
     },
   ];

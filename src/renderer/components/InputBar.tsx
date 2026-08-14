@@ -78,6 +78,8 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
         prompt,
         cwd,
         sessionId: sessionId || undefined,
+        // 已有会话 ID 时必须用 --resume 续接，否则多轮上下文会丢失
+        resume: !!sessionId,
         options: { ...(model ? { model } : {}), permissionMode },
       });
     } catch (err) {

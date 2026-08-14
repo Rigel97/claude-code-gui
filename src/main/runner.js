@@ -1,6 +1,5 @@
 const { spawn } = require('child_process');
 const { BrowserWindow } = require('electron');
-const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
@@ -39,6 +38,10 @@ class ClaudeRunner {
     }
 
     if (prompt) {
+      // 以 - 开头的 prompt 会被 commander 解析为 flag，用 -- 强制按位置参数处理
+      if (prompt.startsWith('-')) {
+        args.push('--');
+      }
       args.push(prompt);
     }
 
@@ -116,10 +119,16 @@ class ClaudeRunner {
   abort() {
     if (this.currentProcess) {
       this.aborted = true;
-      this.currentProcess.kill('SIGTERM');
+      // 保留局部引用：SIGKILL 兜底检查的是这个进程本身，而非 this.currentProcess
+      const proc = this.currentProcess;
+      proc.kill('SIGTERM');
       setTimeout(() => {
-        if (this.currentProcess) {
-          this.currentProcess.kill('SIGKILL');
+        try {
+          if (proc.exitCode === null && !proc.killed) {
+            proc.kill('SIGKILL');
+          }
+        } catch {
+          // 进程已退出，忽略
         }
       }, 2000);
       this.currentProcess = null;
@@ -149,49 +158,6 @@ class ClaudeRunner {
         text: line,
         timestamp: Date.now(),
       });
-    }
-  }
-
-  async listSessions(cwd) {
-    try {
-      const encoded = cwd.replace(/\//g, '-');
-      const sessionsDir = path.join(os.homedir(), '.claude', 'projects', encoded);
-      if (!fs.existsSync(sessionsDir)) return [];
-
-      const files = fs.readdirSync(sessionsDir).filter((f) => f.endsWith('.jsonl'));
-      const sessions = [];
-
-      for (const file of files) {
-        try {
-          const filepath = path.join(sessionsDir, file);
-          const content = fs.readFileSync(filepath, 'utf8');
-          const lines = content.split('\n').filter(Boolean);
-          if (lines.length === 0) continue;
-
-          const first = JSON.parse(lines[0]);
-          const last = JSON.parse(lines[lines.length - 1]);
-
-          sessions.push({
-            sessionId: file.replace('.jsonl', ''),
-            cwd,
-            firstMessage: (first.message && first.message.content && first.message.content[0] && first.message.content[0].text) || first.type || 'unknown',
-            lastActivity: last.timestamp || first.timestamp || null,
-            messageCount: lines.length,
-          });
-        } catch {
-          // skip
-        }
-      }
-
-      sessions.sort((a, b) => {
-        const timeA = new Date(a.lastActivity || 0).getTime();
-        const timeB = new Date(b.lastActivity || 0).getTime();
-        return timeB - timeA;
-      });
-
-      return sessions;
-    } catch {
-      return [];
     }
   }
 

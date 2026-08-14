@@ -30,6 +30,10 @@ export default function App() {
         (window as any).api.store.set('appState', {
           cwd: state.cwd,
           sessions: state.sessions,
+          // 当前对话也持久化：被中断/未归档的对话重启后不丢失
+          messages: state.messages,
+          activeSessionIndex: state.activeSessionIndex,
+          currentSessionId: state.currentSessionId,
           totalCost: state.totalCost,
           totalInputTokens: state.totalInputTokens,
           totalOutputTokens: state.totalOutputTokens,
