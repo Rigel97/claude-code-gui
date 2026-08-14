@@ -4,6 +4,7 @@ node_modules/
 # 构建产物
 dist-main/
 dist-renderer/
+release/
 
 # 日志与系统文件
 *.log
