@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useStore } from '../store';
-import { Search, X, User, Bot, Wrench } from 'lucide-react';
+import { Search, X, User, Bot } from 'lucide-react';
 import type { ChatMessage, Session, UIBlock } from '../types';
 
 interface SearchHit {
@@ -81,14 +81,24 @@ export function SearchPanel() {
       }
     });
 
-    // 当前对话（可能未归档到 sessions）
+    // 当前对话（可能未归档到 sessions：新会话首轮回复前、或被中断的对话）
     const covered = activeSessionIndex >= 0 ? sessions[activeSessionIndex]?.messages : null;
     if (messages.length > 0 && messages !== covered) {
+      const pseudoSession: Session = {
+        sessionId: '__current__',
+        cwd: '',
+        title: '当前会话（未归档）',
+        messages,
+        createdAt: Date.now(),
+        cost: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
       for (const message of messages) {
         const text = messageText(message);
         const hit = makeSnippet(text, q);
-        if (hit && activeSessionIndex >= 0) {
-          results.push({ session: sessions[activeSessionIndex], sessionIndex: activeSessionIndex, message, queryLen: q.length, ...hit });
+        if (hit) {
+          results.push({ session: pseudoSession, sessionIndex: -1, message, queryLen: q.length, ...hit });
         }
       }
     }
@@ -100,7 +110,8 @@ export function SearchPanel() {
 
   const jumpTo = (hit: SearchHit) => {
     if (isStreaming) return; // 生成中禁止切换会话
-    if (hit.sessionIndex !== activeSessionIndex) {
+    // sessionIndex 为 -1 表示当前未归档会话，无需切换，直接高亮
+    if (hit.sessionIndex >= 0 && hit.sessionIndex !== activeSessionIndex) {
       switchSession(hit.sessionIndex);
     }
     setHighlightMessage(hit.message.id);

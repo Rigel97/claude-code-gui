@@ -187,6 +187,7 @@ export const useStore = create<AppState>((set, get) => ({
       messages: [],
       thinkingTokens: 0,
       contextUsage: null,
+      queue: [], // 清空待发队列，防止旧会话的排队消息发到新会话
     });
   },
 
@@ -203,6 +204,7 @@ export const useStore = create<AppState>((set, get) => ({
         status: 'idle',
         streamingMessage: null,
         messages: session.messages,
+        queue: [], // 切换会话时清空待发队列
       });
     }
   },
@@ -233,6 +235,12 @@ export const useStore = create<AppState>((set, get) => ({
 
   handleStream: (msg) => {
     const state = get();
+
+    // 中断后到达的残留流事件直接丢弃（进程退出前 stdout 缓冲区可能还有数据），
+    // 否则会创建出永远无法归档的幽灵 streamingMessage
+    if (state.status === 'aborted' && (msg.type === 'assistant' || msg.type === 'user')) {
+      return;
+    }
 
     switch (msg.type) {
       case 'system': {

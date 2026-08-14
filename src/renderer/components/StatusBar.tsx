@@ -1,5 +1,5 @@
 import { useStore } from '../store';
-import { Circle, Loader, CheckCircle, XCircle, AlertCircle, Pause, Activity, DollarSign, Zap, Database } from 'lucide-react';
+import { Circle, Loader, CheckCircle, XCircle, Pause, Activity, DollarSign, Zap, Database } from 'lucide-react';
 import type { RunStatus } from '../types';
 
 const STATUS_CONFIG: Record<RunStatus, { icon: React.ReactNode; label: string; color: string }> = {
