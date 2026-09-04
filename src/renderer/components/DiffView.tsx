@@ -11,8 +11,9 @@ type RenderRow = DiffLine | { type: 'fold'; count: number };
 /**
  * 基于 LCS 的行级 diff。
  * 行数乘积过大时（O(n·m) 会卡死渲染），退化为「全删 + 全增」展示。
+ * 导出供测试使用。
  */
-function computeLineDiff(oldText: string, newText: string): DiffLine[] {
+export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
   const a = oldText === '' ? [] : oldText.split('\n');
   const b = newText === '' ? [] : newText.split('\n');
 
@@ -52,8 +53,8 @@ function computeLineDiff(oldText: string, newText: string): DiffLine[] {
   return out;
 }
 
-/** 折叠未变化的上下文行，只保留变化行上下各 ctxLines 行 */
-function collapseContext(lines: DiffLine[], ctxLines = 2): RenderRow[] {
+/** 折叠未变化的上下文行，只保留变化行上下各 ctxLines 行。导出供测试使用 */
+export function collapseContext(lines: DiffLine[], ctxLines = 2): RenderRow[] {
   const keep = new Array<boolean>(lines.length).fill(false);
   lines.forEach((line, idx) => {
     if (line.type !== 'ctx') {

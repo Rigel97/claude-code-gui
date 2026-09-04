@@ -1,7 +1,7 @@
 // 清除可能存在的 ELECTRON_RUN_AS_NODE，确保以完整 Electron 模式运行
 delete process.env.ELECTRON_RUN_AS_NODE;
 
-const { app, BrowserWindow, ipcMain, dialog, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Notification, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { ClaudeRunner } = require('./runner');
@@ -18,7 +18,7 @@ const http = require('http');
  */
 function isDevServerRunning() {
   return new Promise((resolve) => {
-    const req = http.get('http://localhost:5173', () => resolve(true));
+    const req = http.get('http://localhost:5170', () => resolve(true));
     req.on('error', () => resolve(false));
     req.setTimeout(1500, () => {
       req.destroy();
@@ -45,6 +45,22 @@ async function createWindow() {
     },
   });
 
+  // 安全边界：聊天内容是模型输出（可被 prompt injection 操纵），任何链接都不允许
+  // 在窗口内导航——导航后 preload 会重新注入，远程页面将拿到 IPC bridge
+  // （claude:send 默认 bypassPermissions，等同任意命令执行），外链一律交给系统浏览器
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    // 仅放行本地页面（生产 file:// 与 dev server），其余导航拦截并转交系统浏览器
+    const isLocal = url.startsWith('file://') || url.startsWith('http://localhost:5170');
+    if (!isLocal) {
+      event.preventDefault();
+      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    }
+  });
+
   // 窗口聚焦时清除 Dock 角标
   mainWindow.on('focus', () => {
     if (app.dock) app.dock.setBadge('');
@@ -53,7 +69,7 @@ async function createWindow() {
   const devServerUp = await isDevServerRunning();
   if (devServerUp) {
     // 开发模式：加载 Vite dev server（支持热更新）
-    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.loadURL('http://localhost:5170');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     // 生产模式：加载打包产物
@@ -75,6 +91,10 @@ ipcMain.handle('dialog:open-directory', async () => {
 // ─── IPC: 持久化存储 ────────────────────────────────────
 ipcMain.handle('store:get', (_e, key) => store.get(key));
 ipcMain.handle('store:set', (_e, key, value) => store.set(key, value));
+// 渲染层 beforeunload 时的兜底落盘：fire-and-forget（invoke 在 unload 阶段不保证送达）
+ipcMain.on('store:flush', (_e, value) => {
+  if (store) store.set('appState', value);
+});
 
 // ─── IPC: Claude Code 执行 ──────────────────────────────
 ipcMain.handle('claude:send', async (_e, payload) => {
@@ -94,7 +114,9 @@ const FS_IGNORE = new Set([
 
 ipcMain.handle('fs:read-dir', async (_e, dirPath) => {
   try {
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    if (typeof dirPath !== 'string') return [];
+    // 异步读取：大目录的同步 IO 会阻塞主进程（IPC/窗口事件）
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
     const items = [];
     for (const entry of entries) {
       // 跳过隐藏文件与常见噪音目录
@@ -153,23 +175,37 @@ ipcMain.handle('window:maximize', () => {
 });
 ipcMain.handle('window:close', () => mainWindow && mainWindow.close());
 
-app.whenReady().then(() => {
-  // dev 模式下 macOS Dock 默认显示 Electron 图标，这里换成自定义图标
-  // （打包版由 app bundle 提供图标，build/icon.png 不在包内，existsSync 兜底）
-  if (process.platform === 'darwin' && app.dock) {
-    const iconPath = path.join(__dirname, '../../build/icon.png');
-    if (fs.existsSync(iconPath)) {
-      app.dock.setIcon(iconPath);
+// 单实例锁：多开实例会同时读写同一份配置文件，并各自持有 runner 状态互相干扰
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  // 二次启动时唤起已有窗口而非开新实例
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
     }
-  }
-  runner = new ClaudeRunner();
-  store = new Store();
-  createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-});
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+  app.whenReady().then(() => {
+    // dev 模式下 macOS Dock 默认显示 Electron 图标，这里换成自定义图标
+    // （打包版由 app bundle 提供图标，build/icon.png 不在包内，existsSync 兜底）
+    if (process.platform === 'darwin' && app.dock) {
+      const iconPath = path.join(__dirname, '../../build/icon.png');
+      if (fs.existsSync(iconPath)) {
+        app.dock.setIcon(iconPath);
+      }
+    }
+    runner = new ClaudeRunner();
+    store = new Store();
+    createWindow();
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  });
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
+}

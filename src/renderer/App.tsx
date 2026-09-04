@@ -22,31 +22,65 @@ export default function App() {
     });
   }, []);
 
-  // 状态变更时防抖持久化（会话、成本、设置、工作目录）
+  // 状态变更时节流持久化（3s 内最多写一次、带 trailing）：
+  // - 旧实现是 1s 防抖且被流式事件不断重置，长流式期间永不落盘，崩溃即丢整段对话
+  // - 节流保证流式期间也周期性落盘，最大丢失窗口收敛到 3s；
+  //   窗口关闭/退出前另有 beforeunload fire-and-forget 兜底
   useEffect(() => {
+    type StateSnapshot = ReturnType<typeof useStore.getState>;
+    const PERSIST_INTERVAL = 3000;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const unsubscribe = useStore.subscribe((state) => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        (window as any).api.store.set('appState', {
-          cwd: state.cwd,
-          sessions: state.sessions,
-          // 当前对话也持久化：被中断/未归档的对话重启后不丢失
-          messages: state.messages,
-          activeSessionIndex: state.activeSessionIndex,
-          currentSessionId: state.currentSessionId,
-          totalCost: state.totalCost,
-          totalInputTokens: state.totalInputTokens,
-          totalOutputTokens: state.totalOutputTokens,
-          model: state.model,
-          permissionMode: state.permissionMode,
-          showThinking: state.showThinking,
-        });
-      }, 1000);
+    let lastWriteAt = 0;
+    let pending: StateSnapshot | null = null;
+
+    const snapshot = (state: StateSnapshot) => ({
+      cwd: state.cwd,
+      sessions: state.sessions,
+      // 当前对话也持久化：被中断/未归档的对话重启后不丢失
+      messages: state.messages,
+      activeSessionIndex: state.activeSessionIndex,
+      currentSessionId: state.currentSessionId,
+      totalCost: state.totalCost,
+      totalInputTokens: state.totalInputTokens,
+      totalOutputTokens: state.totalOutputTokens,
+      model: state.model,
+      permissionMode: state.permissionMode,
+      showThinking: state.showThinking,
     });
+
+    const flush = () => {
+      if (!pending) return;
+      (window as any).api.store.set('appState', snapshot(pending));
+      pending = null;
+      lastWriteAt = Date.now();
+    };
+
+    const unsubscribe = useStore.subscribe((state) => {
+      pending = state;
+      if (timer) return;
+      const wait = Math.max(0, lastWriteAt + PERSIST_INTERVAL - Date.now());
+      timer = setTimeout(() => {
+        timer = null;
+        flush();
+      }, wait);
+    });
+
+    const onBeforeUnload = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (pending) {
+        (window as any).api.store.flush(snapshot(pending));
+        pending = null;
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+
     return () => {
       unsubscribe();
       if (timer) clearTimeout(timer);
+      window.removeEventListener('beforeunload', onBeforeUnload);
     };
   }, []);
 

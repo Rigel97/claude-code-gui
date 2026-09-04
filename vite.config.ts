@@ -16,6 +16,8 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: 5173,
+    port: 5170,
+    // 端口被占时直接报错退出，避免静默切到 5174 导致 Electron 连错 dev server
+    strictPort: true,
   },
 });

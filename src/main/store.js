@@ -7,6 +7,7 @@ class Store {
     const userDataPath = app.getPath('userData');
     this.filePath = path.join(userDataPath, 'claude-gui-config.json');
     this.data = {};
+    this.lastSerialized = '{}';
     this.load();
   }
 
@@ -19,13 +20,14 @@ class Store {
     } catch {
       this.data = {};
     }
+    this.lastSerialized = JSON.stringify(this.data);
   }
 
-  save() {
+  save(serialized) {
     try {
       // 原子写：先写临时文件再 rename，避免写入中途崩溃导致整个配置损坏
       const tmpPath = this.filePath + '.tmp';
-      fs.writeFileSync(tmpPath, JSON.stringify(this.data));
+      fs.writeFileSync(tmpPath, serialized);
       fs.renameSync(tmpPath, this.filePath);
     } catch (err) {
       console.error('Failed to save config:', err);
@@ -38,7 +40,12 @@ class Store {
 
   set(key, value) {
     this.data[key] = value;
-    this.save();
+    const serialized = JSON.stringify(this.data);
+    // 内容无变化时跳过同步写盘：渲染层节流之外的第二道闸，
+    // 避免重复快照的空转 IO 阻塞主进程
+    if (serialized === this.lastSerialized) return;
+    this.lastSerialized = serialized;
+    this.save(serialized);
   }
 }
 

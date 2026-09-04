@@ -6,6 +6,8 @@ const api = {
   store: {
     get: (key) => ipcRenderer.invoke('store:get', key),
     set: (key, value) => ipcRenderer.invoke('store:set', key, value),
+    // beforeunload 兜底落盘：fire-and-forget，unload 阶段 invoke 不保证送达
+    flush: (value) => ipcRenderer.send('store:flush', value),
   },
 
   claude: {

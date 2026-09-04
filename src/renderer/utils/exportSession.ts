@@ -69,12 +69,15 @@ function renderBlocks(blocks: UIBlock[], lines: string[]): void {
         lines.push('```', `STDERR: ${b.text}`, '```', '');
         break;
 
-      case 'stats':
-        lines.push(
-          `*⏱ 耗时 ${(b.data.duration_ms / 1000).toFixed(1)}s · 成本 $${b.data.total_cost_usd.toFixed(4)} · ${b.data.num_turns} 轮*`,
-          ''
-        );
+      case 'stats': {
+        // 字段防御：CLI 版本间字段可能缺失，避免导出时 toFixed 抛错
+        const d = b.data as Partial<{ duration_ms: number; total_cost_usd: number; num_turns: number }>;
+        const dur = typeof d.duration_ms === 'number' ? (d.duration_ms / 1000).toFixed(1) : '-';
+        const cst = typeof d.total_cost_usd === 'number' ? d.total_cost_usd.toFixed(4) : '0.0000';
+        const turns = typeof d.num_turns === 'number' ? d.num_turns : '-';
+        lines.push(`*⏱ 耗时 ${dur}s · 成本 $${cst} · ${turns} 轮*`, '');
         break;
+      }
     }
   }
 }

@@ -4,9 +4,14 @@ import { ToolCallView } from './ToolCallView';
 import { StatsView } from './StatsView';
 import { ThinkingView } from './ThinkingView';
 import { User } from 'lucide-react';
+import { memo } from 'react';
 import { useStore } from '../store';
 
-export function ChatMessageView({ message }: { message: ChatMessage }) {
+/**
+ * memo 的前提是 store 的不可变更新：已归档消息与已完成块引用稳定，
+ * 流式事件（每秒可达数十次）不再触发全列表重渲染与 markdown 重新解析
+ */
+export const ChatMessageView = memo(function ChatMessageView({ message }: { message: ChatMessage }) {
   const showThinking = useStore((s) => s.showThinking);
 
   if (message.role === 'user') {
@@ -47,14 +52,19 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
         </div>
 
         {message.blocks.map((block, i) => (
-          <BlockRenderer key={i} block={block} showThinking={showThinking} isStreaming={message.status === 'streaming' && i === message.blocks.length - 1} />
+          <BlockRenderer
+            key={i}
+            block={block}
+            showThinking={showThinking}
+            isStreaming={message.status === 'streaming' && i === message.blocks.length - 1}
+          />
         ))}
       </div>
     </div>
   );
-}
+});
 
-function BlockRenderer({ block, showThinking, isStreaming }: { block: UIBlock; showThinking: boolean; isStreaming: boolean }) {
+const BlockRenderer = memo(function BlockRenderer({ block, showThinking, isStreaming }: { block: UIBlock; showThinking: boolean; isStreaming: boolean }) {
   switch (block.kind) {
     case 'text':
       return (
@@ -83,4 +93,4 @@ function BlockRenderer({ block, showThinking, isStreaming }: { block: UIBlock; s
     default:
       return null;
   }
-}
+});

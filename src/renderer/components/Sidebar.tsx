@@ -1,5 +1,5 @@
 import { useStore } from '../store';
-import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3, Download } from 'lucide-react';
+import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3, Download, Trash2, Check, X } from 'lucide-react';
 import { useState } from 'react';
 import { SettingsPanel } from './SettingsPanel';
 import { FileTree } from './FileTree';
@@ -12,6 +12,7 @@ export function Sidebar() {
   const setCwd = useStore((s) => s.setCwd);
   const sessions = useStore((s) => s.sessions);
   const switchSession = useStore((s) => s.switchSession);
+  const deleteSession = useStore((s) => s.deleteSession);
   const activeSessionIndex = useStore((s) => s.activeSessionIndex);
   const newSession = useStore((s) => s.newSession);
   const totalCost = useStore((s) => s.totalCost);
@@ -21,12 +22,18 @@ export function Sidebar() {
   const [showSettings, setShowSettings] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [tab, setTab] = useState<'sessions' | 'files'>('sessions');
+  // 正在确认删除的会话索引（-1 表示无）
+  const [confirmDeleteIdx, setConfirmDeleteIdx] = useState(-1);
 
   const handleOpenDir = async () => {
+    // 生成中禁止切换项目：newSession 会被状态机静默跳过，否则会落下
+    // 「新目录 + 旧会话 --resume」的跨项目串台组合
+    if (isStreaming) return;
     const dir = await (window as any).api.openDirectory();
     if (dir) {
-      setCwd(dir);
+      // 先归档旧对话（携带旧 cwd），再切到新目录；顺序颠倒会把旧对话归到新目录名下
       newSession();
+      setCwd(dir);
     }
   };
 
@@ -44,7 +51,9 @@ export function Sidebar() {
         <div className="p-3 border-b border-border/30">
           <button
             onClick={handleOpenDir}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-light hover:bg-bg-lighter border border-border hover:border-accent-cyan/40 transition-all group"
+            disabled={isStreaming}
+            title={isStreaming ? '生成中，请先停止或等待完成' : undefined}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-light hover:bg-bg-lighter border border-border hover:border-accent-cyan/40 transition-all group disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <FolderOpen className="w-4 h-4 text-accent-cyan shrink-0" />
             <div className="flex-1 text-left min-w-0">
@@ -101,44 +110,103 @@ export function Sidebar() {
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {sessions.map((session, i) => (
+                  {sessions.map((session, i) => {
+                    const confirming = confirmDeleteIdx === i;
+                    return (
                     <div
                       key={session.sessionId}
-                      onClick={() => !isStreaming && switchSession(i)}
+                      onClick={() => {
+                        if (isStreaming) return;
+                        // 若该行正处于删除确认态，点击行体视为取消
+                        if (confirming) { setConfirmDeleteIdx(-1); return; }
+                        setConfirmDeleteIdx(-1);
+                        switchSession(i);
+                      }}
                       className={`w-full flex items-start gap-2 px-2.5 py-2 rounded-lg transition-all text-left group ${
                         isStreaming ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
                       } ${
-                        i === activeSessionIndex
-                          ? 'bg-accent-cyan/10 border border-accent-cyan/30'
-                          : 'hover:bg-bg-light border border-transparent'
+                        confirming
+                          ? 'bg-red-500/10 border border-red-500/40'
+                          : i === activeSessionIndex
+                            ? 'bg-accent-cyan/10 border border-accent-cyan/30'
+                            : 'hover:bg-bg-light border border-transparent'
                       }`}
                     >
                       <MessageSquare
                         className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
-                          i === activeSessionIndex ? 'text-accent-cyan' : 'text-text-muted'
+                          confirming ? 'text-red-400' : i === activeSessionIndex ? 'text-accent-cyan' : 'text-text-muted'
                         }`}
                       />
                       <div className="flex-1 min-w-0">
-                        <div className="text-xs text-text-primary truncate">
-                          {session.title}
-                        </div>
-                        <div className="text-[10px] text-text-dim font-mono mt-0.5">
-                          ${session.cost.toFixed(4)} · {new Date(session.createdAt).toLocaleTimeString()}
-                        </div>
+                        {confirming ? (
+                          <div className="text-xs text-red-300 font-medium leading-tight pt-0.5">
+                            删除此会话？不可恢复
+                          </div>
+                        ) : (
+                          <>
+                            <div className="text-xs text-text-primary truncate">
+                              {session.title}
+                            </div>
+                            <div className="text-[10px] text-text-dim font-mono mt-0.5">
+                              ${session.cost.toFixed(4)} · {new Date(session.createdAt).toLocaleTimeString()}
+                            </div>
+                          </>
+                        )}
                       </div>
-                      {/* 导出按钮（hover 显示） */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleExport(session);
-                        }}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-text-dim hover:text-accent-cyan shrink-0 mt-0.5"
-                        title="导出为 Markdown"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                      </button>
+                      {confirming ? (
+                        // 删除确认：✓ 确认 / ✗ 取消
+                        <div className="flex items-center gap-1 shrink-0 mt-0.5">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setConfirmDeleteIdx(-1);
+                              deleteSession(i);
+                            }}
+                            className="text-red-400 hover:text-red-300 transition-colors"
+                            title="确认删除"
+                          >
+                            <Check className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setConfirmDeleteIdx(-1);
+                            }}
+                            className="text-text-dim hover:text-text-primary transition-colors"
+                            title="取消"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        // 导出 + 删除（hover 显示）
+                        <div className="flex items-center gap-1 shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleExport(session);
+                            }}
+                            className="text-text-dim hover:text-accent-cyan transition-colors"
+                            title="导出为 Markdown"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!isStreaming) setConfirmDeleteIdx(i);
+                            }}
+                            disabled={isStreaming}
+                            title={isStreaming ? '生成中无法删除' : '删除会话'}
+                            className="text-text-dim hover:text-red-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </>

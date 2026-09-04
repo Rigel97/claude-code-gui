@@ -8,8 +8,9 @@ export function WelcomeScreen() {
   const handleOpenDir = async () => {
     const dir = await (window as any).api.openDirectory();
     if (dir) {
-      setCwd(dir);
+      // 先归档旧对话再切目录，避免旧对话被归到新目录名下
       newSession();
+      setCwd(dir);
     }
   };
 

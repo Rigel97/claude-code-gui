@@ -1,4 +1,7 @@
 import { Minus, Square, X, Zap } from 'lucide-react';
+// 版本号单一数据源：package.json（electron-builder 生成 Info.plist 也读它，
+// 此前硬编码 v1.0.0 导致升版后界面不更新）
+import { version } from '../../../package.json';
 
 // 渲染层检测 macOS（navigator.userAgent 在 Electron 中包含平台信息）
 const isMac = navigator.userAgent.includes('Mac');
@@ -14,7 +17,7 @@ export function TitleBar() {
             CLAUDE GUI
           </span>
         </div>
-        <span className="text-xs text-text-dim ml-2 font-mono">v1.0.0</span>
+        <span className="text-xs text-text-dim ml-2 font-mono">v{version}</span>
       </div>
 
       {/* 窗口控制按钮（macOS 有原生红绿灯，此处仅非 mac 平台显示） */}

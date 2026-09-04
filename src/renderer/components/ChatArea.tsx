@@ -65,9 +65,9 @@ export function ChatArea() {
           <ChatMessageView key={msg.id} message={msg} />
         ))}
 
-        {/* 流式消息 */}
+        {/* 流式消息（key 保证新一轮流式消息重新挂载、动画重播） */}
         {streamingMessage && (
-          <ChatMessageView message={streamingMessage} />
+          <ChatMessageView key={streamingMessage.id} message={streamingMessage} />
         )}
 
         {/* 空状态提示 */}

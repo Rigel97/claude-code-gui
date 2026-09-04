@@ -68,18 +68,20 @@ export function SearchPanel() {
     const q = query.trim();
     if (q.length < 2) return [];
     const results: SearchHit[] = [];
+    const MAX_RESULTS = 50;
 
-    sessions.forEach((session, sessionIndex) => {
+    outer: for (let sessionIndex = 0; sessionIndex < sessions.length; sessionIndex++) {
+      const session = sessions[sessionIndex];
       // 会话标题命中
       for (const message of session.messages) {
         const text = messageText(message);
         const hit = makeSnippet(text, q);
         if (hit) {
           results.push({ session, sessionIndex, message, queryLen: q.length, ...hit });
-          if (results.length >= 50) return;
+          if (results.length >= MAX_RESULTS) break outer;
         }
       }
-    });
+    }
 
     // 当前对话（可能未归档到 sessions：新会话首轮回复前、或被中断的对话）
     const covered = activeSessionIndex >= 0 ? sessions[activeSessionIndex]?.messages : null;
@@ -99,11 +101,12 @@ export function SearchPanel() {
         const hit = makeSnippet(text, q);
         if (hit) {
           results.push({ session: pseudoSession, sessionIndex: -1, message, queryLen: q.length, ...hit });
+          if (results.length >= MAX_RESULTS) break;
         }
       }
     }
 
-    return results.slice(0, 50);
+    return results.slice(0, MAX_RESULTS);
   }, [query, sessions, messages, activeSessionIndex]);
 
   if (!open) return null;

@@ -5,6 +5,11 @@ import type { SessionEvent } from '../types';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** 本地时区日期键（toISOString 的 UTC 偏移会使日期标签与本地日历错位一天） */
+function localDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 /** 从会话列表提取成本事件流（旧数据没有 events 时用 createdAt 单点退化） */
 function extractEvents(sessions: ReturnType<typeof useStore.getState>['sessions']): (SessionEvent & { title: string })[] {
   return sessions.flatMap((s) => {
@@ -32,7 +37,7 @@ export function CostDashboard({ onClose }: { onClose: () => void }) {
       const d = new Date(today.getTime() - i * DAY_MS);
       days.push({
         label: `${d.getMonth() + 1}/${d.getDate()}`,
-        date: d.toISOString().slice(0, 10),
+        date: localDateKey(d),
         cost: 0,
         input: 0,
         output: 0,

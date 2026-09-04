@@ -42,6 +42,7 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
   const enqueueMessage = useStore((s) => s.enqueueMessage);
   const dequeueMessage = useStore((s) => s.dequeueMessage);
   const removeQueuedMessage = useStore((s) => s.removeQueuedMessage);
+  const clearQueue = useStore((s) => s.clearQueue);
   const displayModel = model || currentModel;
 
   const isStreaming = status === 'streaming' || status === 'starting';
@@ -85,7 +86,12 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
         sendPrompt(next);
       }
     }
-  }, [status, dequeueMessage, sendPrompt]);
+    // 中断/出错时清空待发队列：这些消息是针对已失败的上下文排队的，
+    // 若保留会在下一轮完成后突然发出，与用户随后的新指令串台
+    if ((prev === 'streaming' || prev === 'starting') && (status === 'error' || status === 'aborted')) {
+      clearQueue();
+    }
+  }, [status, dequeueMessage, sendPrompt, clearQueue]);
 
   const handleSend = useCallback(() => {
     if (!input.trim()) return;

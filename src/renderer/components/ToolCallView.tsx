@@ -127,8 +127,9 @@ export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { k
 }
 
 function ToolResult({ result, toolName, isError }: { result: string; toolName: string; isError: boolean }) {
-  // Edit / Write 工具的结果可能包含 diff 信息
-  if ((toolName === 'Edit' || toolName === 'Write') && result.includes('File updated')) {
+  // 编辑类工具成功时给绿色确认样式：按 status 判断，不嗅探 'File updated' 文案
+  // （CLI 文案一改嗅探即失效）
+  if (!isError && (toolName === 'Edit' || toolName === 'Write' || toolName === 'MultiEdit' || toolName === 'NotebookEdit')) {
     return (
       <div className="text-xs font-mono text-accent-green/80">
         ✓ {result}

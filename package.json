@@ -1,14 +1,15 @@
 {
   "name": "claude-gui",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A futuristic GUI for Claude Code CLI",
   "author": "Rigel97",
   "main": "src/main/main.js",
   "scripts": {
     "dev": "concurrently -k \"npm:dev:vite\" \"npm:dev:electron\"",
     "dev:vite": "vite",
-    "dev:electron": "wait-on tcp:5173 && electron .",
+    "dev:electron": "wait-on tcp:5170 && electron .",
     "build": "vite build",
+    "test": "vitest run",
     "start": "vite build && electron .",
     "preview": "vite build && electron .",
     "pack": "npm run build && electron-builder --dir",
@@ -61,6 +62,7 @@
     "tailwindcss": "^3.4.15",
     "typescript": "^5.6.3",
     "vite": "^5.4.11",
+    "vitest": "^3.2.7",
     "wait-on": "^8.0.1"
   }
 }
