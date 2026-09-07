@@ -1,8 +1,9 @@
 import { useStore } from '../store';
-import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3, Download, Trash2, Check, X } from 'lucide-react';
+import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3, Download, Trash2, Check, X, Zap } from 'lucide-react';
 import { useState } from 'react';
 import { SettingsPanel } from './SettingsPanel';
 import { FileTree } from './FileTree';
+import { SkillList } from './SkillList';
 import { CostDashboard } from './CostDashboard';
 import { sessionToMarkdown } from '../utils/exportSession';
 import type { Session } from '../types';
@@ -21,7 +22,7 @@ export function Sidebar() {
 
   const [showSettings, setShowSettings] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
-  const [tab, setTab] = useState<'sessions' | 'files'>('sessions');
+  const [tab, setTab] = useState<'sessions' | 'files' | 'skills'>('sessions');
   // 正在确认删除的会话索引（-1 表示无）
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState(-1);
 
@@ -83,7 +84,7 @@ export function Sidebar() {
           </button>
         </div>
 
-        {/* 标签页切换：会话 / 文件 */}
+        {/* 标签页切换：会话 / 文件 / 技能 */}
         <div className="flex gap-1 px-3 pb-2">
           <TabButton
             active={tab === 'sessions'}
@@ -97,6 +98,12 @@ export function Sidebar() {
             icon={<Files className="w-3 h-3" />}
             label="文件"
             disabled={!cwd}
+          />
+          <TabButton
+            active={tab === 'skills'}
+            onClick={() => setTab('skills')}
+            icon={<Zap className="w-3 h-3" />}
+            label="技能"
           />
         </div>
 
@@ -210,6 +217,8 @@ export function Sidebar() {
                 </div>
               )}
             </>
+          ) : tab === 'skills' ? (
+            <SkillList />
           ) : (
             cwd && <FileTree root={cwd} />
           )}

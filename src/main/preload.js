@@ -31,6 +31,13 @@ const api = {
     readDir: (dirPath) => ipcRenderer.invoke('fs:read-dir', dirPath),
   },
 
+  skills: {
+    list: (cwd) => ipcRenderer.invoke('skills:list', cwd),
+    create: (payload) => ipcRenderer.invoke('skills:create', payload),
+    delete: (skillPath) => ipcRenderer.invoke('skills:delete', skillPath),
+    reveal: (skillPath) => ipcRenderer.invoke('skills:reveal', skillPath),
+  },
+
   notify: (title, body) => ipcRenderer.invoke('app:notify', { title, body }),
 
   exportMarkdown: (defaultName, content) => ipcRenderer.invoke('export:save-markdown', { defaultName, content }),

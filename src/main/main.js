@@ -148,6 +148,136 @@ ipcMain.handle('fs:read-dir', async (_e, dirPath) => {
   }
 });
 
+// ─── IPC: Skills（Claude Code 技能目录）───────────────
+// 技能为 <skills根目录>/.../<skill名>/SKILL.md 结构，YAML frontmatter 提供 name/description。
+// 全局根在 ~/.claude/skills，项目根在 <cwd>/.claude/skills。
+const SKILL_SCAN_MAX_DEPTH = 4;
+const SKILL_IGNORE = new Set(['node_modules', '.git']);
+
+function skillRoots(cwd) {
+  const roots = [{ scope: 'global', dir: path.join(app.getPath('home'), '.claude', 'skills') }];
+  if (typeof cwd === 'string' && cwd) {
+    roots.unshift({ scope: 'project', dir: path.join(cwd, '.claude', 'skills') });
+  }
+  return roots;
+}
+
+/** 解析 SKILL.md 的 YAML frontmatter（仅提取 name/description，不引依赖） */
+function parseSkillFrontmatter(content) {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return { name: null, description: '' };
+  let name = null;
+  let description = '';
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = line.match(/^([A-Za-z]+):\s*(.*)$/);
+    if (!kv) continue;
+    let val = kv[2].trim();
+    if (val.length >= 2 && val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+    const key = kv[1].toLowerCase();
+    if (key === 'name') name = val;
+    if (key === 'description') description = val;
+  }
+  return { name, description };
+}
+
+/** 递归扫描技能目录：层级越界/无 SKILL.md 即止，找到后不再深入该目录 */
+async function scanSkills(root, scope, out) {
+  async function walk(dir, depth) {
+    if (depth > SKILL_SCAN_MAX_DEPTH) return;
+    let entries;
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      return; // 根目录不存在或不可读时静默跳过
+    }
+    if (entries.some((e) => e.isFile() && e.name === 'SKILL.md')) {
+      try {
+        const content = await fs.promises.readFile(path.join(dir, 'SKILL.md'), 'utf8');
+        const { name, description } = parseSkillFrontmatter(content);
+        out.push({ name: name || path.basename(dir), description, path: dir, scope });
+      } catch {
+        /* 单个 SKILL.md 读取失败不影响整体 */
+      }
+      return;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (e.name.startsWith('.') || SKILL_IGNORE.has(e.name)) continue;
+      await walk(path.join(dir, e.name), depth + 1);
+    }
+  }
+  await walk(root, 0);
+}
+
+ipcMain.handle('skills:list', async (_e, cwd) => {
+  const out = [];
+  for (const { scope, dir } of skillRoots(cwd)) {
+    await scanSkills(dir, scope, out);
+  }
+  return out;
+});
+
+ipcMain.handle('skills:create', async (_e, payload) => {
+  const { name, description, scope, cwd } = payload || {};
+  // 目录名即技能名：限制为简洁的 kebab-case，防止路径注入
+  if (typeof name !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
+    return { ok: false, error: '名称需为小写字母/数字/连字符，且以字母或数字开头' };
+  }
+  const root = skillRoots(cwd).find((r) => r.scope === scope) || skillRoots(cwd)[0];
+  const skillDir = path.join(root.dir, name);
+  if (fs.existsSync(skillDir)) {
+    return { ok: false, error: `目录已存在：${skillDir}` };
+  }
+  try {
+    await fs.promises.mkdir(skillDir, { recursive: true });
+    // description 输出为 YAML 双引号标量（JSON 字符串是合法的 YAML 双引号标量），防注入/转义问题
+    const safeDesc = JSON.stringify(String(description || '').replace(/\s+/g, ' ').trim());
+    const content = [
+      '---',
+      `name: ${name}`,
+      `description: ${safeDesc}`,
+      '---',
+      '',
+      `# ${name}`,
+      '',
+      '在这里编写技能说明：适用场景、使用方式与注意事项。',
+      '',
+    ].join('\n');
+    await fs.promises.writeFile(path.join(skillDir, 'SKILL.md'), content, 'utf8');
+    return { ok: true, path: skillDir };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// 删除只允许发生在 skills 根目录之内，且目录必须含 SKILL.md（防误删/越权删任意目录）
+ipcMain.handle('skills:delete', async (_e, skillPath) => {
+  if (typeof skillPath !== 'string') return false;
+  const resolved = path.resolve(skillPath);
+  const globalRoot = path.join(app.getPath('home'), '.claude', 'skills');
+  const inSkillsTree =
+    resolved.startsWith(globalRoot + path.sep) ||
+    resolved.split(path.sep).join('/').includes('/.claude/skills/');
+  if (!inSkillsTree) return false;
+  if (!fs.existsSync(path.join(resolved, 'SKILL.md'))) return false;
+  try {
+    await fs.promises.rm(resolved, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+// 在系统文件管理器中定位技能目录（便于手动编辑/拖入第三方技能包）
+ipcMain.handle('skills:reveal', (_e, skillPath) => {
+  if (typeof skillPath !== 'string') return false;
+  const target = fs.existsSync(skillPath) && fs.statSync(skillPath).isDirectory()
+    ? path.join(skillPath, 'SKILL.md')
+    : skillPath;
+  shell.showItemInFolder(target);
+  return true;
+});
+
 // ─── IPC: 系统通知（长任务完成提醒）────────────────────
 ipcMain.handle('app:notify', (_e, { title, body }) => {
   if (!Notification.isSupported()) return false;
