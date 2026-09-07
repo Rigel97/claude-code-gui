@@ -29,6 +29,8 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 输入法组合状态（中文输入法打字中），组合期间的按键属于输入法而非发送动作
+  const isComposingRef = useRef(false);
 
   const cwd = useStore((s) => s.cwd);
   const sessionId = useStore((s) => s.currentSessionId);
@@ -137,6 +139,12 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
   }, [newSession]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // 输入法组合中：Enter 是确认候选词上屏，方向键是候选词导航，
+    // 均不触发发送/中断/斜杠面板（否则中文输入法打英文按回车会误发消息）
+    if (isComposingRef.current || e.nativeEvent.isComposing) {
+      return;
+    }
+
     // 斜杠面板打开时，优先响应面板导航
     if (showSlash) {
       if (e.key === 'ArrowDown') {
@@ -254,6 +262,8 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
             value={input}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
+            onCompositionStart={() => { isComposingRef.current = true; }}
+            onCompositionEnd={() => { isComposingRef.current = false; }}
             placeholder={isStreaming ? '生成中仍可输入，Enter 加入队列… (ESC 中断)' : '输入指令，/ 唤起快捷命令，Enter 发送'}
             rows={1}
             className="w-full bg-transparent text-sm text-text-primary placeholder-text-dim resize-none px-4 py-3 pr-28 max-h-48 overflow-y-auto font-sans"

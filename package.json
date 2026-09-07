@@ -12,8 +12,8 @@
     "test": "vitest run",
     "start": "vite build && electron .",
     "preview": "vite build && electron .",
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder"
+    "pack": "npm run build && electron-builder --dir && bash scripts/resign-mac.sh",
+    "dist": "npm run build && electron-builder && bash scripts/resign-mac.sh"
   },
   "build": {
     "appId": "com.rigel97.claude-gui",

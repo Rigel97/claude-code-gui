@@ -54,6 +54,8 @@ export function SearchPanel() {
 
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  // 输入法组合状态：组合中的 Enter 是确认上屏而非跳转
+  const isComposingRef = useRef(false);
   const isStreaming = status === 'streaming' || status === 'starting';
 
   useEffect(() => {
@@ -138,9 +140,13 @@ export function SearchPanel() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
+              // 输入法组合中不响应快捷键（Enter 属于输入法确认）
+              if (isComposingRef.current || e.nativeEvent.isComposing) return;
               if (e.key === 'Escape') setOpen(false);
               if (e.key === 'Enter' && hits.length > 0) jumpTo(hits[0]);
             }}
+            onCompositionStart={() => { isComposingRef.current = true; }}
+            onCompositionEnd={() => { isComposingRef.current = false; }}
             placeholder="搜索所有会话的消息内容…"
             className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-dim"
           />

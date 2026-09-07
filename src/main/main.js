@@ -1,5 +1,17 @@
-// 清除可能存在的 ELECTRON_RUN_AS_NODE，确保以完整 Electron 模式运行
-delete process.env.ELECTRON_RUN_AS_NODE;
+// 防 ELECTRON_RUN_AS_NODE 污染：该变量会让 Electron 以纯 Node 模式运行，
+// 导致窗口不弹出、跑完脚本即退出（launchd 全局环境被某些工具 setenv 时会踩中）。
+// 模式在二进制启动时就已决定，进程内 delete 无效，必须以干净环境重新拉起自身。
+if (process.env.ELECTRON_RUN_AS_NODE) {
+  delete process.env.ELECTRON_RUN_AS_NODE;
+  require('child_process')
+    .spawn(process.argv[0], process.argv.slice(1), {
+      detached: true,
+      stdio: 'ignore',
+      env: process.env, // 此时变量已从 process.env 中删除，子进程将以 GUI 模式启动
+    })
+    .unref();
+  process.exit(0);
+}
 
 const { app, BrowserWindow, ipcMain, dialog, Notification, shell } = require('electron');
 const path = require('path');
