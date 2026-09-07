@@ -29,6 +29,8 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 文件拖入高亮态（从访达/文件管理器拖文件到输入框上时置真）
+  const [dragOver, setDragOver] = useState(false);
   // 输入法组合状态（中文输入法打字中），组合期间的按键属于输入法而非发送动作
   const isComposingRef = useRef(false);
 
@@ -39,6 +41,7 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
   const currentModel = useStore((s) => s.currentModel);
   const permissionMode = useStore((s) => s.permissionMode);
   const injectedText = useStore((s) => s.injectedText);
+  const injectText = useStore((s) => s.injectText);
   const newSession = useStore((s) => s.newSession);
   const queue = useStore((s) => s.queue);
   const enqueueMessage = useStore((s) => s.enqueueMessage);
@@ -182,6 +185,35 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
     }
   };
 
+  /** 拖放文件 → 转为 @路径 引用注入输入框（与文件树点击的行为一致） */
+  const handleDragOver = (e: React.DragEvent) => {
+    // 仅文件拖动时才允许放置（拖动的是文字/链接则不改样式）
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!dragOver) setDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    // 进入子元素也会触发 dragleave，仅在真正离开容器时复位
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+    const refs = files
+      .map((f) => (window as any).api.getFilePath(f) as string)
+      .filter((p) => !!p)
+      // 位于项目目录内的引用转为相对路径（与文件树一致），外部的保留绝对路径
+      .map((p) => (cwd && p.startsWith(cwd + '/') ? p.slice(cwd.length + 1) : p))
+      .map((p) => `@${p} `)
+      .join('');
+    if (refs) injectText(refs);
+  };
+
   // 自动调整 textarea 高度 + 斜杠面板开关
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
@@ -252,11 +284,24 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
         )}
 
         {/* 输入框容器 */}
-        <div className={`relative rounded-2xl border transition-all input-focus-glow ${
-          isStreaming
-            ? 'border-accent-yellow/40 bg-accent-yellow/5'
-            : 'border-border bg-bg-light hover:border-accent-cyan/30 focus-within:border-accent-cyan/50 focus-within:tech-glow-cyan'
-        }`}>
+        <div
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`relative rounded-2xl border transition-all input-focus-glow ${
+            dragOver
+              ? 'border-accent-cyan/70 bg-accent-cyan/10 tech-glow-cyan'
+              : isStreaming
+                ? 'border-accent-yellow/40 bg-accent-yellow/5'
+                : 'border-border bg-bg-light hover:border-accent-cyan/30 focus-within:border-accent-cyan/50 focus-within:tech-glow-cyan'
+          }`}
+        >
+          {/* 拖放提示层 */}
+          {dragOver && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl pointer-events-none">
+              <span className="text-xs font-mono text-accent-cyan">松开即可插入 @文件引用</span>
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             value={input}
@@ -306,6 +351,7 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
             <span>⏎ {isStreaming ? '排队' : '发送'}</span>
             <span>⇧⏎ 换行</span>
             <span>/ 命令</span>
+            <span>拖文件 @引用</span>
             <span>⌘F 搜索</span>
             {isStreaming && <span className="text-accent-red/70">ESC 中断</span>}
             <span className="text-accent-cyan/50">● {sessionId ? sessionId.slice(0, 8) : 'new session'}</span>

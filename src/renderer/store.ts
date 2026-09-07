@@ -31,8 +31,19 @@ interface AppState {
   currentModel: string;
   permissionMode: 'bypassPermissions' | 'acceptEdits';
   setPermissionMode: (mode: 'bypassPermissions' | 'acceptEdits') => void;
-  showThinking: boolean;
-  setShowThinking: (show: boolean) => void;
+showThinking: boolean;
+setShowThinking: (show: boolean) => void;
+// 侧栏宽度（像素，可拖拽调整）
+sidebarWidth: number;
+setSidebarWidth: (w: number) => void;
+  // 任务完成且窗口不在前台时是否发系统通知
+  notifyOnComplete: boolean;
+  setNotifyOnComplete: (on: boolean) => void;
+  // 历史会话保留上限（超出部分丢弃最旧的）
+  maxSessions: number;
+  setMaxSessions: (n: number) => void;
+  // 清空全部历史会话（当前进行中的对话不受影响）
+  clearAllSessions: () => void;
 
   // 输入框文本注入（文件树点击 @引用 等场景）
   injectedText: { text: string; nonce: number } | null;
@@ -63,7 +74,7 @@ interface AppState {
   handleStream: (msg: StreamMessage) => void;
   setStatus: (status: RunStatus) => void;
   clearMessages: () => void;
-  hydrate: (data: Partial<Pick<AppState, 'cwd' | 'sessions' | 'messages' | 'activeSessionIndex' | 'currentSessionId' | 'totalCost' | 'totalInputTokens' | 'totalOutputTokens' | 'model' | 'permissionMode' | 'showThinking'>>) => void;
+  hydrate: (data: Partial<Pick<AppState, 'cwd' | 'sessions' | 'messages' | 'activeSessionIndex' | 'currentSessionId' | 'totalCost' | 'totalInputTokens' | 'totalOutputTokens' | 'model' | 'permissionMode' | 'showThinking' | 'notifyOnComplete' | 'maxSessions' | 'sidebarWidth'>>) => void;
 }
 
 let msgCounter = 0;
@@ -77,8 +88,8 @@ const genId = () => `msg-${++msgCounter}-${Date.now()}`;
  */
 let lastAssistantMsgId: string | null = null;
 
-/** 持久化保留的最大会话数，防止配置文件无限膨胀 */
-const MAX_SESSIONS = 50;
+/** 持久化保留会话数的默认上限（可在设置中调整），防止配置文件无限膨胀 */
+const DEFAULT_MAX_SESSIONS = 50;
 /** 单条工具结果的最大保留长度（Bash 输出可能非常大） */
 const MAX_TOOL_RESULT = 20000;
 
@@ -213,7 +224,7 @@ function archiveCurrentConversation(state: AppState): Session[] {
     inputTokens: 0,
     outputTokens: 0,
   };
-  return [draft, ...sessions].slice(0, MAX_SESSIONS);
+  return [draft, ...sessions].slice(0, state.maxSessions > 0 ? state.maxSessions : DEFAULT_MAX_SESSIONS);
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -239,8 +250,39 @@ export const useStore = create<AppState>((set, get) => ({
   currentModel: '',
   permissionMode: 'bypassPermissions',
   setPermissionMode: (permissionMode) => set({ permissionMode }),
-  showThinking: true,
-  setShowThinking: (showThinking) => set({ showThinking }),
+showThinking: true,
+setShowThinking: (showThinking) => set({ showThinking }),
+sidebarWidth: 256,
+setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: Math.round(sidebarWidth) }),
+  notifyOnComplete: true,
+  setNotifyOnComplete: (notifyOnComplete) => set({ notifyOnComplete }),
+  maxSessions: DEFAULT_MAX_SESSIONS,
+  setMaxSessions: (maxSessions) =>
+    set({ maxSessions: Math.max(1, Math.min(500, Math.floor(maxSessions) || DEFAULT_MAX_SESSIONS)) }),
+
+  clearAllSessions: () => {
+    // 生成中禁止清空：会话列表会被 result 事件继续写入
+    const status = get().status;
+    if (status === 'streaming' || status === 'starting') return;
+    const state = get();
+    // 从累计成本中扣除已归档会话的消耗（与 deleteSession 的口径一致），
+    // 当前未归档对话及其消耗保留
+    let totalCost = state.totalCost;
+    let totalInputTokens = state.totalInputTokens;
+    let totalOutputTokens = state.totalOutputTokens;
+    for (const s of state.sessions) {
+      totalCost -= s.cost || 0;
+      totalInputTokens -= s.inputTokens || 0;
+      totalOutputTokens -= s.outputTokens || 0;
+    }
+    set({
+      sessions: [],
+      activeSessionIndex: -1,
+      totalCost: Math.max(0, totalCost),
+      totalInputTokens: Math.max(0, totalInputTokens),
+      totalOutputTokens: Math.max(0, totalOutputTokens),
+    });
+  },
 
   injectedText: null,
   injectText: (text) => set({ injectedText: { text, nonce: Date.now() } }),
@@ -610,7 +652,7 @@ export const useStore = create<AppState>((set, get) => ({
             : [newSession, ...state.sessions];
 
           // 限制会话数量，超出部分丢弃最旧的
-          sessions = sessions.slice(0, MAX_SESSIONS);
+          sessions = sessions.slice(0, state.maxSessions > 0 ? state.maxSessions : DEFAULT_MAX_SESSIONS);
 
           // 活跃索引指向本会话：侧栏高亮与搜索去重都依赖它。
           // 新会话 prepend 在 0（不会被裁剪）；更新已有会话时索引即其原位置
@@ -704,6 +746,13 @@ export const useStore = create<AppState>((set, get) => ({
       model: data.model || '',
       permissionMode: data.permissionMode || 'bypassPermissions',
       showThinking: data.showThinking !== false,
+      notifyOnComplete: data.notifyOnComplete !== false,
+      maxSessions: typeof data.maxSessions === 'number' && data.maxSessions > 0
+        ? data.maxSessions
+        : DEFAULT_MAX_SESSIONS,
+      sidebarWidth: typeof data.sidebarWidth === 'number' && data.sidebarWidth >= 200 && data.sidebarWidth <= 480
+        ? data.sidebarWidth
+        : 256,
       activeSessionIndex: idx,
       currentSessionId: data.currentSessionId ?? active?.sessionId ?? null,
       messages,

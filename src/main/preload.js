@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const api = {
   openDirectory: () => ipcRenderer.invoke('dialog:open-directory'),
@@ -37,6 +37,9 @@ const api = {
     delete: (skillPath) => ipcRenderer.invoke('skills:delete', skillPath),
     reveal: (skillPath) => ipcRenderer.invoke('skills:reveal', skillPath),
   },
+
+  // 拖入窗口的 File 对象取真实路径（Electron 32+ 移除了 File.path，必须走 webUtils）
+  getFilePath: (file) => webUtils.getPathForFile(file),
 
   notify: (title, body) => ipcRenderer.invoke('app:notify', { title, body }),
 

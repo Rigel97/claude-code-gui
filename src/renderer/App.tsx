@@ -46,6 +46,9 @@ export default function App() {
       model: state.model,
       permissionMode: state.permissionMode,
       showThinking: state.showThinking,
+      notifyOnComplete: state.notifyOnComplete,
+      maxSessions: state.maxSessions,
+      sidebarWidth: state.sidebarWidth,
     });
 
     const flush = () => {
@@ -95,6 +98,7 @@ export default function App() {
       // 任务完成且窗口不在前台时，发系统通知
       if (status === 'completed' && document.visibilityState !== 'visible') {
         const state = useStore.getState();
+        if (!state.notifyOnComplete) return;
         const lastUserMsg = [...state.messages].reverse().find((m) => m.role === 'user');
         const snippet = lastUserMsg?.blocks.find((b) => b.kind === 'text')?.text?.slice(0, 60) || '';
         (window as any).api.notify('Claude 任务完成', snippet);

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import { X, Cpu, Brain, Info, Shield } from 'lucide-react';
+import { X, Cpu, Info, Shield, Bell, Archive, Trash2 } from 'lucide-react';
 
 const PERMISSION_MODES = [
   {
@@ -15,6 +15,42 @@ const PERMISSION_MODES = [
   },
 ];
 
+// Claude CLI 支持 --model 别名（sonnet/opus/haiku）或完整模型 ID；
+// 其余 ID 走「自定义」，保存后原样传给 CLI
+const MODEL_PRESETS = [
+  { id: '', label: '默认', desc: '跟随 CLI 配置' },
+  { id: 'haiku', label: 'Haiku', desc: '最快、最便宜' },
+  { id: 'sonnet', label: 'Sonnet', desc: '速度/能力均衡' },
+  { id: 'opus', label: 'Opus', desc: '能力最强' },
+];
+
+const SESSION_LIMIT_OPTIONS = [20, 50, 100, 200];
+
+function Toggle({ on, color, label, onClick }: {
+  on: boolean;
+  color: 'purple' | 'blue';
+  label: string;
+  onClick: () => void;
+}) {
+  const active = color === 'purple'
+    ? 'bg-accent-purple/10 border border-accent-purple/40 text-accent-purple'
+    : 'bg-accent-blue/10 border border-accent-blue/40 text-accent-blue';
+  const knob = color === 'purple' ? 'bg-accent-purple/40' : 'bg-accent-blue/40';
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-all ${
+        on ? active : 'bg-bg-light border border-border text-text-secondary'
+      }`}
+    >
+      <span>{label}</span>
+      <div className={`w-9 h-5 rounded-full relative transition-colors ${on ? knob : 'bg-bg-lighter'}`}>
+        <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-text-primary transition-all ${on ? 'left-4' : 'left-0.5'}`} />
+      </div>
+    </button>
+  );
+}
+
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const model = useStore((s) => s.model);
   const setModel = useStore((s) => s.setModel);
@@ -23,15 +59,34 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const setPermissionMode = useStore((s) => s.setPermissionMode);
   const showThinking = useStore((s) => s.showThinking);
   const setShowThinking = useStore((s) => s.setShowThinking);
+  const notifyOnComplete = useStore((s) => s.notifyOnComplete);
+  const setNotifyOnComplete = useStore((s) => s.setNotifyOnComplete);
+  const maxSessions = useStore((s) => s.maxSessions);
+  const setMaxSessions = useStore((s) => s.setMaxSessions);
+  const clearAllSessions = useStore((s) => s.clearAllSessions);
+  const sessions = useStore((s) => s.sessions);
 
+  // model 命中预设则视为预设选择，否则视为自定义
+  const isPresetModel = MODEL_PRESETS.some((p) => p.id === model);
   const [localModel, setLocalModel] = useState(model);
+  const [preset, setPreset] = useState<string>(isPresetModel ? model : '__custom__');
   const [localPermissionMode, setLocalPermissionMode] = useState(permissionMode);
   const [localShowThinking, setLocalShowThinking] = useState(showThinking);
+  const [localNotify, setLocalNotify] = useState(notifyOnComplete);
+  const [localMaxSessions, setLocalMaxSessions] = useState(maxSessions);
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  const handlePreset = (id: string) => {
+    setPreset(id);
+    if (id !== '__custom__') setLocalModel(id);
+  };
 
   const handleSave = () => {
-    setModel(localModel);
+    setModel(preset === '__custom__' ? localModel.trim() : preset);
     setPermissionMode(localPermissionMode);
     setShowThinking(localShowThinking);
+    setNotifyOnComplete(localNotify);
+    setMaxSessions(localMaxSessions);
     onClose();
   };
 
@@ -46,8 +101,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {/* 内容 */}
-        <div className="p-5 space-y-5">
+        {/* 内容（滚动区） */}
+        <div className="p-5 space-y-5 max-h-[65vh] overflow-y-auto">
           {/* 模型设置 */}
           <div>
             <label className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider mb-2">
@@ -59,17 +114,46 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 当前实际使用：{currentModel}
               </div>
             )}
-            <input
-              type="text"
-              value={localModel}
-              onChange={(e) => setLocalModel(e.target.value)}
-              placeholder="留空则使用 CLI 默认模型"
-              className="w-full px-3 py-2 rounded-lg bg-bg-light border border-border text-sm text-text-primary placeholder-text-dim font-mono focus:border-accent-cyan/50 transition-colors"
-            />
-            <div className="text-[10px] text-text-dim mt-1.5 leading-relaxed">
-              会作为 <code className="text-accent-cyan">--model</code> 参数传给 claude CLI。
-              可用值取决于你的 CLI 配置，留空最安全。
+            <div className="grid grid-cols-4 gap-1.5">
+              {MODEL_PRESETS.map((p) => (
+                <button
+                  key={p.id || 'default'}
+                  onClick={() => handlePreset(p.id)}
+                  className={`px-2 py-1.5 rounded-lg text-xs transition-all ${
+                    preset === p.id
+                      ? 'bg-accent-cyan/15 border border-accent-cyan/50 text-accent-cyan'
+                      : 'bg-bg-light border border-border text-text-secondary hover:bg-bg-lighter'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+              <button
+                onClick={() => handlePreset('__custom__')}
+                className={`px-2 py-1.5 rounded-lg text-xs transition-all ${
+                  preset === '__custom__'
+                    ? 'bg-accent-cyan/15 border border-accent-cyan/50 text-accent-cyan'
+                    : 'bg-bg-light border border-border text-text-secondary hover:bg-bg-lighter'
+                }`}
+              >
+                自定义
+              </button>
             </div>
+            {preset !== '__custom__' && preset !== '' && (
+              <div className="text-[10px] text-text-dim mt-1.5">
+                {MODEL_PRESETS.find((p) => p.id === preset)?.desc}，作为{' '}
+                <code className="text-accent-cyan">--model {preset}</code> 传给 claude CLI
+              </div>
+            )}
+            {preset === '__custom__' && (
+              <input
+                type="text"
+                value={localModel}
+                onChange={(e) => setLocalModel(e.target.value)}
+                placeholder="完整模型 ID，如 claude-sonnet-4-x…"
+                className="w-full mt-2 px-3 py-2 rounded-lg bg-bg-light border border-border text-sm text-text-primary placeholder-text-dim font-mono focus:border-accent-cyan/50 transition-colors"
+              />
+            )}
           </div>
 
           {/* 权限模式 */}
@@ -101,25 +185,82 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             </div>
           </div>
 
-          {/* 思考过程 */}
+          {/* 显示与通知 */}
           <div>
             <label className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider mb-2">
-              <Brain className="w-3.5 h-3.5" />
-              思考过程
+              <Bell className="w-3.5 h-3.5" />
+              显示与通知
             </label>
-            <button
-              onClick={() => setLocalShowThinking(!localShowThinking)}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-all ${
-                localShowThinking
-                  ? 'bg-accent-purple/10 border border-accent-purple/40 text-accent-purple'
-                  : 'bg-bg-light border border-border text-text-secondary'
-              }`}
-            >
-              <span>显示 Claude 的思考过程</span>
-              <div className={`w-9 h-5 rounded-full relative transition-colors ${localShowThinking ? 'bg-accent-purple/40' : 'bg-bg-lighter'}`}>
-                <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-text-primary transition-all ${localShowThinking ? 'left-4' : 'left-0.5'}`} />
+            <div className="space-y-1.5">
+              <Toggle
+                on={localShowThinking}
+                color="purple"
+                label="显示 Claude 的思考过程"
+                onClick={() => setLocalShowThinking(!localShowThinking)}
+              />
+              <Toggle
+                on={localNotify}
+                color="blue"
+                label="任务完成时发送系统通知"
+                onClick={() => setLocalNotify(!localNotify)}
+              />
+            </div>
+          </div>
+
+          {/* 历史会话 */}
+          <div>
+            <label className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider mb-2">
+              <Archive className="w-3.5 h-3.5" />
+              历史会话
+            </label>
+            <div className="flex gap-1">
+              {SESSION_LIMIT_OPTIONS.map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setLocalMaxSessions(n)}
+                  className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-mono transition-all ${
+                    localMaxSessions === n
+                      ? 'bg-accent-green/10 border border-accent-green/40 text-accent-green'
+                      : 'bg-bg-light border border-border text-text-secondary hover:bg-bg-lighter'
+                  }`}
+                >
+                  {n} 条
+                </button>
+              ))}
+            </div>
+            <div className="text-[10px] text-text-dim mt-1.5 leading-relaxed">
+              历史会话超出上限时自动丢弃最旧的（当前共 {sessions.length} 条）。
+            </div>
+
+            {/* 清空历史（危险操作，行内二次确认） */}
+            {confirmClear ? (
+              <div className="mt-2 flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/40">
+                <span className="text-xs text-red-300">清空全部 {sessions.length} 条历史？不可恢复</span>
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    onClick={() => { setConfirmClear(false); clearAllSessions(); }}
+                    className="px-2.5 py-1 rounded-md text-[11px] bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 text-red-300 transition-all"
+                  >
+                    确认清空
+                  </button>
+                  <button
+                    onClick={() => setConfirmClear(false)}
+                    className="px-2.5 py-1 rounded-md text-[11px] text-text-muted hover:text-text-primary transition-colors"
+                  >
+                    取消
+                  </button>
+                </div>
               </div>
-            </button>
+            ) : (
+              <button
+                onClick={() => setConfirmClear(true)}
+                disabled={sessions.length === 0}
+                className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs text-text-muted hover:text-red-400 bg-bg-light border border-border hover:border-red-500/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                清空全部历史会话
+              </button>
+            )}
           </div>
 
           {/* 关于 */}

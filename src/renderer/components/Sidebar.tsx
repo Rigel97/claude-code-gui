@@ -1,6 +1,6 @@
 import { useStore } from '../store';
 import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3, Download, Trash2, Check, X, Zap } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { SettingsPanel } from './SettingsPanel';
 import { FileTree } from './FileTree';
 import { SkillList } from './SkillList';
@@ -18,6 +18,8 @@ export function Sidebar() {
   const newSession = useStore((s) => s.newSession);
   const totalCost = useStore((s) => s.totalCost);
   const status = useStore((s) => s.status);
+  const sidebarWidth = useStore((s) => s.sidebarWidth);
+  const setSidebarWidth = useStore((s) => s.setSidebarWidth);
   const isStreaming = status === 'streaming' || status === 'starting';
 
   const [showSettings, setShowSettings] = useState(false);
@@ -25,6 +27,41 @@ export function Sidebar() {
   const [tab, setTab] = useState<'sessions' | 'files' | 'skills'>('sessions');
   // 正在确认删除的会话索引（-1 表示无）
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState(-1);
+  // 拖拽中状态（用于手柄高亮）
+  const [resizing, setResizing] = useState(false);
+
+  // 侧栏宽度拖拽：最小 200px，最大 480px
+  const MIN_W = 200;
+  const MAX_W = 480;
+  const dragState = useRef<{ startX: number; startW: number } | null>(null);
+
+  const onDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragState.current = { startX: e.clientX, startW: sidebarWidth };
+    setResizing(true);
+
+    const onMove = (ev: MouseEvent) => {
+      // 鼠标已松开但未收到 mouseup（拖出窗口等异常）时终止拖拽
+      if (ev.buttons === 0) {
+        window.removeEventListener('mousemove', onMove);
+        setResizing(false);
+        dragState.current = null;
+        return;
+      }
+      const d = dragState.current;
+      if (!d) return;
+      const w = d.startW + ev.clientX - d.startX;
+      setSidebarWidth(Math.min(MAX_W, Math.max(MIN_W, w)));
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      setResizing(false);
+      dragState.current = null;
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [sidebarWidth, setSidebarWidth]);
 
   const handleOpenDir = async () => {
     // 生成中禁止切换项目：newSession 会被状态机静默跳过，否则会落下
@@ -47,7 +84,10 @@ export function Sidebar() {
 
   return (
     <>
-      <aside className="w-64 bg-bg-deep/80 border-r border-border/50 flex flex-col shrink-0 backdrop-blur-sm">
+      <aside
+        className="relative bg-bg-deep/80 border-r border-border/50 flex flex-col shrink-0 backdrop-blur-sm"
+        style={{ width: sidebarWidth }}
+      >
         {/* 当前项目 */}
         <div className="p-3 border-b border-border/30">
           <button
@@ -225,8 +265,7 @@ export function Sidebar() {
         </div>
 
         {/* 底部 */}
-        <div className="p-3 border-t border-border/30 space-y-2">
-          {/* 总成本（点击打开仪表盘） */}
+        <div className="p-3 border-t border-border/30 space-y-2">          {/* 总成本（点击打开仪表盘） */}
           <button
             onClick={() => setShowDashboard(true)}
             className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg bg-bg-light/50 hover:bg-bg-light hover:border-accent-green/30 border border-transparent transition-all group"
@@ -250,6 +289,16 @@ export function Sidebar() {
             <span className="text-sm">设置</span>
           </button>
         </div>
+
+        {/* 拖拽调宽手柄 */}
+        <div
+          onMouseDown={onDragStart}
+          onDoubleClick={() => setSidebarWidth(256)}
+          title="拖拽调整宽度 · 双击恢复默认"
+          className={`absolute top-0 -right-1 w-2 h-full cursor-col-resize z-20 transition-colors ${
+            resizing ? 'bg-accent-cyan/40' : 'hover:bg-accent-cyan/30'
+          }`}
+        />
       </aside>
 
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
