@@ -105,13 +105,47 @@ describe('assistant 文本合并（按 message.id 门控）', () => {
     expect((st.blocks[0] as { text: string }).text).toBe('第一段。第二段（同消息分片）');
   });
 
+  it('回归：thinking 分片后的同 id text 分片不得合并进早期轮次文本（真实 CLI 事件序列）', () => {
+    s().handleStream(init());
+    // 第 1 轮：同一消息拆成 [text] [tool_use] 两个分片（CLI 实际行为）
+    s().handleStream(assistant('msg_R1', [{ type: 'text', text: '我先看看文件。' }]));
+    s().handleStream(assistant('msg_R1', [{ type: 'tool_use', id: 'tool9', name: 'Bash', input: { command: 'ls' } }]));
+    s().handleStream({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool9', content: 'f1.txt f2.txt f3.txt' }] },
+    } as unknown as StreamMessage);
+    // 第 2 轮：同一消息拆成 [thinking] [text] 两个分片。
+    // 旧实现在这里按 kind 全局 findIndex，把最终答案拼进第 1 轮的开场文本，
+    // 造成"结果显示在中间、后面跟着思考/工具调用"的错位
+    s().handleStream(assistant('msg_R2', [{ type: 'thinking', thinking: '数一下文件数', signature: 's' }]));
+    s().handleStream(assistant('msg_R2', [{ type: 'text', text: '当前目录共有 3 个文件。' }]));
+    s().handleStream(result());
+
+    const blocks = s().messages.filter((m) => m.role === 'assistant')[0].blocks;
+    expect(blocks.map((b) => b.kind)).toEqual(['text', 'tool_use', 'thinking', 'text', 'stats']);
+    expect((blocks[0] as { text: string }).text).toBe('我先看看文件。');
+    expect((blocks[3] as { text: string }).text).toBe('当前目录共有 3 个文件。');
+  });
+
+  it('同消息内 text→tool_use→text 交叉结构保持原顺序', () => {
+    s().handleStream(assistant('msg_M1', [{ type: 'text', text: 'before' }]));
+    s().handleStream(assistant('msg_M1', [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }]));
+    s().handleStream(assistant('msg_M1', [{ type: 'text', text: 'after' }]));
+    const blocks = s().streamingMessage!.blocks;
+    expect(blocks.map((b) => b.kind)).toEqual(['text', 'tool_use', 'text']);
+    expect((blocks[0] as { text: string }).text).toBe('before');
+    expect((blocks[2] as { text: string }).text).toBe('after');
+  });
+
   it('thinking 块同样受 id 门控', () => {
     s().handleStream(assistant('msg_T1', [{ type: 'thinking', thinking: '想A', signature: 's' }]));
     s().handleStream(assistant('msg_T2', [{ type: 'thinking', thinking: '想B', signature: 's' }]));
     expect(s().streamingMessage!.blocks.length).toBe(2);
     s().handleStream(assistant('msg_T2', [{ type: 'thinking', thinking: '想C', signature: 's' }]));
     expect(s().streamingMessage!.blocks.length).toBe(2);
-    expect((s().streamingMessage!.blocks[0] as { text: string }).text).toBe('想A想C');
+    // 想C 与 想B 同属 msg_T2，必须合并进 T2 的块；T1 的块不受影响
+    expect((s().streamingMessage!.blocks[0] as { text: string }).text).toBe('想A');
+    expect((s().streamingMessage!.blocks[1] as { text: string }).text).toBe('想B想C');
   });
 });
 

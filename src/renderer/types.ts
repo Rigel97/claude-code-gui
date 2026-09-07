@@ -124,8 +124,8 @@ export interface ChatMessage {
 }
 
 export type UIBlock =
-  | { kind: 'text'; text: string }
-  | { kind: 'thinking'; text: string }
+| { kind: 'text'; text: string; msgId?: string }
+| { kind: 'thinking'; text: string; msgId?: string }
   | { kind: 'tool_use'; toolName: string; toolId: string; input: Record<string, unknown>; status: 'running' | 'done' | 'error'; result?: string; children?: UIBlock[] }
   | { kind: 'stderr'; text: string }
   | { kind: 'stats'; data: ResultMessage };

@@ -461,19 +461,23 @@ export const useStore = create<AppState>((set, get) => ({
         let touched = parentToolId !== null; // 子代理容器拷贝后必须写回
         for (const block of contentBlocks) {
           if (block.type === 'text') {
-            const idx = sameMsgShard ? container.findIndex((b) => b.kind === 'text') : -1;
-            if (idx >= 0 && container[idx].kind === 'text') {
-              container[idx] = { kind: 'text', text: container[idx].text + block.text };
+            // 同消息分片续写：仅当容器尾部是同一条消息的 text 块时追加。
+            // 不得按 kind 全局查找——CLI 会把同一条消息拆成多个事件发送
+            // （[thinking]、[text] 分片），若第 1 轮已有开场文本，后续轮次的
+            // 最终答案会被拼进那个旧块，造成“结果在中间、后面跟着思考/工具”的错位
+            const last = container[container.length - 1];
+            if (sameMsgShard && last?.kind === 'text' && last.msgId === msgId) {
+              container[container.length - 1] = { kind: 'text', text: last.text + block.text, msgId: msgId ?? undefined };
             } else {
-              container.push({ kind: 'text', text: block.text });
+              container.push({ kind: 'text', text: block.text, msgId: msgId ?? undefined });
               touched = true;
             }
           } else if (block.type === 'thinking') {
-            const idx = sameMsgShard ? container.findIndex((b) => b.kind === 'thinking') : -1;
-            if (idx >= 0 && container[idx].kind === 'thinking') {
-              container[idx] = { kind: 'thinking', text: container[idx].text + block.thinking };
+            const last = container[container.length - 1];
+            if (sameMsgShard && last?.kind === 'thinking' && last.msgId === msgId) {
+              container[container.length - 1] = { kind: 'thinking', text: last.text + block.thinking, msgId: msgId ?? undefined };
             } else {
-              container.push({ kind: 'thinking', text: block.thinking });
+              container.push({ kind: 'thinking', text: block.thinking, msgId: msgId ?? undefined });
               touched = true;
             }
           } else if (block.type === 'tool_use') {
