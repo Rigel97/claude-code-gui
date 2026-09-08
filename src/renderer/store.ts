@@ -13,6 +13,13 @@ interface AppState {
 
   // 当前对话的消息列表（已完成的）
   messages: ChatMessage[];
+  // 移除最后一轮对话（最后一条 user 消息及其后全部），返回被移除轮的 user 文本；
+  // 无 user 消息或无文本时返回 null。失败重试用
+  removeLastTurn: () => string | null;
+  // 用户发送新消息时的强制滚底信号（nonce）。流式自动滚动的 stickToBottom
+  // 是 ChatArea 的局部 ref，重试/队列续发等外部发送路径无法直接设置它，
+  // 改由 store 发信号、ChatArea 监听
+  forceScrollNonce: number;
 
   // 运行状态
   status: RunStatus;
@@ -44,6 +51,8 @@ setSidebarWidth: (w: number) => void;
   setMaxSessions: (n: number) => void;
   // 清空全部历史会话（当前进行中的对话不受影响）
   clearAllSessions: () => void;
+  // 重命名历史会话（trim 后为空则不生效）
+  renameSession: (index: number, title: string) => void;
 
   // 输入框文本注入（文件树点击 @引用 等场景）
   injectedText: { text: string; nonce: number } | null;
@@ -80,6 +89,10 @@ setSidebarWidth: (w: number) => void;
 
 let msgCounter = 0;
 const genId = () => `msg-${++msgCounter}-${Date.now()}`;
+
+/** 强制滚底信号的自增序号：Date.now() 同毫秒会碰撞，导致连续发送时
+ *  第二次不触发 ChatArea 的 effect，改用单调递增计数器 */
+let scrollNonceCounter = 0;
 
 /**
  * 上一条 assistant 流事件的 CLI message.id。
@@ -237,6 +250,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeSessionIndex: -1,
 
   messages: [],
+  forceScrollNonce: 0,
 
   status: 'idle',
   thinkingTokens: 0,
@@ -283,6 +297,14 @@ setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: Math.round(sidebarWidth) 
       totalInputTokens: Math.max(0, totalInputTokens),
       totalOutputTokens: Math.max(0, totalOutputTokens),
     });
+  },
+
+  renameSession: (index, title) => {
+    const sessions = get().sessions;
+    if (index < 0 || index >= sessions.length) return;
+    const t = title.trim();
+    if (!t || t === sessions[index].title) return;
+    set({ sessions: sessions.map((s, i) => (i === index ? { ...s, title: t } : s)) });
   },
 
   injectedText: null,
@@ -439,6 +461,7 @@ setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: Math.round(sidebarWidth) 
       messages: [...get().messages, userMsg],
       streamingMessage: assistantMsg,
       status: 'streaming',
+      forceScrollNonce: ++scrollNonceCounter,
     });
   },
 
@@ -719,6 +742,23 @@ setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: Math.round(sidebarWidth) 
   },
 
   clearMessages: () => set({ messages: [], streamingMessage: null, thinkingTokens: 0, status: 'idle' }),
+
+  removeLastTurn: () => {
+    const msgs = get().messages;
+    let userIdx = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') {
+        userIdx = i;
+        break;
+      }
+    }
+    if (userIdx < 0) return null;
+    const text = msgs[userIdx].blocks.find((b) => b.kind === 'text')?.text?.trim();
+    if (!text) return null;
+    // 移除该 user 消息及其后全部（失败的 assistant 消息/(stderr 等）
+    set({ messages: msgs.slice(0, userIdx) });
+    return text;
+  },
 
   hydrate: (data) => {
     const sessions = data.sessions || [];

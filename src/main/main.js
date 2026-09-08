@@ -24,7 +24,8 @@ if (process.env.ELECTRON_RUN_AS_NODE && process.type === undefined) {
 const { app, BrowserWindow, ipcMain, dialog, Notification, shell, Menu, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { ClaudeRunner, queryContext } = require('./runner');
+const { ClaudeRunner, queryContext, compactSession } = require('./runner');
+const { saveImageDataUrl } = require('./images');
 const { Store } = require('./store');
 
 let mainWindow = null;
@@ -184,6 +185,7 @@ ipcMain.on('store:flush', (_e, value) => {
 
 // ─── IPC: Claude Code 执行 ──────────────────────────────
 ipcMain.handle('claude:send', async (_e, payload) => {
+  await auxCommandLock;
   return runner.send(payload);
 });
 
@@ -192,8 +194,24 @@ ipcMain.handle('claude:abort', () => {
   return true;
 });
 
-// 零成本查询某会话的当前上下文占用（内部跑 /context 本地命令，不调 API）
-ipcMain.handle('claude:context', (_e, payload) => queryContext(payload || {}));
+// 零成本查询某会话的当前上下文占用（内部跑 /context 本地命令，不调 API）。
+// 一次性命令与正式生成互斥：压缩期间到达的 send 排队等待，
+// 避免两个进程并发读写同一会话；反之生成中前端已禁用压缩按钮
+let auxCommandLock = Promise.resolve();
+function withAuxLock(fn) {
+  const prev = auxCommandLock;
+  let release;
+  auxCommandLock = new Promise((r) => (release = r));
+  return prev.then(fn).finally(release);
+}
+
+ipcMain.handle('claude:context', (_e, payload) => withAuxLock(() => queryContext(payload || {})));
+
+// 压缩会话上下文（CLI /compact，需一次总结调用）；返回压缩后的新占用
+ipcMain.handle('claude:compact', (_e, payload) => withAuxLock(() => compactSession(payload || {})));
+
+// ─── IPC: 图片保存（粘贴截图 → 临时文件 → @ 引用）──
+ipcMain.handle('fs:save-image', (_e, { dataUrl } = {}) => saveImageDataUrl(dataUrl));
 
 // ─── IPC: 文件树（懒加载目录）──────────────────────────
 const FS_IGNORE = new Set([

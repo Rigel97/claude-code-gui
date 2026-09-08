@@ -3,10 +3,11 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 import { ToolCallView } from './ToolCallView';
 import { StatsView } from './StatsView';
 import { ThinkingView } from './ThinkingView';
-import { User, Copy, Check } from 'lucide-react';
+import { User, Copy, Check, RotateCcw } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useStore } from '../store';
 import { copyText } from '../utils/clipboard';
+import { sendPrompt } from '../utils/send';
 
 /** 提取消息纯文本正文（不含 thinking / 工具调用 / stats）*/
 function messageText(message: ChatMessage): string {
@@ -47,12 +48,38 @@ function MessageCopyButton({ getText }: { getText: () => string }) {
   );
 }
 
+/** 失败重试：移除最后一轮（含失败的回复）并重发原文，相当于「这轮重来」。
+ *  仅挂在 messages 末尾的 error 消息上，避免对历史旧错误误操作 */
+function RetryButton() {
+  const removeLastTurn = useStore((s) => s.removeLastTurn);
+
+  const handleRetry = () => {
+    const text = removeLastTurn();
+    if (text) sendPrompt(text);
+  };
+
+  return (
+    <div>
+      <button
+        onClick={handleRetry}
+        title="移除本轮失败对话并重新发送"
+        className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono text-accent-red/80 hover:text-accent-red border border-accent-red/20 hover:border-accent-red/40 transition-colors"
+      >
+        <RotateCcw className="w-3 h-3" />
+        <span>重试</span>
+      </button>
+    </div>
+  );
+}
+
 /**
  * memo 的前提是 store 的不可变更新：已归档消息与已完成块引用稳定，
  * 流式事件（每秒可达数十次）不再触发全列表重渲染与 markdown 重新解析
  */
 export const ChatMessageView = memo(function ChatMessageView({ message }: { message: ChatMessage }) {
   const showThinking = useStore((s) => s.showThinking);
+  // 是否为消息列表末尾（重试按钮只对最新的 error 消息显示）
+  const isLatest = useStore((s) => s.messages[s.messages.length - 1]?.id === message.id);
 
   if (message.role === 'user') {
     const text = messageText(message);
@@ -108,8 +135,8 @@ export const ChatMessageView = memo(function ChatMessageView({ message }: { mess
           />
         ))}
 
-        {/* 复制按钮：最终回复下方，流式完成后出现（位置稳定不随内容跳动）。
-            容器 space-y-3 提供与上一个块的间距 */}
+        {/* 操作条：失败时提供重试（仅最新错误消息）；完成后提供复制 */}
+        {message.status === 'error' && isLatest && <RetryButton />}
         {text && message.status !== 'streaming' && <MessageCopyButton getText={() => text} />}
       </div>
     </div>

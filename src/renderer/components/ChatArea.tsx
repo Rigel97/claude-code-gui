@@ -6,11 +6,11 @@ import { useRef, useEffect } from 'react';
 export function ChatArea() {
   const messages = useStore((s) => s.messages);
   const streamingMessage = useStore((s) => s.streamingMessage);
-  const addUserMessage = useStore((s) => s.addUserMessage);
   const status = useStore((s) => s.status);
   const thinkingTokens = useStore((s) => s.thinkingTokens);
   const highlightMessageId = useStore((s) => s.highlightMessageId);
   const setHighlightMessage = useStore((s) => s.setHighlightMessage);
+  const forceScrollNonce = useStore((s) => s.forceScrollNonce);
   const scrollRef = useRef<HTMLDivElement>(null);
   // 用户是否贴在底部（向上翻阅历史时暂停自动滚动）
   const stickToBottom = useRef(true);
@@ -28,11 +28,14 @@ export function ChatArea() {
     }
   }, [messages, streamingMessage, thinkingTokens]);
 
-  // 用户发送新消息时强制回到底部
-  const handleSend = (text: string) => {
-    stickToBottom.current = true;
-    addUserMessage(text);
-  };
+  // 用户发送新消息（含失败重试/队列续发等外部发送路径）时强制回到底部：
+  // addUserMessage 会发 nonce，这里监听并恢复贴底状态
+  useEffect(() => {
+    if (forceScrollNonce && scrollRef.current) {
+      stickToBottom.current = true;
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [forceScrollNonce]);
 
   // 搜索跳转：滚动到目标消息并闪烁高亮
   useEffect(() => {
@@ -100,7 +103,7 @@ export function ChatArea() {
       </div>
 
       {/* 输入栏 */}
-      <InputBar onSend={handleSend} />
+      <InputBar />
     </div>
   );
 }

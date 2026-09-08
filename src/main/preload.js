@@ -20,6 +20,8 @@ const api = {
     abort: () => ipcRenderer.invoke('claude:abort'),
     // 零成本查询会话当前上下文占用（/context 本地命令）
     getContext: (cwd, sessionId) => ipcRenderer.invoke('claude:context', { cwd, sessionId }),
+    // 压缩会话上下文（/compact，需一次总结调用）；返回 { success, error?, context? }
+    compact: (cwd, sessionId) => ipcRenderer.invoke('claude:compact', { cwd, sessionId }),
 
     onStream: (callback) => {
       const handler = (_e, data) => callback(data);
@@ -36,6 +38,8 @@ const api = {
 
   fs: {
     readDir: (dirPath) => ipcRenderer.invoke('fs:read-dir', dirPath),
+    // 粘贴的图片（dataURL）存为临时文件，返回绝对路径供 @ 引用
+    saveImage: (dataUrl) => ipcRenderer.invoke('fs:save-image', { dataUrl }),
   },
 
   skills: {

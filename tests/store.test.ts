@@ -361,3 +361,68 @@ describe('既有守卫不回归', () => {
     expect(s().messages).toBe(unarchived);
   });
 });
+
+describe('removeLastTurn（失败重试）', () => {
+  const seedTurns = () =>
+    useStore.setState({
+      messages: [
+        { id: 'u1', role: 'user' as const, blocks: [{ kind: 'text' as const, text: '问题一' }], timestamp: 1, status: 'completed' as const },
+        { id: 'a1', role: 'assistant' as const, blocks: [{ kind: 'text' as const, text: '回答一' }], timestamp: 2, status: 'completed' as const },
+        { id: 'u2', role: 'user' as const, blocks: [{ kind: 'text' as const, text: '  问题二  ' }], timestamp: 3, status: 'completed' as const },
+        { id: 'a2', role: 'assistant' as const, blocks: [{ kind: 'stderr' as const, text: 'API Error' }], timestamp: 4, status: 'error' as const },
+      ],
+    });
+
+  it('移除最后一条 user 消息及其后全部，返回 trim 后的 user 文本', () => {
+    seedTurns();
+    const text = s().removeLastTurn();
+    expect(text).toBe('问题二');
+    expect(s().messages.map((m) => m.id)).toEqual(['u1', 'a1']);
+  });
+
+  it('无 user 消息时返回 null 且不动 messages', () => {
+    useStore.setState({
+      messages: [
+        { id: 'a1', role: 'assistant' as const, blocks: [], timestamp: 1, status: 'error' as const },
+      ],
+    });
+    expect(s().removeLastTurn()).toBeNull();
+    expect(s().messages).toHaveLength(1);
+  });
+
+  it('user 消息无文本块时返回 null（不产生空重发）', () => {
+    useStore.setState({
+      messages: [
+        { id: 'u1', role: 'user' as const, blocks: [{ kind: 'tool_use' as const, toolName: 'x', toolId: 't', input: {}, status: 'done' }], timestamp: 1, status: 'completed' as const },
+      ],
+    });
+    expect(s().removeLastTurn()).toBeNull();
+    expect(s().messages).toHaveLength(1);
+  });
+
+  it('addUserMessage 触发强制滚底 nonce（外部发送路径的滚底信号）', () => {
+    const before = s().forceScrollNonce;
+    s().addUserMessage('hello');
+    expect(s().forceScrollNonce).toBeGreaterThan(before);
+  });
+});
+
+describe('renameSession（会话重命名）', () => {
+  it('重命名指定会话（trim 空白），其余会话不受影响', () => {
+    useStore.setState({ sessions: [seedSession('s1'), seedSession('s2')] });
+    s().renameSession(1, '  新名字  ');
+    const ss = s().sessions;
+    expect(ss[1].title).toBe('新名字');
+    expect(ss[0].title).toBe('seed-s1');
+  });
+
+  it('空标题/同名不生效；越界索引不抛错', () => {
+    useStore.setState({ sessions: [seedSession('s1')] });
+    s().renameSession(0, '   ');
+    expect(s().sessions[0].title).toBe('seed-s1');
+    s().renameSession(0, 'seed-s1');
+    expect(s().sessions[0].title).toBe('seed-s1');
+    expect(() => s().renameSession(99, 'x')).not.toThrow();
+    expect(() => s().renameSession(-1, 'x')).not.toThrow();
+  });
+});

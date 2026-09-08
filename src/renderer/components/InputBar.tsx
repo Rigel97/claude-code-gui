@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useStore } from '../store';
 import { Send, Square, Sparkles, X, ListOrdered } from 'lucide-react';
+import { sendPrompt } from '../utils/send';
 
 // ─── 斜杠命令定义 ──────────────────────────────────────
 interface SlashCommand {
@@ -24,7 +25,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: '/optimize', desc: '分析并优化性能', prompt: '请分析以下代码的性能瓶颈并给出优化方案：\n\n' },
 ];
 
-export function InputBar({ onSend }: { onSend: (text: string) => void }) {
+export function InputBar() {
   const [input, setInput] = useState('');
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
@@ -35,14 +36,13 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
   const isComposingRef = useRef(false);
 
   const cwd = useStore((s) => s.cwd);
-  const sessionId = useStore((s) => s.currentSessionId);
   const status = useStore((s) => s.status);
   const model = useStore((s) => s.model);
   const currentModel = useStore((s) => s.currentModel);
-  const permissionMode = useStore((s) => s.permissionMode);
   const injectedText = useStore((s) => s.injectedText);
   const injectText = useStore((s) => s.injectText);
   const newSession = useStore((s) => s.newSession);
+  const sessionId = useStore((s) => s.currentSessionId);
   const queue = useStore((s) => s.queue);
   const enqueueMessage = useStore((s) => s.enqueueMessage);
   const dequeueMessage = useStore((s) => s.dequeueMessage);
@@ -59,26 +59,35 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
     : [];
   const showSlash = slashOpen && filteredCommands.length > 0;
 
-  // 消费外部注入的文本（文件树 @引用）
+  // 消费外部注入的文本（文件树 @引用 / 粘贴图片路径）
   useEffect(() => {
     if (!injectedText) return;
     setInput((prev) => prev + injectedText.text);
     textareaRef.current?.focus();
   }, [injectedText]);
 
-  /** 实际发送一条消息（不经过队列） */
-  const sendPrompt = useCallback((prompt: string) => {
-    onSend(prompt);
-    // 不 await：send 的 Promise 在整个对话完成后才 resolve
-    void (window as any).api.claude.send({
-      prompt,
-      cwd,
-      sessionId: sessionId || undefined,
-      // 已有会话 ID 时必须用 --resume 续接，否则多轮上下文会丢失
-      resume: !!sessionId,
-      options: { ...(model ? { model } : {}), permissionMode },
-    }).catch((err: unknown) => console.error('Send failed:', err));
-  }, [cwd, sessionId, model, permissionMode, onSend]);
+  /** 粘贴图片（截图等）→ 存临时文件 → 插入 @ 引用，可继续补文字后发送；
+   *  纯文本粘贴不受影响，走浏览器默认行为 */
+  const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
+    const items = Array.from(e.clipboardData.items);
+    const imageItem = items.find((i) => i.type.startsWith('image/'));
+    if (!imageItem) return;
+    e.preventDefault();
+    const blob = imageItem.getAsFile();
+    if (!blob) return;
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+      const saved = await (window as any).api.fs.saveImage(dataUrl);
+      if (saved) injectText(`@${saved} `);
+    } catch {
+      /* 读取/保存失败静默：保留剪贴板文本路径不受影响 */
+    }
+  }, [injectText]);
 
   // 生成结束后自动发送队列中的下一条
   const prevStatusRef = useRef(status);
@@ -96,7 +105,7 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
     if ((prev === 'streaming' || prev === 'starting') && (status === 'error' || status === 'aborted')) {
       clearQueue();
     }
-  }, [status, dequeueMessage, sendPrompt, clearQueue]);
+  }, [status, dequeueMessage, clearQueue]);
 
   const handleSend = useCallback(() => {
     if (!input.trim()) return;
@@ -116,7 +125,7 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
     }
 
     sendPrompt(prompt);
-  }, [input, isStreaming, enqueueMessage, sendPrompt]);
+  }, [input, isStreaming, enqueueMessage]);
 
   const handleAbort = useCallback(() => {
     (window as any).api.claude.abort();
@@ -307,6 +316,7 @@ export function InputBar({ onSend }: { onSend: (text: string) => void }) {
             value={input}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             onCompositionStart={() => { isComposingRef.current = true; }}
             onCompositionEnd={() => { isComposingRef.current = false; }}
             placeholder={isStreaming ? '生成中仍可输入，Enter 加入队列… (ESC 中断)' : '输入指令，/ 唤起快捷命令，Enter 发送'}

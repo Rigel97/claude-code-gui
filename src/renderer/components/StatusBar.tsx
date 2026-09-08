@@ -1,5 +1,6 @@
 import { useStore } from '../store';
-import { Circle, Loader, CheckCircle, XCircle, Pause, Activity, Zap, Database } from 'lucide-react';
+import { Circle, Loader, CheckCircle, XCircle, Pause, Activity, Zap, Database, Archive } from 'lucide-react';
+import { useState } from 'react';
 import type { RunStatus, ContextUsage } from '../types';
 
 const STATUS_CONFIG: Record<RunStatus, { icon: React.ReactNode; label: string; color: string }> = {
@@ -19,8 +20,30 @@ export function StatusBar() {
   const cwd = useStore((s) => s.cwd);
   const currentModel = useStore((s) => s.currentModel);
   const contextUsage = useStore((s) => s.contextUsage);
+  const sessionId = useStore((s) => s.currentSessionId);
+  const setContextUsage = useStore((s) => s.setContextUsage);
+
+  // 上下文压缩进行中（CLI /compact，需一次总结调用，可能耗时较长）
+  const [compacting, setCompacting] = useState(false);
+
+  const handleCompact = async () => {
+    if (compacting || !cwd || !sessionId) return;
+    setCompacting(true);
+    try {
+      const r = await (window as any).api.claude.compact(cwd, sessionId);
+      if (r?.context) setContextUsage(r.context);
+      if (r && r.success === false) {
+        (window as any).api.notify('上下文压缩失败', String(r.error || '未知错误'));
+      }
+    } catch {
+      /* IPC 异常静默：水位计保持旧值 */
+    } finally {
+      setCompacting(false);
+    }
+  };
 
   const config = STATUS_CONFIG[status];
+  const isBusy = status === 'streaming' || status === 'starting';
 
   return (
     <div className="flex items-center justify-between h-7 px-4 bg-bg-deep border-t border-border/30 text-[10px] font-mono shrink-0">
@@ -37,8 +60,24 @@ export function StatusBar() {
           </div>
         )}
 
-        {/* 上下文水位计 */}
-        {contextUsage && <ContextMeter usage={contextUsage} />}
+        {/* 上下文水位计 + 压缩按钮 */}
+        {contextUsage && (
+          <>
+            <ContextMeter usage={contextUsage} />
+            <button
+              onClick={handleCompact}
+              disabled={!sessionId || isBusy || compacting}
+              title={compacting
+                ? '正在压缩上下文…'
+                : '压缩上下文：把历史折叠为摘要，释放空间（需一次总结调用，可能耗时较长）'}
+              className="text-text-dim hover:text-accent-cyan transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+            >
+              {compacting
+                ? <Loader className="w-3 h-3 animate-spin text-accent-cyan" />
+                : <Archive className="w-3 h-3" />}
+            </button>
+          </>
+        )}
       </div>
 
       {/* 右侧：统计 */}

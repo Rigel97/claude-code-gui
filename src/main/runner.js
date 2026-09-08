@@ -276,13 +276,11 @@ class ClaudeRunner {
   }
 }
 
-// ─── 上下文占用查询（/context）──────────────────
+// ─── 一次性 CLI 命令（/context、/compact）──────────
 // 流式 assistant 事件的 usage 恒为零、result.usage 是整轮所有 API 调用的
 // 累计 input（多轮工具循环下远超真实上下文），都不能反映「当前上下文占用」。
-// CLI 的 /context 是纯本地命令（cost=0、不调 API），输出真实占用：
-//   **Tokens:** 18.3k / 200k (9%)
-//   | Free space | 160.7k | 80.3% |
-//   | Autocompact buffer | 21k | 10.5% |
+// 这类本地命令走独立的一次性进程，与 runner 的生成进程互不干扰
+// （互斥锁见 main.js 的 IPC 层）。
 
 /** "18.3k" / "1.2M" / "200" → 数字 */
 function parseTokenCount(str, unit) {
@@ -310,12 +308,10 @@ function parseContextOutput(text) {
   return out;
 }
 
-/** 查询某会话的当前上下文占用。返回 { used, limit, free?, autocompactBuffer? } 或 null */
-async function queryContext({ cwd, sessionId }) {
-  if (typeof cwd !== 'string' || !fs.existsSync(cwd)) return null;
-  if (typeof sessionId !== 'string' || !sessionId) return null;
-
-  const args = ['-p', '/context', '--output-format', 'stream-json', '--verbose', '--resume', sessionId];
+/** 跑一次一次性 CLI 命令并捕获输出。返回 { code, resultEvent } 或 null（超时/启动失败）；
+ *  resultEvent 为 stdout 中解析出的 type=result 事件（取最后一个） */
+function runCli(args, cwd, timeoutMs) {
+  if (typeof cwd !== 'string' || !cwd || !fs.existsSync(cwd)) return Promise.resolve(null);
 
   const extraPaths = [
     path.join(os.homedir(), '.local', 'bin'),
@@ -324,20 +320,21 @@ async function queryContext({ cwd, sessionId }) {
   ];
   const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ''].join(path.delimiter), FORCE_COLOR: '0' };
 
-  return await new Promise((resolve) => {
+  return new Promise((resolve) => {
     let stdout = '';
     let settled = false;
+    let proc = null;
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      try { proc.kill('SIGKILL'); } catch { /* 已退出 */ }
+      if (proc) {
+        try { proc.kill('SIGKILL'); } catch { /* 已退出 */ }
+      }
       resolve(result);
     };
-    // 15s 超时：CLI 正常 1~3s 内返回，超时视为环境异常，静默降级
-    const timer = setTimeout(() => finish(null), 15000);
+    const timer = setTimeout(() => finish(null), timeoutMs);
 
-    let proc;
     try {
       proc = IS_WIN
         ? spawn('cmd.exe', ['/d', '/s', '/c', ['claude', ...args].map(escapeWindowsArg).join(' ')], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -348,25 +345,49 @@ async function queryContext({ cwd, sessionId }) {
     }
     proc.stdin.end();
     proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
-    proc.stderr.on('data', () => { /* 忽略：/context 失败时走 finish(null) */ });
+    proc.stderr.on('data', () => { /* 错误路径统一走 finish(null)/resultEvent 判定 */ });
     proc.on('error', () => finish(null));
-    proc.on('close', () => {
-      // 解析 NDJSON，取 result 事件的 result 字段（/context 的完整 markdown 输出）
-      let text = '';
+    proc.on('close', (code) => {
+      let resultEvent = null;
       for (const line of stdout.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed) continue;
         try {
           const ev = JSON.parse(trimmed);
-          if (ev && ev.type === 'result' && typeof ev.result === 'string') {
-            text = ev.result;
-            break;
-          }
+          if (ev && ev.type === 'result') resultEvent = ev; // 取最后一个 result
         } catch { /* 跳过非 JSON 行 */ }
       }
-      finish(text ? parseContextOutput(text) : null);
+      finish({ code, resultEvent });
     });
   });
 }
 
-module.exports = { ClaudeRunner, queryContext };
+const CONTEXT_ARGS = (sessionId) => ['-p', '/context', '--output-format', 'stream-json', '--verbose', '--resume', sessionId];
+
+/** 查询某会话的当前上下文占用（零成本本地命令）。返回 { used, limit, ... } 或 null */
+async function queryContext({ cwd, sessionId }) {
+  if (typeof sessionId !== 'string' || !sessionId) return null;
+  const r = await runCli(CONTEXT_ARGS(sessionId), cwd, 15000);
+  if (!r || !r.resultEvent || typeof r.resultEvent.result !== 'string') return null;
+  return parseContextOutput(r.resultEvent.result);
+}
+
+/** 压缩会话上下文（CLI /compact：一次总结调用把历史折叠为摘要，需花费一次调用）。
+ *  返回 { success, error?, context? }，context 为压缩后的新占用（顺带查询，免二次往返） */
+async function compactSession({ cwd, sessionId }) {
+  if (typeof sessionId !== 'string' || !sessionId) return { success: false, error: '无有效会话' };
+  // 压缩需一次 LLM 总结调用，长上下文可能耗时较长，超时放宽到 5 分钟
+  const r = await runCli(
+    ['-p', '/compact', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions', '--resume', sessionId],
+    cwd,
+    300000
+  );
+  const context = await queryContext({ cwd, sessionId });
+  if (!r) return { success: false, error: '压缩超时或 CLI 启动失败', context };
+  const ok = r.code === 0 && r.resultEvent && r.resultEvent.subtype === 'success' && !r.resultEvent.is_error;
+  return ok
+    ? { success: true, context }
+    : { success: false, error: (r.resultEvent && typeof r.resultEvent.result === 'string' && r.resultEvent.result) || `压缩失败（exit ${r.code}）`, context };
+}
+
+module.exports = { ClaudeRunner, queryContext, compactSession };

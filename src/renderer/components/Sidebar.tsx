@@ -1,5 +1,5 @@
 import { useStore } from '../store';
-import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3, Download, Trash2, Check, X, Zap } from 'lucide-react';
+import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3, Download, Trash2, Check, X, Zap, Pencil } from 'lucide-react';
 import { useState, useCallback, useRef } from 'react';
 import { SettingsPanel } from './SettingsPanel';
 import { FileTree } from './FileTree';
@@ -22,6 +22,7 @@ export function Sidebar() {
   const deleteSession = useStore((s) => s.deleteSession);
   const activeSessionIndex = useStore((s) => s.activeSessionIndex);
   const newSession = useStore((s) => s.newSession);
+  const renameSession = useStore((s) => s.renameSession);
   const totalInputTokens = useStore((s) => s.totalInputTokens);
   const totalOutputTokens = useStore((s) => s.totalOutputTokens);
   const status = useStore((s) => s.status);
@@ -34,6 +35,9 @@ export function Sidebar() {
   const [tab, setTab] = useState<'sessions' | 'files' | 'skills'>('sessions');
   // 正在确认删除的会话索引（-1 表示无）
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState(-1);
+  // 正在重命名的会话索引（-1 表示无）与其编辑框内容
+  const [editingIdx, setEditingIdx] = useState(-1);
+  const [editTitle, setEditTitle] = useState('');
   // 拖拽中状态（用于手柄高亮）
   const [resizing, setResizing] = useState(false);
 
@@ -166,12 +170,14 @@ export function Sidebar() {
                 <div className="space-y-1">
                   {sessions.map((session, i) => {
                     const confirming = confirmDeleteIdx === i;
+                    const editing = editingIdx === i;
                     return (
                     <div
                       key={session.sessionId}
                       onClick={() => {
                         if (isStreaming) return;
-                        // 若该行正处于删除确认态，点击行体视为取消
+                        // 重命名/删除确认中的行：点击行体视为退出该模式
+                        if (editing) { setEditingIdx(-1); return; }
                         if (confirming) { setConfirmDeleteIdx(-1); return; }
                         setConfirmDeleteIdx(-1);
                         switchSession(i);
@@ -196,6 +202,29 @@ export function Sidebar() {
                           <div className="text-xs text-red-300 font-medium leading-tight pt-0.5">
                             删除此会话？不可恢复
                           </div>
+                        ) : editing ? (
+                          <input
+                            autoFocus
+                            value={editTitle}
+                            spellCheck={false}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            onKeyDown={(e) => {
+                              e.stopPropagation();
+                              // 输入法组合中不提交（中文标题回车确认候选词）
+                              if (e.nativeEvent.isComposing) return;
+                              if (e.key === 'Enter') {
+                                renameSession(i, editTitle);
+                                setEditingIdx(-1);
+                              }
+                              if (e.key === 'Escape') setEditingIdx(-1);
+                            }}
+                            onBlur={() => {
+                              renameSession(i, editTitle);
+                              setEditingIdx(-1);
+                            }}
+                            className="w-full px-1.5 py-0.5 rounded-md text-xs text-text-primary bg-bg-deeper border border-accent-cyan/40 outline-none font-mono"
+                          />
                         ) : (
                           <>
                             <div className="text-xs text-text-primary truncate">
@@ -233,8 +262,19 @@ export function Sidebar() {
                           </button>
                         </div>
                       ) : (
-                        // 导出 + 删除（hover 显示）
+                        // 重命名 + 导出 + 删除（hover 显示）
                         <div className="flex items-center gap-1 shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingIdx(i);
+                              setEditTitle(session.title);
+                            }}
+                            className="text-text-dim hover:text-accent-cyan transition-colors"
+                            title="重命名会话"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
