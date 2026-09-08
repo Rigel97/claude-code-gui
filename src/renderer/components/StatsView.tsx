@@ -1,12 +1,16 @@
 import type { ResultMessage } from '../types';
-import { Clock, Coins, Cpu, Zap, TrendingUp } from 'lucide-react';
+import { Clock, Cpu, Zap, TrendingUp, Layers } from 'lucide-react';
 
 export function StatsView({ data }: { data: ResultMessage }) {
   const stats = [
     {
-      icon: <Coins className="w-3.5 h-3.5" />,
-      label: 'Cost',
-      value: `$${data.total_cost_usd.toFixed(6)}`,
+      icon: <Layers className="w-3.5 h-3.5" />,
+      label: 'Total',
+      value: `${formatTokens(
+        (data.usage.input_tokens || 0) +
+        (data.usage.output_tokens || 0) +
+        (data.usage.cache_read_input_tokens || 0)
+      )}`,
       color: 'text-accent-green',
     },
     {
@@ -59,6 +63,7 @@ export function StatsView({ data }: { data: ResultMessage }) {
 }
 
 function formatTokens(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  if (n >= 1000000) return `${+(n / 1000000).toFixed(1)}M`;
+  if (n >= 1000) return `${+(n / 1000).toFixed(1)}K`;
   return String(n);
 }

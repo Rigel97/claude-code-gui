@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useCallback } from 'react';
 import { useStore } from './store';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
@@ -12,6 +12,43 @@ export default function App() {
   const cwd = useStore((s) => s.cwd);
   const handleStream = useStore((s) => s.handleStream);
   const setStatus = useStore((s) => s.setStatus);
+  const currentSessionId = useStore((s) => s.currentSessionId);
+
+  // 零成本查询当前会话的上下文占用（/context 本地命令，不调 API）：
+  // 轮末、会话切换、hydrate 恢复后触发；流式事件里的 usage 恒为零/
+  // 多轮累计失真，均不可作为占用值，真实值只能来自这里
+  const refreshContextUsage = useCallback(async () => {
+    const api = (window as any).api;
+    if (typeof api?.claude?.getContext !== 'function') return;
+    const { cwd, currentSessionId } = useStore.getState();
+    if (!cwd || !currentSessionId) return;
+    try {
+      const r = await api.claude.getContext(cwd, currentSessionId);
+      // 竞态防护：查询期间（约 1~3s）用户可能已切换会话
+      if (
+        r &&
+        typeof r.used === 'number' &&
+        typeof r.limit === 'number' &&
+        r.limit > 0 &&
+        useStore.getState().currentSessionId === currentSessionId
+      ) {
+        useStore.getState().setContextUsage({
+          used: r.used,
+          limit: r.limit,
+          free: typeof r.free === 'number' ? r.free : undefined,
+          autocompactBuffer: typeof r.autocompactBuffer === 'number' ? r.autocompactBuffer : undefined,
+        });
+      }
+    } catch {
+      /* 查询失败静默降级：保留旧值 */
+    }
+  }, []);
+
+  // 会话变化（切换会话 / hydrate 恢复 / 首次 init）时刷新
+  useEffect(() => {
+    if (!currentSessionId) return;
+    void refreshContextUsage();
+  }, [currentSessionId, refreshContextUsage]);
 
   // 启动时恢复持久化状态
   useEffect(() => {
@@ -103,13 +140,17 @@ export default function App() {
         const snippet = lastUserMsg?.blocks.find((b) => b.kind === 'text')?.text?.slice(0, 60) || '';
         (window as any).api.notify('Claude 任务完成', snippet);
       }
+      // 轮末（含中断，部分输出已入上下文）刷新上下文占用
+      if (status === 'completed' || status === 'aborted') {
+        void refreshContextUsage();
+      }
     });
 
     return () => {
       removeStream();
       removeStatus();
     };
-  }, [handleStream, setStatus]);
+  }, [handleStream, setStatus, refreshContextUsage]);
 
   // Cmd/Ctrl+F 打开搜索面板
   useEffect(() => {

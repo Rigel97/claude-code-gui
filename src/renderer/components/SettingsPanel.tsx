@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import { X, Cpu, Info, Shield, Bell, Archive, Trash2 } from 'lucide-react';
+import { X, Cpu, Info, Shield, Bell, Archive, Trash2, RotateCcw } from 'lucide-react';
 
 const PERMISSION_MODES = [
   {
@@ -13,15 +13,6 @@ const PERMISSION_MODES = [
     label: '仅自动接受文件编辑',
     desc: '文件读写自动通过，命令执行等仍会被拒绝',
   },
-];
-
-// Claude CLI 支持 --model 别名（sonnet/opus/haiku）或完整模型 ID；
-// 其余 ID 走「自定义」，保存后原样传给 CLI
-const MODEL_PRESETS = [
-  { id: '', label: '默认', desc: '跟随 CLI 配置' },
-  { id: 'haiku', label: 'Haiku', desc: '最快、最便宜' },
-  { id: 'sonnet', label: 'Sonnet', desc: '速度/能力均衡' },
-  { id: 'opus', label: 'Opus', desc: '能力最强' },
 ];
 
 const SESSION_LIMIT_OPTIONS = [20, 50, 100, 200];
@@ -66,23 +57,17 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const clearAllSessions = useStore((s) => s.clearAllSessions);
   const sessions = useStore((s) => s.sessions);
 
-  // model 命中预设则视为预设选择，否则视为自定义
-  const isPresetModel = MODEL_PRESETS.some((p) => p.id === model);
+  // 模型 ID 直接作为 --model 传给 CLI；留空表示跟随 CLI 默认配置。
+  // 不提供预设别名：非官方端点（如 GLM 中转）上 sonnet/opus/haiku 等别名无效
   const [localModel, setLocalModel] = useState(model);
-  const [preset, setPreset] = useState<string>(isPresetModel ? model : '__custom__');
   const [localPermissionMode, setLocalPermissionMode] = useState(permissionMode);
   const [localShowThinking, setLocalShowThinking] = useState(showThinking);
   const [localNotify, setLocalNotify] = useState(notifyOnComplete);
   const [localMaxSessions, setLocalMaxSessions] = useState(maxSessions);
   const [confirmClear, setConfirmClear] = useState(false);
 
-  const handlePreset = (id: string) => {
-    setPreset(id);
-    if (id !== '__custom__') setLocalModel(id);
-  };
-
   const handleSave = () => {
-    setModel(preset === '__custom__' ? localModel.trim() : preset);
+    setModel(localModel.trim());
     setPermissionMode(localPermissionMode);
     setShowThinking(localShowThinking);
     setNotifyOnComplete(localNotify);
@@ -114,46 +99,29 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 当前实际使用：{currentModel}
               </div>
             )}
-            <div className="grid grid-cols-4 gap-1.5">
-              {MODEL_PRESETS.map((p) => (
-                <button
-                  key={p.id || 'default'}
-                  onClick={() => handlePreset(p.id)}
-                  className={`px-2 py-1.5 rounded-lg text-xs transition-all ${
-                    preset === p.id
-                      ? 'bg-accent-cyan/15 border border-accent-cyan/50 text-accent-cyan'
-                      : 'bg-bg-light border border-border text-text-secondary hover:bg-bg-lighter'
-                  }`}
-                >
-                  {p.label}
-                </button>
-              ))}
-              <button
-                onClick={() => handlePreset('__custom__')}
-                className={`px-2 py-1.5 rounded-lg text-xs transition-all ${
-                  preset === '__custom__'
-                    ? 'bg-accent-cyan/15 border border-accent-cyan/50 text-accent-cyan'
-                    : 'bg-bg-light border border-border text-text-secondary hover:bg-bg-lighter'
-                }`}
-              >
-                自定义
-              </button>
-            </div>
-            {preset !== '__custom__' && preset !== '' && (
-              <div className="text-[10px] text-text-dim mt-1.5">
-                {MODEL_PRESETS.find((p) => p.id === preset)?.desc}，作为{' '}
-                <code className="text-accent-cyan">--model {preset}</code> 传给 claude CLI
-              </div>
-            )}
-            {preset === '__custom__' && (
+            <div className="flex gap-1.5">
               <input
                 type="text"
                 value={localModel}
                 onChange={(e) => setLocalModel(e.target.value)}
-                placeholder="完整模型 ID，如 claude-sonnet-4-x…"
-                className="w-full mt-2 px-3 py-2 rounded-lg bg-bg-light border border-border text-sm text-text-primary placeholder-text-dim font-mono focus:border-accent-cyan/50 transition-colors"
+                placeholder="填写模型 ID，如 glm-5.3-m17"
+                spellCheck={false}
+                className="flex-1 px-3 py-2 rounded-lg bg-bg-light border border-border text-sm text-text-primary placeholder-text-dim font-mono focus:border-accent-cyan/50 transition-colors"
               />
-            )}
+              <button
+                onClick={() => setLocalModel('')}
+                disabled={!localModel}
+                title="清空，跟随 CLI 默认模型"
+                className="flex items-center gap-1 px-2.5 py-2 rounded-lg text-xs text-text-muted hover:text-accent-cyan bg-bg-light border border-border hover:border-accent-cyan/40 transition-all disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                默认
+              </button>
+            </div>
+            <div className="text-[10px] text-text-dim mt-1.5 leading-relaxed">
+              填写完整模型 ID，作为 <code className="text-accent-cyan">--model</code> 传给 claude CLI，
+              保存后下一次发送生效；留空则跟随 CLI 默认配置。
+            </div>
           </div>
 
           {/* 权限模式 */}

@@ -7,8 +7,7 @@ export function sessionToMarkdown(session: Session): string {
 
   const meta = [
     `会话创建：${new Date(session.createdAt).toLocaleString()}`,
-    `成本：$${session.cost.toFixed(4)}`,
-    `Tokens：${(session.inputTokens + session.outputTokens).toLocaleString()}`,
+    `Tokens：${(session.inputTokens + session.outputTokens).toLocaleString()}（in ${session.inputTokens.toLocaleString()} / out ${session.outputTokens.toLocaleString()}）`,
   ];
   if (session.model) meta.push(`模型：${session.model}`);
   meta.push(`目录：\`${session.cwd}\``);
@@ -71,11 +70,12 @@ function renderBlocks(blocks: UIBlock[], lines: string[]): void {
 
       case 'stats': {
         // 字段防御：CLI 版本间字段可能缺失，避免导出时 toFixed 抛错
-        const d = b.data as Partial<{ duration_ms: number; total_cost_usd: number; num_turns: number }>;
+        const d = b.data as Partial<{ duration_ms: number; num_turns: number; usage?: { input_tokens?: number; output_tokens?: number } }>;
         const dur = typeof d.duration_ms === 'number' ? (d.duration_ms / 1000).toFixed(1) : '-';
-        const cst = typeof d.total_cost_usd === 'number' ? d.total_cost_usd.toFixed(4) : '0.0000';
         const turns = typeof d.num_turns === 'number' ? d.num_turns : '-';
-        lines.push(`*⏱ 耗时 ${dur}s · 成本 $${cst} · ${turns} 轮*`, '');
+        const inTok = d.usage?.input_tokens ?? 0;
+        const outTok = d.usage?.output_tokens ?? 0;
+        lines.push(`*⏱ 耗时 ${dur}s · ${turns} 轮 · in ${inTok.toLocaleString()} / out ${outTok.toLocaleString()} tokens*`, '');
         break;
       }
     }

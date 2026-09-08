@@ -13,10 +13,10 @@ if (process.env.ELECTRON_RUN_AS_NODE) {
   process.exit(0);
 }
 
-const { app, BrowserWindow, ipcMain, dialog, Notification, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Notification, shell, Menu, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { ClaudeRunner } = require('./runner');
+const { ClaudeRunner, queryContext } = require('./runner');
 const { Store } = require('./store');
 
 let mainWindow = null;
@@ -90,6 +90,72 @@ async function createWindow() {
 }
 
 // ─── IPC: 项目目录选择 ──────────────────────────────────
+// ─── IPC: 剪贴板 ──────────────────────────────
+// 走主进程 clipboard：渲染进程失焦时 Web Clipboard API 会失败，
+// 且 sandboxed preload 无法直接 require clipboard 模块
+ipcMain.handle('clipboard:write-text', (_e, text) => {
+  clipboard.writeText(String(text ?? ''));
+  return true;
+});
+
+// ─── 应用菜单 ──────────────────────────────
+// macOS 上 Cmd+C / Cmd+A / Cmd+V 等编辑快捷键依赖菜单 role 注册，
+// 不设置菜单时渲染进程内的复制/全选会失效
+function setupApplicationMenu() {
+  const isMac = process.platform === 'darwin';
+  const template = [
+    ...(isMac
+      ? [{
+          label: app.name,
+          submenu: [
+            { role: 'about' },
+            { type: 'separator' },
+            { role: 'services' },
+            { type: 'separator' },
+            { role: 'hide' },
+            { role: 'hideOthers' },
+            { role: 'unhide' },
+            { type: 'separator' },
+            { role: 'quit' },
+          ],
+        }]
+      : []),
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    ...(isMac
+      ? [{
+          label: 'Window',
+          submenu: [
+            { role: 'minimize' },
+            { role: 'zoom' },
+            { role: 'close' },
+          ],
+        }]
+      : []),
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 ipcMain.handle('dialog:open-directory', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
@@ -117,6 +183,9 @@ ipcMain.handle('claude:abort', () => {
   runner.abort();
   return true;
 });
+
+// 零成本查询某会话的当前上下文占用（内部跑 /context 本地命令，不调 API）
+ipcMain.handle('claude:context', (_e, payload) => queryContext(payload || {}));
 
 // ─── IPC: 文件树（懒加载目录）──────────────────────────
 const FS_IGNORE = new Set([
@@ -341,6 +410,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     runner = new ClaudeRunner();
     store = new Store();
+    setupApplicationMenu();
     createWindow();
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

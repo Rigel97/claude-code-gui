@@ -276,4 +276,97 @@ class ClaudeRunner {
   }
 }
 
-module.exports = { ClaudeRunner };
+// ─── 上下文占用查询（/context）──────────────────
+// 流式 assistant 事件的 usage 恒为零、result.usage 是整轮所有 API 调用的
+// 累计 input（多轮工具循环下远超真实上下文），都不能反映「当前上下文占用」。
+// CLI 的 /context 是纯本地命令（cost=0、不调 API），输出真实占用：
+//   **Tokens:** 18.3k / 200k (9%)
+//   | Free space | 160.7k | 80.3% |
+//   | Autocompact buffer | 21k | 10.5% |
+
+/** "18.3k" / "1.2M" / "200" → 数字 */
+function parseTokenCount(str, unit) {
+  const n = parseFloat(str);
+  if (!isFinite(n)) return null;
+  if (/^m$/i.test(unit || '')) return Math.round(n * 1e6);
+  if (/^k$/i.test(unit || '')) return Math.round(n * 1e3);
+  return Math.round(n);
+}
+
+/** 从 /context 的 markdown 输出中提取上下文占用 */
+function parseContextOutput(text) {
+  if (typeof text !== 'string' || !text) return null;
+  // Tokens: 18.3k / 200k（百分比列存在与否均兼容）
+  const tokens = text.match(/\*\*Tokens:\*\*\s*([\d.]+)\s*([kKmM]?)\s*\/\s*([\d.]+)\s*([kKmM]?)/);
+  if (!tokens) return null;
+  const used = parseTokenCount(tokens[1], tokens[2]);
+  const limit = parseTokenCount(tokens[3], tokens[4]);
+  if (used === null || limit === null || limit <= 0) return null;
+  const out = { used, limit };
+  const free = text.match(/\|\s*Free space\s*\|\s*([\d.]+)\s*([kKmM]?)/);
+  if (free) out.free = parseTokenCount(free[1], free[2]) ?? undefined;
+  const buffer = text.match(/\|\s*Autocompact buffer\s*\|\s*([\d.]+)\s*([kKmM]?)/);
+  if (buffer) out.autocompactBuffer = parseTokenCount(buffer[1], buffer[2]) ?? undefined;
+  return out;
+}
+
+/** 查询某会话的当前上下文占用。返回 { used, limit, free?, autocompactBuffer? } 或 null */
+async function queryContext({ cwd, sessionId }) {
+  if (typeof cwd !== 'string' || !fs.existsSync(cwd)) return null;
+  if (typeof sessionId !== 'string' || !sessionId) return null;
+
+  const args = ['-p', '/context', '--output-format', 'stream-json', '--verbose', '--resume', sessionId];
+
+  const extraPaths = [
+    path.join(os.homedir(), '.local', 'bin'),
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+  ];
+  const env = { ...process.env, PATH: [...extraPaths, process.env.PATH || ''].join(path.delimiter), FORCE_COLOR: '0' };
+
+  return await new Promise((resolve) => {
+    let stdout = '';
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { proc.kill('SIGKILL'); } catch { /* 已退出 */ }
+      resolve(result);
+    };
+    // 15s 超时：CLI 正常 1~3s 内返回，超时视为环境异常，静默降级
+    const timer = setTimeout(() => finish(null), 15000);
+
+    let proc;
+    try {
+      proc = IS_WIN
+        ? spawn('cmd.exe', ['/d', '/s', '/c', ['claude', ...args].map(escapeWindowsArg).join(' ')], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] })
+        : spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch {
+      finish(null);
+      return;
+    }
+    proc.stdin.end();
+    proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    proc.stderr.on('data', () => { /* 忽略：/context 失败时走 finish(null) */ });
+    proc.on('error', () => finish(null));
+    proc.on('close', () => {
+      // 解析 NDJSON，取 result 事件的 result 字段（/context 的完整 markdown 输出）
+      let text = '';
+      for (const line of stdout.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const ev = JSON.parse(trimmed);
+          if (ev && ev.type === 'result' && typeof ev.result === 'string') {
+            text = ev.result;
+            break;
+          }
+        } catch { /* 跳过非 JSON 行 */ }
+      }
+      finish(text ? parseContextOutput(text) : null);
+    });
+  });
+}
+
+module.exports = { ClaudeRunner, queryContext };

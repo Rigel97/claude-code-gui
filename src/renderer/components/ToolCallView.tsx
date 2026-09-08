@@ -89,7 +89,7 @@ export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { k
             /* 输入参数 */
             <div>
               <div className="text-[10px] text-text-dim font-mono uppercase mb-1">INPUT</div>
-              <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap overflow-x-auto">
+              <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap overflow-x-auto selectable-text">
                 {JSON.stringify(block.input, null, 2)}
               </pre>
             </div>
@@ -112,7 +112,7 @@ export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { k
                   child.kind === 'tool_use' ? (
                     <ToolCallView key={i} block={child} depth={depth + 1} />
                   ) : child.kind === 'text' ? (
-                    <div key={i} className="text-xs text-text-muted font-mono whitespace-pre-wrap leading-relaxed px-1 py-0.5">
+                    <div key={i} className="text-xs text-text-muted font-mono whitespace-pre-wrap leading-relaxed px-1 py-0.5 selectable-text">
                       {child.text.length > 300 ? child.text.slice(0, 300) + '…' : child.text}
                     </div>
                   ) : null
@@ -141,7 +141,7 @@ function ToolResult({ result, toolName, isError }: { result: string; toolName: s
   if (toolName === 'Bash') {
     return (
       <div className={`rounded-lg p-2 bg-bg-deep border border-border/50 ${isError ? 'border-accent-red/30' : ''}`}>
-        <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto ${isError ? 'text-accent-red/80' : 'text-text-secondary'}`}>
+        <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto selectable-text ${isError ? 'text-accent-red/80' : 'text-text-secondary'}`}>
           {result}
         </pre>
       </div>
@@ -152,7 +152,7 @@ function ToolResult({ result, toolName, isError }: { result: string; toolName: s
   if (toolName === 'Read') {
     return (
       <div className="rounded-lg p-2 bg-bg-deep border border-border/50 max-h-64 overflow-y-auto">
-        <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap">
+        <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap selectable-text">
           {result}
         </pre>
       </div>
@@ -161,7 +161,7 @@ function ToolResult({ result, toolName, isError }: { result: string; toolName: s
 
   // 默认
   return (
-    <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto ${isError ? 'text-accent-red/80' : 'text-text-secondary'}`}>
+    <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto selectable-text ${isError ? 'text-accent-red/80' : 'text-text-secondary'}`}>
       {result}
     </pre>
   );

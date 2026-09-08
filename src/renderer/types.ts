@@ -133,10 +133,14 @@ export type UIBlock =
 // ─── 上下文窗口占用 ─────────────────────────────────────
 
 export interface ContextUsage {
-  /** 已占用的 token 数（input + cache_read + cache_creation） */
+  /** 已占用的 token 数（最后一次 /context 查询或单轮 result 的真实值） */
   used: number;
   /** 上下文窗口上限 */
   limit: number;
+  /** 剩余可用空间（/context 的 Free space，可能缺省） */
+  free?: number;
+  /** autocompact 缓冲区大小（接近上限时 CLI 自动压缩的预留，可能缺省） */
+  autocompactBuffer?: number;
 }
 
 // ─── 会话 ───────────────────────────────────────────────

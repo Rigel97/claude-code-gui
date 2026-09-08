@@ -1,6 +1,6 @@
 import { useStore } from '../store';
-import { Circle, Loader, CheckCircle, XCircle, Pause, Activity, DollarSign, Zap, Database } from 'lucide-react';
-import type { RunStatus } from '../types';
+import { Circle, Loader, CheckCircle, XCircle, Pause, Activity, Zap, Database } from 'lucide-react';
+import type { RunStatus, ContextUsage } from '../types';
 
 const STATUS_CONFIG: Record<RunStatus, { icon: React.ReactNode; label: string; color: string }> = {
   idle: { icon: <Circle className="w-3 h-3" />, label: '就绪', color: 'text-text-muted' },
@@ -14,7 +14,6 @@ const STATUS_CONFIG: Record<RunStatus, { icon: React.ReactNode; label: string; c
 export function StatusBar() {
   const status = useStore((s) => s.status);
   const thinkingTokens = useStore((s) => s.thinkingTokens);
-  const totalCost = useStore((s) => s.totalCost);
   const totalInputTokens = useStore((s) => s.totalInputTokens);
   const totalOutputTokens = useStore((s) => s.totalOutputTokens);
   const cwd = useStore((s) => s.cwd);
@@ -39,9 +38,7 @@ export function StatusBar() {
         )}
 
         {/* 上下文水位计 */}
-        {contextUsage && (
-          <ContextMeter used={contextUsage.used} limit={contextUsage.limit} />
-        )}
+        {contextUsage && <ContextMeter usage={contextUsage} />}
       </div>
 
       {/* 右侧：统计 */}
@@ -63,20 +60,17 @@ export function StatusBar() {
           <Zap className="w-3 h-3" />
           <span>out: {formatTokens(totalOutputTokens)}</span>
         </div>
-
-        <div className="flex items-center gap-1 text-accent-green">
-          <DollarSign className="w-3 h-3" />
-          <span>${totalCost.toFixed(4)}</span>
-        </div>
       </div>
     </div>
   );
 }
 
 /** 上下文窗口水位条：>60% 变黄，>85% 变红提醒开新会话 */
-function ContextMeter({ used, limit }: { used: number; limit: number }) {
+function ContextMeter({ usage }: { usage: ContextUsage }) {
+  const { used, limit, free, autocompactBuffer } = usage;
   const ratio = Math.min(used / limit, 1);
   const pct = (ratio * 100).toFixed(1);
+  const remaining = free ?? Math.max(0, limit - used);
   const color =
     ratio > 0.85
       ? { bar: 'bg-accent-red', text: 'text-accent-red', tip: '上下文即将耗尽，建议新开会话' }
@@ -84,25 +78,36 @@ function ContextMeter({ used, limit }: { used: number; limit: number }) {
         ? { bar: 'bg-accent-yellow', text: 'text-accent-yellow', tip: '上下文占用较高' }
         : { bar: 'bg-accent-cyan', text: 'text-accent-cyan', tip: '上下文占用' };
 
+  const tipLines = [
+    `${color.tip}`,
+    `已占用：${formatTokens(used)} / ${formatTokens(limit)} (${pct}%)`,
+    `剩余可用：${formatTokens(remaining)}`,
+  ];
+  if (typeof autocompactBuffer === 'number' && autocompactBuffer > 0) {
+    tipLines.push(`自动压缩缓冲：${formatTokens(autocompactBuffer)}（剩余低于此值时 CLI 自动压缩历史）`);
+  }
+
   return (
     <div
       className={`flex items-center gap-1.5 ${color.text}`}
-      title={`${color.tip}\n${formatTokens(used)} / ${formatTokens(limit)} tokens (${pct}%)`}
+      title={tipLines.join('\n')}
     >
       <Database className="w-3 h-3" />
-      <div className="w-16 h-1.5 rounded-full bg-bg-lighter overflow-hidden">
+      <div className="w-14 h-1.5 rounded-full bg-bg-lighter overflow-hidden">
         <div
           className={`h-full rounded-full ${color.bar} transition-all duration-500`}
           style={{ width: `${Math.max(ratio * 100, 2)}%` }}
         />
       </div>
-      <span>{pct}%</span>
+      <span>
+        {formatTokens(used)}/{formatTokens(limit)}
+      </span>
     </div>
   );
 }
 
 function formatTokens(n: number): string {
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  if (n >= 1000000) return `${+(n / 1000000).toFixed(1)}M`;
+  if (n >= 1000) return `${+(n / 1000).toFixed(1)}K`;
   return String(n);
 }

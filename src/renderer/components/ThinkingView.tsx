@@ -20,7 +20,7 @@ export function ThinkingView({ text }: { text: string }) {
 
       {expanded && (
         <div className="border-t border-accent-purple/20 px-3 py-2 bg-bg-deepest/50">
-          <pre className="text-xs font-mono text-accent-purple/70 whitespace-pre-wrap leading-relaxed">
+          <pre className="text-xs font-mono text-accent-purple/70 whitespace-pre-wrap leading-relaxed selectable-text">
             {text}
           </pre>
         </div>

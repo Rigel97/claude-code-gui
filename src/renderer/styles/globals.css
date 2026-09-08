@@ -104,6 +104,23 @@ body {
   line-height: 1.6;
 }
 
+/* ─── 可选中复制的正文区域 ──────────────────────── */
+/* body 的 user-select:none 用于防止 UI 控件文字被误选；
+   消息正文、思考过程、工具输出等需要复制的内容显式放开 */
+.markdown-body,
+.selectable-text {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 选中态高亮（深色背景上更明显） */
+.markdown-body ::selection,
+.markdown-body::selection,
+.selectable-text ::selection,
+.selectable-text::selection {
+  background: rgba(0, 229, 255, 0.25);
+}
+
 /* ─── 流式光标 ───────────────────────────────────── */
 .stream-cursor::after {
   content: '▊';

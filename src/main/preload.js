@@ -3,6 +3,11 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 const api = {
   openDirectory: () => ipcRenderer.invoke('dialog:open-directory'),
 
+  // 复制文本：走主进程 clipboard（渲染进程失焦时 Web Clipboard API 会失败）
+  clipboard: {
+    writeText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
+  },
+
   store: {
     get: (key) => ipcRenderer.invoke('store:get', key),
     set: (key, value) => ipcRenderer.invoke('store:set', key, value),
@@ -13,6 +18,8 @@ const api = {
   claude: {
     send: (payload) => ipcRenderer.invoke('claude:send', payload),
     abort: () => ipcRenderer.invoke('claude:abort'),
+    // 零成本查询会话当前上下文占用（/context 本地命令）
+    getContext: (cwd, sessionId) => ipcRenderer.invoke('claude:context', { cwd, sessionId }),
 
     onStream: (callback) => {
       const handler = (_e, data) => callback(data);

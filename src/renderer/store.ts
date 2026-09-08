@@ -49,8 +49,9 @@ setSidebarWidth: (w: number) => void;
   injectedText: { text: string; nonce: number } | null;
   injectText: (text: string) => void;
 
-  // 上下文窗口占用（水位计）
+  // 上下文窗口占用（水位计）：轮末/会话切换时由 /context 查询回填
   contextUsage: ContextUsage | null;
+  setContextUsage: (usage: ContextUsage | null) => void;
 
   // 待发消息队列（生成中输入的消息排队，完成后自动续发）
   queue: string[];
@@ -288,6 +289,7 @@ setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: Math.round(sidebarWidth) 
   injectText: (text) => set({ injectedText: { text, nonce: Date.now() } }),
 
   contextUsage: null,
+  setContextUsage: (contextUsage) => set({ contextUsage }),
 
   queue: [],
   enqueueMessage: (text) => set({ queue: [...get().queue, text] }),
@@ -539,20 +541,9 @@ setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: Math.round(sidebarWidth) 
         }
         streaming.blocks = blocks;
 
-        // 上下文占用采样：assistant 消息的 usage 反映当前上下文体量
-        let contextUsage = state.contextUsage;
-        const usage = msg.message?.usage as Record<string, number> | undefined;
-        if (usage) {
-          const used =
-            (usage.input_tokens || 0) +
-            (usage.cache_read_input_tokens || 0) +
-            (usage.cache_creation_input_tokens || 0);
-          if (used > 0) {
-            contextUsage = { used, limit: contextUsage?.limit || 200000 };
-          }
-        }
-
-        set({ streamingMessage: streaming, contextUsage });
+        // 上下文占用：CLI 2.x 流式 assistant 事件的 usage 恒为零，无法在此采样；
+        // 真实值由轮末的 /context 查询回填（见 App.tsx），此处不动 contextUsage
+        set({ streamingMessage: streaming });
         break;
       }
 
@@ -599,15 +590,27 @@ setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: Math.round(sidebarWidth) 
         const outputTokens = usage.output_tokens || 0;
         const cost = typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : 0;
 
-        // 用 result 中的真实 contextWindow 校准水位上限
+        // 上下文占用校准：
+        // - limit 始终从 modelUsage.contextWindow 校准（真实上限）
+        // - used 仅在单轮执行（num_turns <= 1）时可用 result.usage 更新——
+        //   多轮工具循环的 result.usage 是整轮所有 API 调用的累计 input，
+        //   远超真实上下文（实测可达上限的 10 倍），不能当占用值；
+        //   多轮场景由轮末的 /context 查询提供真实占用。
+        //   compact 后占用下降是正常现象，不做 Math.max 钉死。
         let contextUsage = state.contextUsage;
         const modelUsage = msg.modelUsage ? Object.values(msg.modelUsage)[0] : undefined;
         if (modelUsage?.contextWindow) {
-          const used =
-            inputTokens +
-            (usage.cache_read_input_tokens || 0) +
-            (usage.cache_creation_input_tokens || 0);
-          contextUsage = { used: Math.max(used, contextUsage?.used || 0), limit: modelUsage.contextWindow };
+          const turns = typeof msg.num_turns === 'number' ? msg.num_turns : 1;
+          if (turns <= 1) {
+            const used =
+              inputTokens +
+              (usage.cache_read_input_tokens || 0) +
+              (usage.cache_creation_input_tokens || 0) +
+              outputTokens;
+            contextUsage = { used, limit: modelUsage.contextWindow };
+          } else if (contextUsage) {
+            contextUsage = { ...contextUsage, limit: modelUsage.contextWindow };
+          }
         }
 
         // 本轮执行的成本事件（仪表盘按时间聚合用）

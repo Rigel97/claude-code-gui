@@ -21,6 +21,7 @@ import java from 'react-syntax-highlighter/dist/esm/languages/prism/java';
 import diff from 'react-syntax-highlighter/dist/esm/languages/prism/diff';
 import { useState, memo } from 'react';
 import { Copy, Check } from 'lucide-react';
+import { copyText } from '../utils/clipboard';
 
 // 一个语言定义注册到多个常用别名，未注册的语言退化为无高亮纯文本（不报错）
 SyntaxHighlighter.registerLanguage('bash', bash);
@@ -106,10 +107,11 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: { co
 function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    if (await copyText(code)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   return (

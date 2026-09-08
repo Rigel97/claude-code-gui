@@ -8,6 +8,12 @@ import { CostDashboard } from './CostDashboard';
 import { sessionToMarkdown } from '../utils/exportSession';
 import type { Session } from '../types';
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000) return `${+(n / 1000).toFixed(1)}K`;
+  return String(n);
+}
+
 export function Sidebar() {
   const cwd = useStore((s) => s.cwd);
   const setCwd = useStore((s) => s.setCwd);
@@ -16,7 +22,8 @@ export function Sidebar() {
   const deleteSession = useStore((s) => s.deleteSession);
   const activeSessionIndex = useStore((s) => s.activeSessionIndex);
   const newSession = useStore((s) => s.newSession);
-  const totalCost = useStore((s) => s.totalCost);
+  const totalInputTokens = useStore((s) => s.totalInputTokens);
+  const totalOutputTokens = useStore((s) => s.totalOutputTokens);
   const status = useStore((s) => s.status);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
   const setSidebarWidth = useStore((s) => s.setSidebarWidth);
@@ -195,7 +202,7 @@ export function Sidebar() {
                               {session.title}
                             </div>
                             <div className="text-[10px] text-text-dim font-mono mt-0.5">
-                              ${session.cost.toFixed(4)} · {new Date(session.createdAt).toLocaleTimeString()}
+                              {formatTokens(session.inputTokens + session.outputTokens)} tok · {new Date(session.createdAt).toLocaleTimeString()}
                             </div>
                           </>
                         )}
@@ -265,18 +272,18 @@ export function Sidebar() {
         </div>
 
         {/* 底部 */}
-        <div className="p-3 border-t border-border/30 space-y-2">          {/* 总成本（点击打开仪表盘） */}
+        <div className="p-3 border-t border-border/30 space-y-2">          {/* 总 Token 用量（点击打开用量统计） */}
           <button
             onClick={() => setShowDashboard(true)}
             className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg bg-bg-light/50 hover:bg-bg-light hover:border-accent-green/30 border border-transparent transition-all group"
-            title="查看成本仪表盘"
+            title="查看用量统计"
           >
             <span className="flex items-center gap-1.5 text-[10px] text-text-muted font-mono uppercase group-hover:text-text-secondary">
               <BarChart3 className="w-3 h-3 text-accent-green/70" />
-              Total Cost
+              Tokens
             </span>
             <span className="text-xs text-accent-green font-mono font-semibold">
-              ${totalCost.toFixed(4)}
+              {formatTokens(totalInputTokens + totalOutputTokens)}
             </span>
           </button>
 
