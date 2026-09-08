@@ -17,7 +17,8 @@ function messageText(message: ChatMessage): string {
     .trim();
 }
 
-/** 消息一键复制按钮：hover 跟随消息卡片出现，成功后打勾 2s（流式消息可复制当前已生成部分） */
+/** 消息一键复制按钮：位于消息正文下方，hover 消息卡片时显现，
+ *  成功后打勾 2s；仅复制正文文本（不含思考/工具调用/统计） */
 function MessageCopyButton({ getText }: { getText: () => string }) {
   const [copied, setCopied] = useState(false);
 
@@ -31,13 +32,18 @@ function MessageCopyButton({ getText }: { getText: () => string }) {
   };
 
   return (
-    <button
-      onClick={handleCopy}
-      title="复制消息"
-      className="ml-auto opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity text-text-muted hover:text-accent-cyan shrink-0 p-0.5"
-    >
-      {copied ? <Check className="w-3.5 h-3.5 text-accent-green" /> : <Copy className="w-3.5 h-3.5" />}
-    </button>
+    <div className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+      <button
+        onClick={handleCopy}
+        title="复制消息正文"
+        className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono transition-colors ${
+          copied ? 'text-accent-green' : 'text-text-dim hover:text-accent-cyan'
+        }`}
+      >
+        {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+        <span>{copied ? '已复制' : '复制'}</span>
+      </button>
+    </div>
   );
 }
 
@@ -56,13 +62,16 @@ export const ChatMessageView = memo(function ChatMessageView({ message }: { mess
           <User className="w-4 h-4 text-accent-blue" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-xs text-text-muted font-mono mb-1 flex items-center gap-2">
-            USER
-            {text && <MessageCopyButton getText={() => text} />}
-          </div>
+          <div className="text-xs text-text-muted font-mono mb-1">USER</div>
           <div className="glass-panel rounded-xl px-4 py-3">
             <MarkdownRenderer content={text} />
           </div>
+          {/* 复制按钮：正文下方，hover 消息时显现 */}
+          {text && (
+            <div className="mt-1">
+              <MessageCopyButton getText={() => text} />
+            </div>
+          )}
         </div>
       </div>
     );
@@ -88,7 +97,6 @@ export const ChatMessageView = memo(function ChatMessageView({ message }: { mess
               生成中
             </span>
           )}
-          {text && <MessageCopyButton getText={() => text} />}
         </div>
 
         {message.blocks.map((block, i) => (
@@ -99,6 +107,10 @@ export const ChatMessageView = memo(function ChatMessageView({ message }: { mess
             isStreaming={message.status === 'streaming' && i === message.blocks.length - 1}
           />
         ))}
+
+        {/* 复制按钮：最终回复下方，流式完成后出现（位置稳定不随内容跳动）。
+            容器 space-y-3 提供与上一个块的间距 */}
+        {text && message.status !== 'streaming' && <MessageCopyButton getText={() => text} />}
       </div>
     </div>
   );
