@@ -26,6 +26,9 @@
       "dist-renderer/**/*",
       "package.json"
     ],
+    "electronFuses": {
+      "runAsNode": false
+    },
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [

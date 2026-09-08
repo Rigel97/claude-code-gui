@@ -1,10 +1,18 @@
 // 防 ELECTRON_RUN_AS_NODE 污染：该变量会让 Electron 以纯 Node 模式运行，
 // 导致窗口不弹出、跑完脚本即退出（launchd 全局环境被某些工具 setenv 时会踩中）。
-// 模式在二进制启动时就已决定，进程内 delete 无效，必须以干净环境重新拉起自身。
-if (process.env.ELECTRON_RUN_AS_NODE) {
+// 打包版已通过 electronFuses 禁用 runAsNode（二进制层面无视该变量，见 package.json），
+// 此处兜底 dev 模式（electron . 以 Node 加载 package.json main）。process.type
+// 仅在 Electron 主进程存在——GUI 模式下变量即使残留也不触发无谓的重启。
+if (process.env.ELECTRON_RUN_AS_NODE && process.type === undefined) {
   delete process.env.ELECTRON_RUN_AS_NODE;
+  // Node 模式下 argv[1] 是本 main.js 的脚本路径；GUI 模式会把它当作 app 目录
+  // 参数解析（找不到 package.json 而启动失败），重拉时必须剔除。
+  // dev 模式的 "." 等真实参数不受影响（不含 src/main/main.js）。
+  const respawnArgs = process.argv
+    .slice(1)
+    .filter((a) => !String(a).replace(/\\/g, '/').includes('src/main/main.js'));
   require('child_process')
-    .spawn(process.argv[0], process.argv.slice(1), {
+    .spawn(process.argv[0], respawnArgs, {
       detached: true,
       stdio: 'ignore',
       env: process.env, // 此时变量已从 process.env 中删除，子进程将以 GUI 模式启动
