@@ -2,8 +2,6 @@
 
 A futuristic desktop GUI for [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — multi-tab parallel conversations, image input, streaming chat, tool-call visualization, line-level diffs, file tree, cross-session search, and a token usage dashboard.
 
-一个为 Claude Code CLI 打造的科技感桌面图形界面：多标签页并行对话、图片粘贴输入、流式输出、工具调用可视化、行级 Diff、文件树、跨会话搜索与 Token 用量统计。
-
 ---
 
 ## Features
@@ -66,7 +64,7 @@ npm run pack        # unpacked app only (faster, for debugging)
 
 ## Usage
 
-1. Click **选择项目目录** to pick a working directory — new conversation tabs snapshot it (already-running tabs are unaffected)
+1. Click the project-directory button (on the welcome screen or in the sidebar) to pick a working directory — new conversation tabs snapshot it (already-running tabs are unaffected)
 2. Hit **＋** in the tab bar to open a new conversation tab; tasks in different tabs run in parallel
 3. Type a message and press `Enter`; `Shift+Enter` for newline; paste screenshots with ⌘V; type `/` for slash commands; `ESC` interrupts the active tab only
 4. Messages typed while generating join that tab's queue and auto-send on completion
