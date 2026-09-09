@@ -1,6 +1,27 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import { X, Cpu, Info, Shield, Bell, Archive, Trash2, RotateCcw } from 'lucide-react';
+import { X, Cpu, Info, Shield, Bell, Archive, Trash2, RotateCcw, Gauge, Boxes, DollarSign } from 'lucide-react';
+
+type EffortLevel = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+type Autocompact = '' | 'auto' | '100k' | '200k' | '400k' | '800k' | '1M';
+
+const EFFORT_OPTIONS: { id: EffortLevel; label: string; desc: string }[] = [
+  { id: '', label: '默认', desc: 'CLI 自动决定' },
+  { id: 'low', label: '低', desc: '快速响应' },
+  { id: 'medium', label: '中', desc: '均衡' },
+  { id: 'high', label: '高', desc: '更多思考' },
+  { id: 'xhigh', label: '超高', desc: '深度推理' },
+  { id: 'max', label: '最大', desc: '最强思考预算' },
+];
+
+const AUTOCOMPACT_OPTIONS: { id: Autocompact; label: string; desc: string }[] = [
+  { id: '', label: '默认', desc: 'CLI 自动管理' },
+  { id: 'auto', label: 'Auto', desc: '自动选时机' },
+  { id: '200k', label: '200k', desc: '更早压缩' },
+  { id: '400k', label: '400k', desc: '中等' },
+  { id: '800k', label: '800k', desc: '尽量保留' },
+  { id: '1M', label: '1M', desc: '几乎不压缩' },
+];
 
 const PERMISSION_MODES = [
   {
@@ -57,6 +78,12 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const setNotifyOnComplete = useStore((s) => s.setNotifyOnComplete);
   const maxSessions = useStore((s) => s.maxSessions);
   const setMaxSessions = useStore((s) => s.setMaxSessions);
+  const effortLevel = useStore((s) => s.effortLevel);
+  const setEffortLevel = useStore((s) => s.setEffortLevel);
+  const autocompact = useStore((s) => s.autocompact);
+  const setAutocompact = useStore((s) => s.setAutocompact);
+  const maxBudgetUsd = useStore((s) => s.maxBudgetUsd);
+  const setMaxBudgetUsd = useStore((s) => s.setMaxBudgetUsd);
   const clearAllSessions = useStore((s) => s.clearAllSessions);
   const sessions = useStore((s) => s.sessions);
 
@@ -67,6 +94,9 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [localShowThinking, setLocalShowThinking] = useState(showThinking);
   const [localNotify, setLocalNotify] = useState(notifyOnComplete);
   const [localMaxSessions, setLocalMaxSessions] = useState(maxSessions);
+  const [localEffort, setLocalEffort] = useState<EffortLevel>(effortLevel);
+  const [localAutocompact, setLocalAutocompact] = useState<Autocompact>(autocompact);
+  const [localBudget, setLocalBudget] = useState(maxBudgetUsd > 0 ? String(maxBudgetUsd) : '');
   const [confirmClear, setConfirmClear] = useState(false);
 
   const handleSave = () => {
@@ -75,6 +105,10 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     setShowThinking(localShowThinking);
     setNotifyOnComplete(localNotify);
     setMaxSessions(localMaxSessions);
+    setEffortLevel(localEffort);
+    setAutocompact(localAutocompact);
+    const budget = parseFloat(localBudget);
+    setMaxBudgetUsd(Number.isFinite(budget) && budget > 0 ? budget : 0);
     onClose();
   };
 
@@ -124,6 +158,78 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             <div className="text-[10px] text-text-dim mt-1.5 leading-relaxed">
               填写完整模型 ID，作为 <code className="text-accent-cyan">--model</code> 传给 claude CLI，
               保存后下一次发送生效；留空则跟随 CLI 默认配置。
+            </div>
+          </div>
+
+          {/* 思考深度 */}
+          <div>
+            <label className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider mb-2">
+              <Gauge className="w-3.5 h-3.5" />
+              思考深度
+            </label>
+            <div className="grid grid-cols-6 gap-1">
+              {EFFORT_OPTIONS.map((o) => (
+                <button
+                  key={o.id || 'default'}
+                  onClick={() => setLocalEffort(o.id)}
+                  title={o.desc}
+                  className={`px-1 py-1.5 rounded-lg text-xs font-mono transition-all ${
+                    localEffort === o.id
+                      ? 'bg-accent-purple/10 border border-accent-purple/40 text-accent-purple'
+                      : 'bg-bg-light border border-border text-text-secondary hover:bg-bg-lighter'
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <div className="text-[10px] text-text-dim mt-1.5 leading-relaxed">
+              作为 <code className="text-accent-cyan">--effort</code> 传给 CLI，控制思考 token 预算。
+              简单任务选低更省钱，复杂任务选高/超高。
+            </div>
+          </div>
+
+          {/* 上下文压缩窗口与预算 */}
+          <div>
+            <label className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider mb-2">
+              <Boxes className="w-3.5 h-3.5" />
+              上下文与预算
+            </label>
+            <div className="grid grid-cols-6 gap-1 mb-2">
+              {AUTOCOMPACT_OPTIONS.map((o) => (
+                <button
+                  key={o.id || 'default'}
+                  onClick={() => setLocalAutocompact(o.id)}
+                  title={o.desc}
+                  className={`px-1 py-1.5 rounded-lg text-xs font-mono transition-all ${
+                    localAutocompact === o.id
+                      ? 'bg-accent-cyan/10 border border-accent-cyan/40 text-accent-cyan'
+                      : 'bg-bg-light border border-border text-text-secondary hover:bg-bg-lighter'
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <div className="text-[10px] text-text-dim mb-2 leading-relaxed">
+              自动压缩窗口（<code className="text-accent-cyan">--autocompact</code>）：上下文达到阈值时
+              CLI 自动把历史总结折叠，越小越省 token、丢的细节越多。
+            </div>
+            <div className="flex items-center gap-1.5">
+              <DollarSign className="w-4 h-4 text-accent-green shrink-0" />
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                value={localBudget}
+                onChange={(e) => setLocalBudget(e.target.value)}
+                placeholder="0 = 不限制"
+                className="flex-1 px-3 py-1.5 rounded-lg bg-bg-light border border-border text-sm text-text-primary placeholder-text-dim font-mono focus:border-accent-cyan/50 transition-colors"
+              />
+              <span className="text-xs text-text-dim shrink-0">美元 / 单次任务</span>
+            </div>
+            <div className="text-[10px] text-text-dim mt-1.5 leading-relaxed">
+              预算上限（<code className="text-accent-cyan">--max-budget-usd</code>）：单次任务花费达到上限后停止。
             </div>
           </div>
 

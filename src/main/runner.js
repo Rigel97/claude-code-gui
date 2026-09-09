@@ -88,6 +88,21 @@ class ClaudeRunner {
       args.push('--model', options.model);
     }
 
+    // 思考深度：low 快速响应 ~ max 深度思考（影响 thinking token 预算）
+    if (options.effortLevel && ['low', 'medium', 'high', 'xhigh', 'max'].includes(options.effortLevel)) {
+      args.push('--effort', options.effortLevel);
+    }
+
+    // 上下文自动压缩窗口：auto 或 100k~1M tokens（触发自动 compact 的阈值，非硬截断）
+    if (options.autocompact && (options.autocompact === 'auto' || /^\d+[kKmM]$/.test(options.autocompact))) {
+      args.push('--autocompact', options.autocompact);
+    }
+
+    // 单次任务预算上限（美元）：超出后 CLI 停止继续调用
+    if (typeof options.maxBudgetUsd === 'number' && options.maxBudgetUsd > 0) {
+      args.push('--max-budget-usd', String(options.maxBudgetUsd));
+    }
+
     if (prompt) {
       // 以 - 开头的 prompt 会被 commander 解析为 flag，用 -- 强制按位置参数处理
       if (prompt.startsWith('-')) {

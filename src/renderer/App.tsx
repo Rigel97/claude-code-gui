@@ -55,6 +55,9 @@ export default function App() {
       notifyOnComplete: state.notifyOnComplete,
       maxSessions: state.maxSessions,
       sidebarWidth: state.sidebarWidth,
+      effortLevel: state.effortLevel,
+      autocompact: state.autocompact,
+      maxBudgetUsd: state.maxBudgetUsd,
     });
 
     const flush = () => {

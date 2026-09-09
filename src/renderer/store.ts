@@ -41,8 +41,17 @@ interface AppState {
   setSidebarWidth: (w: number) => void;
   notifyOnComplete: boolean;
   setNotifyOnComplete: (on: boolean) => void;
-  maxSessions: number;
-  setMaxSessions: (n: number) => void;
+maxSessions: number;
+setMaxSessions: (n: number) => void;
+// 思考深度（--effort）：空 = CLI 默认
+effortLevel: '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+setEffortLevel: (level: '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max') => void;
+// 上下文自动压缩窗口（--autocompact）：'auto' 或 '100k'~'1M'；空 = CLI 默认
+autocompact: '' | 'auto' | '100k' | '200k' | '400k' | '800k' | '1M';
+setAutocompact: (v: '' | 'auto' | '100k' | '200k' | '400k' | '800k' | '1M') => void;
+// 单次任务预算上限美元（--max-budget-usd），0 = 不限制
+maxBudgetUsd: number;
+setMaxBudgetUsd: (n: number) => void;
   clearAllSessions: () => void;
   renameSession: (index: number, title: string) => void;
   deleteSession: (index: number) => void;
@@ -78,8 +87,11 @@ interface AppState {
     permissionMode?: 'bypassPermissions' | 'acceptEdits';
     showThinking?: boolean;
     notifyOnComplete?: boolean;
-    maxSessions?: number;
-    sidebarWidth?: number;
+maxSessions?: number;
+sidebarWidth?: number;
+effortLevel?: string;
+autocompact?: string;
+maxBudgetUsd?: number;
     // 旧版单会话格式（迁移用）
     messages?: ChatMessage[];
     currentSessionId?: string | null;
@@ -433,7 +445,13 @@ export const useStore = create<AppState>((set, get) => {
       sessionId: conv.sessionId || undefined,
       // 已有会话 ID 时必须用 --resume 续接，否则多轮上下文会丢失
       resume: !!conv.sessionId,
-      options: { ...(state.model ? { model: state.model } : {}), permissionMode: state.permissionMode },
+      options: {
+...(state.model ? { model: state.model } : {}),
+permissionMode: state.permissionMode,
+...(state.effortLevel ? { effortLevel: state.effortLevel } : {}),
+...(state.autocompact ? { autocompact: state.autocompact } : {}),
+...(state.maxBudgetUsd > 0 ? { maxBudgetUsd: state.maxBudgetUsd } : {}),
+},
       conversationId,
     });
   };
@@ -561,8 +579,16 @@ export const useStore = create<AppState>((set, get) => {
     notifyOnComplete: true,
     setNotifyOnComplete: (notifyOnComplete) => set({ notifyOnComplete }),
     maxSessions: DEFAULT_MAX_SESSIONS,
-    setMaxSessions: (maxSessions) =>
-      set({ maxSessions: Math.max(1, Math.min(500, Math.floor(maxSessions) || DEFAULT_MAX_SESSIONS)) }),
+setMaxSessions: (maxSessions) =>
+set({ maxSessions: Math.max(1, Math.min(500, Math.floor(maxSessions) || DEFAULT_MAX_SESSIONS)) }),
+effortLevel: '',
+setEffortLevel: (effortLevel) => set({ effortLevel }),
+autocompact: '',
+setAutocompact: (autocompact) => set({ autocompact }),
+maxBudgetUsd: 0,
+setMaxBudgetUsd: (maxBudgetUsd) => set({
+maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.round(maxBudgetUsd * 100) / 100,
+}),
 
     clearAllSessions: () => {
       const state = get();
@@ -1150,9 +1176,18 @@ restored.messages = [...restored.messages, { ...c.streamingMessage, status: 'com
         maxSessions: typeof data.maxSessions === 'number' && data.maxSessions > 0
           ? data.maxSessions
           : DEFAULT_MAX_SESSIONS,
-        sidebarWidth: typeof data.sidebarWidth === 'number' && data.sidebarWidth >= 200 && data.sidebarWidth <= 480
-          ? data.sidebarWidth
-          : 256,
+sidebarWidth: typeof data.sidebarWidth === 'number' && data.sidebarWidth >= 200 && data.sidebarWidth <= 480
+? data.sidebarWidth
+: 256,
+effortLevel: ['', 'low', 'medium', 'high', 'xhigh', 'max'].includes(data.effortLevel as any)
+? (data.effortLevel as any)
+: '',
+autocompact: ['', 'auto', '100k', '200k', '400k', '800k', '1M'].includes(data.autocompact as any)
+? (data.autocompact as any)
+: '',
+maxBudgetUsd: typeof data.maxBudgetUsd === 'number' && data.maxBudgetUsd > 0
+? data.maxBudgetUsd
+: 0,
       });
     },
   };
