@@ -590,6 +590,51 @@ describe('renameSession（会话重命名）', () => {
     expect(() => s().renameSession(99, 'x')).not.toThrow();
     expect(() => s().renameSession(-1, 'x')).not.toThrow();
   });
+
+  it('回归：重命名后再次发消息（result 归档）不得冲掉手动标题', () => {
+    // 第一轮：正常归档，自动标题取首条用户消息
+    s().handleStream(init('sess-R'));
+    s().sendPrompt('自动标题的第一条消息');
+    s().handleStream(result({ session_id: 'sess-R', total_cost_usd: 0.01 }));
+    expect(s().sessions.length).toBe(1);
+    expect(s().sessions[0].title).toBe('自动标题的第一条消息');
+
+    // 用户手动重命名
+    s().renameSession(0, '我起的名字');
+
+    // 再次使用该会话：第二条消息 → result 到达 → 归档更新不得覆盖手动标题
+    s().sendPrompt('第二条消息');
+    s().handleStream(result({ session_id: 'sess-R', total_cost_usd: 0.02 }));
+
+    expect(s().sessions.length).toBe(1); // 仍是同一条目
+    expect(s().sessions[0].title).toBe('我起的名字'); // 手动标题保留
+    expect(s().sessions[0].cost).toBeCloseTo(0.03); // 成本仍正常累加
+  });
+
+  it('重命名同步更新已打开的对应标签页标题（TabBar 与侧栏一致）', () => {
+    s().handleStream(init('sess-S'));
+    s().sendPrompt('问题');
+    s().handleStream(result({ session_id: 'sess-S' }));
+    // 该会话标签页仍打开，重命名应同步其 title
+    s().renameSession(0, '同步的新名字');
+    expect(s().sessions[0].title).toBe('同步的新名字');
+    expect(conv().title).toBe('同步的新名字');
+    // 其他标签页不受影响
+    const other = s().newConversation();
+    expect(getConv(other).title).toBe('新对话');
+  });
+
+  it('自动命名仅首次归档生效：后续轮次不再随首条消息重算（保持稳定）', () => {
+    s().handleStream(init('sess-T'));
+    s().sendPrompt('初始话题');
+    s().handleStream(result({ session_id: 'sess-T' }));
+    expect(s().sessions[0].title).toBe('初始话题');
+
+    // 第二轮归档：保留首轮标题而非重新计算
+    s().sendPrompt('另一个话题');
+    s().handleStream(result({ session_id: 'sess-T' }));
+    expect(s().sessions[0].title).toBe('初始话题');
+  });
 });
 
 describe('stream_event 逐 token 流式（--include-partial-messages）', () => {

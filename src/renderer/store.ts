@@ -610,11 +610,20 @@ maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.rou
     },
 
     renameSession: (index, title) => {
-      const sessions = get().sessions;
+      const state = get();
+      const sessions = state.sessions;
       if (index < 0 || index >= sessions.length) return;
       const t = title.trim();
       if (!t || t === sessions[index].title) return;
-      set({ sessions: sessions.map((s, i) => (i === index ? { ...s, title: t } : s)) });
+      const sessionId = sessions[index].sessionId;
+      set({
+        sessions: sessions.map((s, i) => (i === index ? { ...s, title: t } : s)),
+        // 同步已打开的对应标签页标题（按 sessionId 关联），
+        // 保持 TabBar 与侧栏一致；否则标签页仍显示旧名
+        conversations: state.conversations.map((c) =>
+          c.sessionId === sessionId ? { ...c, title: t } : c
+        ),
+      });
     },
 
     deleteSession: (index) => {
@@ -989,6 +998,11 @@ maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.rou
             sessions = existingIdx >= 0
               ? state.sessions.map((s, i) => (i === existingIdx ? {
                   ...newSession,
+                  // 已有条目保留原标题：它可能是用户手动重命名的结果，
+                  // 不得被「首条用户消息前 50 字」的自动标题覆盖
+                  // （否则重命名后再发消息，名字会被悄悄改回去）。
+                  // 自动命名只在首次归档时生效；旧条目 title 为空时才回退自动值
+                  title: s.title || title,
                   createdAt: s.createdAt, // 保留首次创建时间
                   cost: s.cost + cost,
                   inputTokens: s.inputTokens + inputTokens,
