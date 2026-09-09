@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ChatMessage, ContextUsage, Conversation, Session, SessionEvent, RunStatus, StreamMessage, UIBlock } from './types';
+import type { ActivityState, ChatMessage, ContextUsage, Conversation, Session, SessionEvent, RunStatus, StreamMessage, UIBlock } from './types';
 import { deliverPrompt, abortConversation } from './utils/deliver';
 
 interface AppState {
@@ -124,6 +124,7 @@ function makeConversation(cwd: string, over: Partial<Conversation> = {}): Conver
     queue: [],
     currentModel: '',
     draft: '',
+    activity: null,
     ...over,
   };
 }
@@ -170,6 +171,7 @@ function applyToolResult(
         ...b,
         status: block.is_error ? ('error' as const) : ('done' as const),
         result: extractToolResultText(block.content),
+        finishedAt: Date.now(),
       };
     }
     if (b.children) {
@@ -261,6 +263,29 @@ function archiveConversation(sessions: Session[], conv: Conversation, maxSession
   return [draft, ...sessions].slice(0, maxSessions > 0 ? maxSessions : DEFAULT_MAX_SESSIONS);
 }
 
+/** 回填已存在 tool_use 卡片的 input（stream_event 预创建卡片后，完整事件到达时补全参数）。
+ *  不可变：未命中返回原数组 */
+function backfillToolInput(blocks: UIBlock[], toolId: string, input: Record<string, unknown>): UIBlock[] {
+  let changed = false;
+  const next = blocks.map((b) => {
+    if (b.kind === 'tool_use') {
+      if (b.toolId === toolId) {
+        changed = true;
+        return { ...b, input };
+      }
+      if (b.children) {
+        const nested = backfillToolInput(b.children, toolId, input);
+        if (nested !== b.children) {
+          changed = true;
+          return { ...b, children: nested };
+        }
+      }
+    }
+    return b;
+  });
+  return changed ? next : blocks;
+}
+
 /** 不可变替换指定标签页 */
 function replaceConv(conversations: Conversation[], id: string, next: Conversation): Conversation[] {
   return conversations.map((c) => (c.id === id ? next : c));
@@ -270,6 +295,8 @@ function replaceConv(conversations: Conversation[], id: string, next: Conversati
 export function snapshotConversations(conversations: Conversation[]): Conversation[] {
   return conversations.slice(0, MAX_PERSIST_CONVERSATIONS).map((c) => ({
     ...c,
+    // 瞬态字段不持久化：activity 是运行时阶段，重启后无意义
+    activity: null,
     // 应用重启后进程已消失：运行态收敛（会话 status 标 aborted，消息归档为 completed），流式内容归档防丢
     status: c.status === 'streaming' || c.status === 'starting' ? 'aborted' : c.status,
     streamingMessage: null,
@@ -282,6 +309,91 @@ export function snapshotConversations(conversations: Conversation[]): Conversati
 }
 
 export const useStore = create<AppState>((set, get) => {
+  // ── 逐 token 流式（--include-partial-messages）的 delta 基础设施 ──
+  // 每个 API 轮次：message_start 带来 msgId → thinking/text 逐 delta 到达（40ms 节流
+  // 合并后一次 set，避免高频更新打爆 React）→ 完整 assistant 事件到达时按 msgId
+  // 去重（内容已由 delta 构建，仅回填 tool_use 的 input）
+  const deltaMsgIds = new Map<string, string | null>();
+  const pendingDeltas = new Map<string, { kind: 'text' | 'thinking'; chunk: string }[]>();
+  const deltaTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const DELAY_FLUSH_MS = 40;
+
+  const flushDeltas = (convId: string) => {
+    const timer = deltaTimers.get(convId);
+    if (timer) {
+      clearTimeout(timer);
+      deltaTimers.delete(convId);
+    }
+    const list = pendingDeltas.get(convId);
+    if (!list || list.length === 0) return;
+    pendingDeltas.set(convId, []);
+    const state = get();
+    const conv = state.conversations.find((c) => c.id === convId);
+    if (!conv) {
+      pendingDeltas.delete(convId);
+      return; // 标签页已关闭：丢弃缓冲
+    }
+    // 已中断/出错：丢弃缓冲，不复活已归档消息
+    if (!conv.streamingMessage) {
+      pendingDeltas.delete(convId);
+      return;
+    }
+    const msgId = deltaMsgIds.get(convId) ?? undefined;
+    const streaming: ChatMessage = { ...conv.streamingMessage };
+    let blocks = streaming.blocks;
+    for (const d of list) {
+      const last = blocks[blocks.length - 1];
+      if (last?.kind === d.kind && last.msgId === msgId) {
+        blocks = [...blocks];
+        blocks[blocks.length - 1] = { ...last, text: last.text + d.chunk };
+      } else {
+        blocks = [...blocks, { kind: d.kind, text: d.chunk, msgId }];
+      }
+    }
+    streaming.blocks = blocks;
+    set({ conversations: replaceConv(state.conversations, convId, { ...conv, streamingMessage: streaming }) });
+  };
+
+  const queueDelta = (convId: string, kind: 'text' | 'thinking', chunk: string) => {
+    const list = pendingDeltas.get(convId) || [];
+    list.push({ kind, chunk });
+    pendingDeltas.set(convId, list);
+    if (!deltaTimers.has(convId)) {
+      deltaTimers.set(
+        convId,
+        setTimeout(() => {
+          deltaTimers.delete(convId);
+          flushDeltas(convId);
+        }, DELAY_FLUSH_MS)
+      );
+    }
+  };
+
+  /** 更新执行阶段（反馈条）：同阶段不重复 set，避免 delta 高频触发 */
+  const setActivity = (convId: string, phase: ActivityState['phase'], toolName?: string) => {
+    const state = get();
+    const conv = state.conversations.find((c) => c.id === convId);
+    if (!conv) return;
+    const cur = conv.activity;
+    if (cur && cur.phase === phase && (cur.toolName || undefined) === (toolName || undefined)) return;
+    set({
+      conversations: replaceConv(state.conversations, convId, {
+        ...conv,
+        activity: { phase, toolName, since: Date.now() },
+      }),
+    });
+  };
+
+  const dropDeltaState = (convId: string) => {
+    const timer = deltaTimers.get(convId);
+    if (timer) {
+      clearTimeout(timer);
+      deltaTimers.delete(convId);
+    }
+    pendingDeltas.delete(convId);
+    deltaMsgIds.delete(convId);
+  };
+
   /** 内部：往指定标签页写入用户消息并拉起 CLI */
   const dispatchPrompt = (prompt: string, conversationId: string) => {
     const state = get();
@@ -356,6 +468,7 @@ export const useStore = create<AppState>((set, get) => {
       const state = get();
       const conv = state.conversations.find((c) => c.id === id);
       if (!conv) return;
+      dropDeltaState(id); // 清理 delta 缓冲/定时器
       // 运行中：先终止其进程（事件稍后到达时标签页已移除，handleStream 会忽略）
       if (conv.status === 'streaming' || conv.status === 'starting') {
         abortConversation(id);
@@ -566,6 +679,62 @@ export const useStore = create<AppState>((set, get) => {
                 thinkingTokens: typeof msg.estimated_tokens === 'number' ? msg.estimated_tokens : 0,
               }),
             });
+            setActivity(convId, 'thinking');
+          } else if (msg.subtype === 'status' && msg.status === 'requesting') {
+            // 每个 API 轮次开始前都会发（含工具结果返回后的下一轮）——反馈条核心信号
+            setActivity(convId, 'requesting');
+          }
+          break;
+        }
+
+        case 'stream_event': {
+          // 逐 token 流式（--include-partial-messages）。只处理顶层；子代理内容
+          // （parent_tool_use_id 非空）仍走完整 assistant 事件，保持块级粒度
+          if (msg.parent_tool_use_id) break;
+          const ev = msg.event || {};
+
+          if (ev.type === 'message_start') {
+            // 记录本轮消息 id：后续完整 assistant 事件据此去重
+            deltaMsgIds.set(convId, ev.message?.id ?? null);
+            break;
+          }
+
+          if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
+            // 工具调用开始即创建 running 卡片（名称立即可见，input 由完整事件回填）
+            flushDeltas(convId); // 保序：先把已缓冲文本落盘
+            const cur = get().conversations.find((c) => c.id === convId);
+            if (!cur) break;
+            const streaming: ChatMessage = cur.streamingMessage
+              ? { ...cur.streamingMessage }
+              : { id: genId(), role: 'assistant', blocks: [], timestamp: Date.now(), status: 'streaming' };
+            const toolBlock = {
+              kind: 'tool_use' as const,
+              toolName: String(ev.content_block.name || 'Tool'),
+              toolId: String(ev.content_block.id || ''),
+              input: {},
+              status: 'running' as const,
+              startedAt: Date.now(),
+            };
+            set({
+              conversations: replaceConv(get().conversations, convId, {
+                ...cur,
+                streamingMessage: { ...streaming, blocks: [...streaming.blocks, toolBlock] },
+              }),
+            });
+            setActivity(convId, 'tool', String(ev.content_block.name || 'Tool'));
+            break;
+          }
+
+          if (ev.type === 'content_block_delta') {
+            const d = ev.delta || {};
+            if (d.type === 'text_delta' && typeof d.text === 'string' && d.text) {
+              queueDelta(convId, 'text', d.text);
+              setActivity(convId, 'writing');
+            } else if (d.type === 'thinking_delta' && typeof d.thinking === 'string' && d.thinking) {
+              queueDelta(convId, 'thinking', d.thinking);
+              setActivity(convId, 'thinking');
+            }
+            break;
           }
           break;
         }
@@ -575,6 +744,11 @@ export const useStore = create<AppState>((set, get) => {
           const msgId = typeof msg.message?.id === 'string' ? msg.message.id : null;
           const sameMsgShard = msgId !== null && lastAssistantMsgIds.get(convId) === msgId;
           lastAssistantMsgIds.set(convId, msgId);
+
+          const parentId = msg.parent_tool_use_id;
+          // delta 模式：本条消息的 text/thinking 已由 stream_event 逐字构建，
+          // 完整事件仅用于回填 tool_use 的 input（内容去重，避免双倍文本）
+          const deltaMode = !parentId && msgId !== null && deltaMsgIds.get(convId) === msgId;
 
           // 浅拷贝消息壳，后续块更新全部不可变（新数组/新块对象）：
           // 配合渲染层 React.memo，已完成块引用稳定可跳过重渲染
@@ -593,12 +767,11 @@ export const useStore = create<AppState>((set, get) => {
             }
           }
 
-          // 2) text/thinking/tool_use：定位容器（顶层或子代理父块），不可变合并/追加。
-          //    重新查找父块：步骤 1 可能已替换其 children 数组
-          const parentId = msg.parent_tool_use_id;
-          let parentToolId: string | null = null;
-          let container: UIBlock[] = blocks;
-          if (parentId) {
+        // 2) text/thinking/tool_use：定位容器（顶层或子代理父块），不可变合并/追加。
+        //    重新查找父块：步骤 1 可能已替换其 children 数组（parentId 已在 case 开头声明）
+        let parentToolId: string | null = null;
+        let container: UIBlock[] = blocks;
+        if (parentId) {
             const parent = findToolBlock(blocks, parentId);
             if (parent) {
               parentToolId = parent.toolId;
@@ -606,10 +779,12 @@ export const useStore = create<AppState>((set, get) => {
             }
           }
 
-          let touched = parentToolId !== null; // 子代理容器拷贝后必须写回
-          for (const block of contentBlocks) {
-            if (block.type === 'text') {
-              // 同消息分片续写：仅当容器尾部是同一条消息的 text 块时追加。
+        let touched = parentToolId !== null; // 子代理容器拷贝后必须写回
+        for (const block of contentBlocks) {
+          if (block.type === 'text') {
+            // delta 模式下已由 stream_event 逐字构建，跳过（去重）
+            if (deltaMode) continue;
+            // 同消息分片续写：仅当容器尾部是同一条消息的 text 块时追加。
               // 不得按 kind 全局查找——CLI 会把同一条消息拆成多个事件发送
               // （[thinking]、[text] 分片），若第 1 轮已有开场文本，后续轮次的
               // 最终答案会被拼进那个旧块，造成“结果在中间、后面跟着思考/工具”的错位
@@ -620,41 +795,63 @@ export const useStore = create<AppState>((set, get) => {
                 container.push({ kind: 'text', text: block.text, msgId: msgId ?? undefined });
                 touched = true;
               }
-            } else if (block.type === 'thinking') {
-              const last = container[container.length - 1];
+          } else if (block.type === 'thinking') {
+            if (deltaMode) continue; // 已由 delta 构建，跳过
+            const last = container[container.length - 1];
               if (sameMsgShard && last?.kind === 'thinking' && last.msgId === msgId) {
                 container[container.length - 1] = { kind: 'thinking', text: last.text + block.thinking, msgId: msgId ?? undefined };
               } else {
                 container.push({ kind: 'thinking', text: block.thinking, msgId: msgId ?? undefined });
                 touched = true;
               }
-            } else if (block.type === 'tool_use') {
-              container.push({
-                kind: 'tool_use',
-                toolName: block.name,
-                toolId: block.id,
-                input: block.input,
-                status: 'running',
-              });
-              touched = true;
+          } else if (block.type === 'tool_use') {
+            if (deltaMode && findToolBlock(blocks, block.id)) {
+              // 卡片已由 content_block_start 预创建：回填 input（不可变）
+              blocks = parentToolId ? replaceToolBlockChildren(blocks, parentToolId, backfillToolInput(container, block.id, block.input)) : backfillToolInput(blocks, block.id, block.input);
+              continue;
             }
+            container.push({
+              kind: 'tool_use',
+              toolName: block.name,
+              toolId: block.id,
+              input: block.input,
+              status: 'running',
+              startedAt: Date.now(),
+            });
+            touched = true;
           }
-
-          if (touched) {
-            blocks = parentToolId ? replaceToolBlockChildren(blocks, parentToolId, container) : container;
-          }
-          streaming.blocks = blocks;
-
-          set({
-            conversations: replaceConv(state.conversations, convId, {
-              ...conv,
-              streamingMessage: streaming,
-            }),
-          });
-          break;
         }
 
-        case 'user': {
+        if (touched) {
+          blocks = parentToolId ? replaceToolBlockChildren(blocks, parentToolId, container) : container;
+        }
+        streaming.blocks = blocks;
+
+        // 阶段反馈：由本条完整事件的内容类型推导（无 partial 降级时也生效）。
+        // 必须并入同一个 set：单独 setActivity 会被本次基于旧快照的 set 覆盖（竞态）
+        let activity = conv.activity;
+        const samePhase = (phase: ActivityState['phase'], toolName?: string) =>
+          activity && activity.phase === phase && (activity.toolName || undefined) === (toolName || undefined);
+        if (contentBlocks.some((b) => b.type === 'tool_use')) {
+          const tu = contentBlocks.find((b) => b.type === 'tool_use') as { name?: string };
+          if (!samePhase('tool', tu?.name)) activity = { phase: 'tool', toolName: tu?.name, since: Date.now() };
+        } else if (contentBlocks.some((b) => b.type === 'thinking')) {
+          if (!samePhase('thinking')) activity = { phase: 'thinking', since: Date.now() };
+        } else if (contentBlocks.some((b) => b.type === 'text')) {
+          if (!samePhase('writing')) activity = { phase: 'writing', since: Date.now() };
+        }
+
+        set({
+          conversations: replaceConv(state.conversations, convId, {
+            ...conv,
+            streamingMessage: streaming,
+            activity,
+          }),
+        });
+        break;
+      }
+
+      case 'user': {
           // tool_result 通过 user 消息返回
           const streaming = conv.streamingMessage;
           const content = Array.isArray(msg.message?.content) ? msg.message.content : [];
@@ -678,25 +875,33 @@ export const useStore = create<AppState>((set, get) => {
                   streamingMessage: { ...streaming, blocks },
                 }),
               });
+              // 工具结果返回后将发起下一轮请求：阶段切回 requesting
+              setActivity(convId, 'requesting');
             }
           }
           break;
         }
 
         case 'result': {
+          // 先落盘缓冲中的 delta（最多 40ms 尾巴），避免归档丢失；
+          // flush 会更新 store，后续必须用 fresh 读取（不能用 switch 开头的旧快照）
+          flushDeltas(convId);
+          const convNow = get().conversations.find((c) => c.id === convId);
+          if (!convNow) break;
+
           // stats 块以不可变方式附加（finalizeStreaming 不 mutate 原引用）
-          const withStats = conv.streamingMessage
-            ? { ...conv.streamingMessage, blocks: [...conv.streamingMessage.blocks, { kind: 'stats', data: msg } as UIBlock] }
+          const withStats = convNow.streamingMessage
+            ? { ...convNow.streamingMessage, blocks: [...convNow.streamingMessage.blocks, { kind: 'stats', data: msg } as UIBlock] }
             : null;
 
           const archived = finalizeStreaming(
-            { ...conv, streamingMessage: withStats },
+            { ...convNow, streamingMessage: withStats },
             msg.is_error ? 'error' : 'completed'
           );
 
           // 归档会话（标题取第一条用户消息）
-          const firstUserMsg = conv.messages.find((m) => m.role === 'user');
-          const title = firstUserMsg?.blocks.find((b) => b.kind === 'text')?.text?.slice(0, 50) || conv.title || 'Session';
+          const firstUserMsg = convNow.messages.find((m) => m.role === 'user');
+          const title = firstUserMsg?.blocks.find((b) => b.kind === 'text')?.text?.slice(0, 50) || convNow.title || 'Session';
 
           // 字段防御：CLI 版本间字段可能缺失/畸形，缺省按 0 处理而非 NaN 扩散
           const usage = msg.usage || {};
@@ -711,7 +916,7 @@ export const useStore = create<AppState>((set, get) => {
           //   远超真实上下文（实测可达上限的 10 倍），不能当占用值；
           //   多轮场景由轮末的 /context 查询提供真实占用。
           //   compact 后占用下降是正常现象，不做 Math.max 钉死。
-          let contextUsage = conv.contextUsage;
+          let contextUsage = convNow.contextUsage;
           const modelUsage = msg.modelUsage ? Object.values(msg.modelUsage)[0] : undefined;
           if (modelUsage?.contextWindow) {
             const turns = typeof msg.num_turns === 'number' ? msg.num_turns : 1;
@@ -742,14 +947,14 @@ export const useStore = create<AppState>((set, get) => {
           if (hasSessionId) {
             const newSession: Session = {
               sessionId: msg.session_id,
-              cwd: conv.cwd,
+              cwd: convNow.cwd,
               title,
               messages: archived.messages,
               createdAt: Date.now(),
               cost,
               inputTokens,
               outputTokens,
-              model: conv.currentModel || undefined,
+              model: convNow.currentModel || undefined,
               events: [event],
             };
 
@@ -762,7 +967,7 @@ export const useStore = create<AppState>((set, get) => {
                   cost: s.cost + cost,
                   inputTokens: s.inputTokens + inputTokens,
                   outputTokens: s.outputTokens + outputTokens,
-                  model: conv.currentModel || s.model,
+                  model: convNow.currentModel || s.model,
                   events: [...(s.events || []), event],
                 } : s))
               : [newSession, ...state.sessions];
@@ -773,11 +978,12 @@ export const useStore = create<AppState>((set, get) => {
 
           set({
             conversations: replaceConv(state.conversations, convId, {
-              ...conv,
+              ...convNow,
               messages: archived.messages,
               streamingMessage: null,
               status: msg.is_error ? 'error' : 'completed',
               contextUsage,
+              activity: null, // 轮次结束：清除反馈条
             }),
             totalCost: state.totalCost + cost,
             totalInputTokens: state.totalInputTokens + inputTokens,
@@ -849,6 +1055,11 @@ export const useStore = create<AppState>((set, get) => {
       const conv = state.conversations.find((c) => c.id === convId);
       if (!conv) return; // 标签页已关闭：忽略
 
+      // 中断或出错：先落盘缓冲的 delta（保留最后 ≤40ms 内容）再归档，避免丢失
+      if (status === 'aborted' || status === 'error') {
+        flushDeltas(convId);
+      }
+
       // 中断或出错时，把未完成的流式消息归档，避免内容丢失
       if ((status === 'aborted' || status === 'error') && conv.streamingMessage) {
         const archived = finalizeStreaming(conv, status === 'aborted' ? 'completed' : 'error');
@@ -857,6 +1068,7 @@ export const useStore = create<AppState>((set, get) => {
             ...conv,
             ...archived,
             status,
+            activity: null,
             // 中断/出错丢弃排队消息：它们针对已失败的上下文，保留会在
             // 下一轮完成后突然发出，与用户随后的新指令串台
             queue: status === 'aborted' || status === 'error' ? [] : conv.queue,
@@ -867,6 +1079,7 @@ export const useStore = create<AppState>((set, get) => {
           conversations: replaceConv(state.conversations, convId, { ...conv, status }),
         });
       }
+      dropDeltaState(convId);
     },
 
     setContextUsage: (usage, conversationId) => {
@@ -888,6 +1101,7 @@ export const useStore = create<AppState>((set, get) => {
           const restored: Conversation = {
             ...makeConversation(typeof c.cwd === 'string' ? c.cwd : data.cwd || ''),
             ...c,
+            activity: null, // 瞬态：重启后清除
             // 应用重启后进程已消失：运行态收敛
             status: c.status === 'streaming' || c.status === 'starting' ? 'aborted' : c.status || 'idle',
             streamingMessage: null,

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { UIBlock } from '../types';
 import { DiffView } from './DiffView';
 import {
@@ -6,6 +6,32 @@ import {
   ChevronDown, ChevronRight, Loader, CheckCircle, XCircle,
   Globe, Search, GitBranch, Wrench, Bot
 } from 'lucide-react';
+
+function formatElapsed(ms: number): string {
+  const s = Math.max(1, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m${s % 60}s`;
+}
+
+/** 运行中工具的耗时（每秒 tick）；完成后显示总耗时（静态） */
+function ToolElapsed({ startedAt, finishedAt }: { startedAt?: number; finishedAt?: number }) {
+  const [, setTick] = useState(0);
+  const running = !finishedAt;
+
+  useEffect(() => {
+    if (!running || !startedAt) return;
+    const timer = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(timer);
+  }, [running, startedAt]);
+
+  if (!startedAt) return null;
+  const end = finishedAt ?? Date.now();
+  return (
+    <span className="text-[10px] font-mono text-text-dim shrink-0" title={finishedAt ? '总耗时' : '已运行'}>
+      {formatElapsed(end - startedAt)}
+    </span>
+  );
+}
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
   Bash: <Terminal className="w-4 h-4" />,
@@ -67,10 +93,11 @@ export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { k
           </span>
         )}
 
-        {/* 状态指示器 */}
+        {/* 状态指示器 + 耗时 */}
         {block.status === 'running' && <Loader className="w-3.5 h-3.5 animate-spin text-accent-yellow shrink-0" />}
         {block.status === 'done' && <CheckCircle className="w-3.5 h-3.5 text-accent-green shrink-0" />}
         {block.status === 'error' && <XCircle className="w-3.5 h-3.5 text-accent-red shrink-0" />}
+        <ToolElapsed startedAt={block.startedAt} finishedAt={block.finishedAt} />
       </button>
 
       {/* 展开内容 */}

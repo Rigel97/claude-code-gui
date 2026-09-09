@@ -88,6 +88,15 @@ const init = (sessionId = 'sess-1', conversationId?: string) =>
     ...(conversationId ? { conversationId } : {}),
   }) as unknown as StreamMessage;
 
+// ── stream_event 构造器（--include-partial-messages 逐 token 流式）──
+const streamEvent = (event: Record<string, unknown>, parentId: string | null = null) =>
+  ({ type: 'stream_event', event, parent_tool_use_id: parentId, session_id: 'sess-1' }) as unknown as StreamMessage;
+const messageStart = (id: string) => streamEvent({ type: 'message_start', message: { id } });
+const textDelta = (t: string) => streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } });
+const thinkingDelta = (t: string) => streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: t } });
+const toolStart = (id: string, name: string) => streamEvent({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id, name, input: {} } });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 beforeEach(reset);
 
 describe('assistant 文本合并（按 message.id 门控）', () => {
@@ -469,12 +478,12 @@ describe('既有守卫不回归', () => {
     const c1: Conversation = {
       id: 'conv-1', title: 'T1', sessionId: 'sess-1', cwd: '/tmp',
       messages: [], streamingMessage: null, status: 'idle', thinkingTokens: 0,
-      contextUsage: null, queue: [], currentModel: '', draft: 'd1',
+      contextUsage: null, queue: [], currentModel: '', draft: 'd1', activity: null,
     };
     const c2: Conversation = {
       id: 'conv-2', title: 'T2', sessionId: 'sess-2', cwd: '/tmp',
       messages: [], streamingMessage: null, status: 'completed', thinkingTokens: 0,
-      contextUsage: null, queue: [], currentModel: '', draft: '',
+      contextUsage: null, queue: [], currentModel: '', draft: '', activity: null,
     };
     s().hydrate({ cwd: '/tmp', sessions: [], conversations: [c1, c2], activeConversationId: 'conv-2' } as HydrateArg);
     expect(s().conversations.length).toBe(2);
@@ -490,7 +499,7 @@ describe('既有守卫不回归', () => {
       ],
       streamingMessage: { id: 'm2', role: 'assistant', blocks: [{ kind: 'text', text: 'partial' }], timestamp: 2, status: 'streaming' },
       status: 'streaming', thinkingTokens: 0,
-      contextUsage: null, queue: ['排队消息'], currentModel: '', draft: '',
+      contextUsage: null, queue: ['排队消息'], currentModel: '', draft: '', activity: null,
     };
     s().hydrate({ cwd: '/tmp', sessions: [], conversations: [streamingConv], activeConversationId: 'conv-s' } as HydrateArg);
     const restored = getConv('conv-s');
@@ -580,5 +589,172 @@ describe('renameSession（会话重命名）', () => {
     expect(s().sessions[0].title).toBe('seed-s1');
     expect(() => s().renameSession(99, 'x')).not.toThrow();
     expect(() => s().renameSession(-1, 'x')).not.toThrow();
+  });
+});
+
+describe('stream_event 逐 token 流式（--include-partial-messages）', () => {
+  it('text delta 逐字构建文本块，同 msgId 完整事件到达后去重（不双倍）', async () => {
+    s().sendPrompt('q'); // 建立流式消息壳
+    s().handleStream(messageStart('msg_D1'));
+    s().handleStream(textDelta('你'));
+    s().handleStream(textDelta('好'));
+    await sleep(60); // 等待 40ms 节流 flush
+    let st = conv().streamingMessage!;
+    expect((st.blocks[0] as { text: string }).text).toBe('你好');
+
+    // 完整 assistant 事件（同 msgId）：delta 模式去重，不追加
+    s().handleStream(assistant('msg_D1', [{ type: 'text', text: '你好' }]));
+    st = conv().streamingMessage!;
+    expect(st.blocks.filter((b) => b.kind === 'text')).toHaveLength(1);
+    expect((st.blocks[0] as { text: string }).text).toBe('你好'); // 未变成「你好你好」
+  });
+
+  it('thinking 与 text delta 分别构建块且顺序保持', async () => {
+    s().sendPrompt('q');
+    s().handleStream(messageStart('msg_D2'));
+    s().handleStream(thinkingDelta('想'));
+    s().handleStream(thinkingDelta('一想'));
+    s().handleStream(textDelta('答'));
+    s().handleStream(textDelta('案'));
+    await sleep(60);
+    const blocks = conv().streamingMessage!.blocks;
+    expect(blocks.map((b) => b.kind)).toEqual(['thinking', 'text']);
+    expect((blocks[0] as { text: string }).text).toBe('想一想');
+    expect((blocks[1] as { text: string }).text).toBe('答案');
+  });
+
+  it('result 归档前未 flush 的缓冲被同步落盘（无丢失）', () => {
+    s().sendPrompt('q');
+    s().handleStream(messageStart('msg_D3'));
+    s().handleStream(textDelta('最后'));
+    s().handleStream(textDelta('一段'));
+    // 不等待节流，直接 result → 同步 flush 后归档
+    s().handleStream(result());
+    const archived = conv().messages.filter((m) => m.role === 'assistant')[0];
+    const textBlock = archived.blocks.find((b) => b.kind === 'text') as { text: string };
+    expect(textBlock.text).toBe('最后一段');
+  });
+
+  it('工具卡片即时创建，完整事件回填 input（不重复创建），结果回写耗时', async () => {
+    s().sendPrompt('q');
+    s().handleStream(messageStart('msg_D4'));
+    s().handleStream(toolStart('call_1', 'Bash'));
+    let blocks = conv().streamingMessage!.blocks;
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as { toolName: string }).toolName).toBe('Bash');
+    expect((blocks[0] as { status: string }).status).toBe('running');
+    expect((blocks[0] as { input: unknown }).input).toEqual({});
+    expect(typeof (blocks[0] as { startedAt?: number }).startedAt).toBe('number');
+
+    // 完整事件：回填 input 而非重复创建
+    s().handleStream(assistant('msg_D4', [{ type: 'tool_use', id: 'call_1', name: 'Bash', input: { command: 'ls' } }]));
+    blocks = conv().streamingMessage!.blocks;
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as { input: unknown }).input).toEqual({ command: 'ls' });
+
+    // tool_result：done + finishedAt
+    s().handleStream({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'ok' }] },
+    } as unknown as StreamMessage);
+    blocks = conv().streamingMessage!.blocks;
+    expect((blocks[0] as { status: string }).status).toBe('done');
+    expect(typeof (blocks[0] as { finishedAt?: number }).finishedAt).toBe('number');
+  });
+
+  it('子代理 stream_event（parent 非空）被忽略，内容走完整事件', async () => {
+    s().sendPrompt('q');
+    s().handleStream(assistant('msg_P0', [{ type: 'tool_use', id: 'parentT', name: 'Task', input: {} }]));
+    // 子代理的 delta（带 parent）：忽略
+    s().handleStream(streamEvent({ type: 'message_start', message: { id: 'sub_msg' } }, 'parentT'));
+    s().handleStream(streamEvent({ type: 'content_block_delta', delta: { type: 'text_delta', text: '子代理delta' } }, 'parentT'));
+    await sleep(60);
+    const parent = conv().streamingMessage!.blocks[0] as { children?: unknown[] };
+    expect(parent.children ?? []).toHaveLength(0); // delta 未写入
+
+    // 完整子代理事件正常追加（不受 deltaMsgIds 干扰）
+    s().handleStream(assistant('msg_P1', [{ type: 'text', text: '子代理输出' }], 'parentT'));
+    const parent2 = conv().streamingMessage!.blocks[0] as { children?: { text?: string }[] };
+    expect(parent2.children).toHaveLength(1);
+    expect(parent2.children![0].text).toBe('子代理输出');
+  });
+
+  it('无 message_start（降级/无 partial）时完整事件照常应用（回归保障）', () => {
+    s().handleStream(assistant('msg_L1', [{ type: 'text', text: '普通模式' }]));
+    expect((conv().streamingMessage!.blocks[0] as { text: string }).text).toBe('普通模式');
+  });
+
+  it('多轮：第二轮 message_start 切换 msgId，上一轮去重状态不残留', async () => {
+    s().sendPrompt('q');
+    s().handleStream(messageStart('msg_R1'));
+    s().handleStream(textDelta('第一轮'));
+    s().handleStream(assistant('msg_R1', [{ type: 'text', text: '第一轮' }]));
+    await sleep(60);
+    // 第二轮（工具结果返回后）：新 msgId，delta 正常构建新块
+    s().handleStream(messageStart('msg_R2'));
+    s().handleStream(textDelta('第二轮'));
+    await sleep(60);
+    const blocks = conv().streamingMessage!.blocks;
+    const texts = blocks.filter((b) => b.kind === 'text').map((b) => (b as { text: string }).text);
+    expect(texts).toEqual(['第一轮', '第二轮']);
+  });
+});
+
+describe('activity 阶段反馈（反馈条数据源）', () => {
+  it('完整阶段流转：requesting → thinking → writing → tool → requesting → result 清空', async () => {
+    s().sendPrompt('q');
+    s().handleStream({ type: 'system', subtype: 'status', status: 'requesting' } as unknown as StreamMessage);
+    expect(conv().activity?.phase).toBe('requesting');
+
+    s().handleStream(messageStart('msg_A1'));
+    s().handleStream(thinkingDelta('想'));
+    await sleep(60);
+    expect(conv().activity?.phase).toBe('thinking');
+
+    s().handleStream(textDelta('写'));
+    await sleep(60);
+    expect(conv().activity?.phase).toBe('writing');
+
+    s().handleStream(messageStart('msg_A2'));
+    s().handleStream(toolStart('call_x', 'Bash'));
+    expect(conv().activity?.phase).toBe('tool');
+    expect(conv().activity?.toolName).toBe('Bash');
+
+    s().handleStream({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_x', content: 'ok' }] },
+    } as unknown as StreamMessage);
+    expect(conv().activity?.phase).toBe('requesting'); // 工具结果后回到请求下一轮
+
+    s().handleStream(result());
+    expect(conv().activity).toBeNull(); // 轮次结束清除
+  });
+
+  it('无 partial 降级：完整事件与 thinking_tokens 同样驱动阶段', () => {
+    s().sendPrompt('q');
+    s().handleStream({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 5 } as unknown as StreamMessage);
+    expect(conv().activity?.phase).toBe('thinking');
+    s().handleStream(assistant('msg_N1', [{ type: 'text', text: 'hi' }]));
+    expect(conv().activity?.phase).toBe('writing');
+    s().handleStream(assistant('msg_N2', [{ type: 'tool_use', id: 't9', name: 'Read', input: {} }]));
+    expect(conv().activity?.phase).toBe('tool');
+    expect(conv().activity?.toolName).toBe('Read');
+  });
+
+  it('中断（aborted）清除 activity', () => {
+    s().sendPrompt('q');
+    s().handleStream({ type: 'system', subtype: 'status', status: 'requesting' } as unknown as StreamMessage);
+    expect(conv().activity).not.toBeNull();
+    s().setStatus('aborted');
+    expect(conv().activity).toBeNull();
+  });
+
+  it('瞬态不持久化：snapshotConversations 清空 activity', async () => {
+    const { snapshotConversations } = await import('../src/renderer/store');
+    s().sendPrompt('q');
+    s().handleStream({ type: 'system', subtype: 'status', status: 'requesting' } as unknown as StreamMessage);
+    expect(conv().activity).not.toBeNull();
+    const snap = snapshotConversations(s().conversations);
+    expect(snap[0].activity).toBeNull();
   });
 });

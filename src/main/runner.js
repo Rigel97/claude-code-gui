@@ -36,6 +36,9 @@ class ClaudeRunner {
     this.dyingProcess = null;
     this.buffer = '';
     this.pendingResolve = null;
+    // --include-partial-messages 逐 token 流式。老版本 CLI 不认该 flag 会报错退出，
+    // stderr 中检测到后自动降级（后续 send 不再携带），保持块级粒度兼容
+    this.usePartial = true;
   }
 
   /** 进程已结束且无待兑现 promise：可从池中回收 */
@@ -62,6 +65,12 @@ class ClaudeRunner {
     const { prompt, cwd, sessionId, resume, options = {} } = payload;
 
     const args = ['-p', '--output-format', 'stream-json', '--verbose'];
+
+    // 逐 token 流式（thinking/text delta + 工具调用即时开始事件），
+    // 显著提升生成过程的实时反馈；老 CLI 会在 stderr 报 unknown option 自动降级
+    if (this.usePartial) {
+      args.push('--include-partial-messages');
+    }
 
     // 已有会话 ID 时必须 --resume 续接多轮上下文；新会话的 id 由 CLI 在 init
     // 事件中返回。渲染层恒以 resume 传递，不存在「预指定 --session-id」的调用方
@@ -134,6 +143,10 @@ class ClaudeRunner {
         if (this.currentProcess !== proc) return;
         const text = chunk.toString().trim();
         if (text) {
+          // 老 CLI 不支持 --include-partial-messages：标记降级，下次 send 不再携带
+          if (text.includes('include-partial-messages')) {
+            this.usePartial = false;
+          }
           this.emitStream({
             type: 'stderr',
             text,

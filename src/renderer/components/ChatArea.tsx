@@ -2,6 +2,7 @@ import { useStore } from '../store';
 import { ChatMessageView } from './ChatMessageView';
 import { InputBar } from './InputBar';
 import { TabBar } from './TabBar';
+import { ActivityStrip } from './ActivityStrip';
 import { useRef, useEffect } from 'react';
 import type { Conversation } from '../types';
 
@@ -108,6 +109,11 @@ export function ChatArea() {
           <ThinkingIndicator tokens={thinkingTokens} />
         )}
       </div>
+
+      {/* 活动反馈条：阶段指示 + 计时 + 思考实时预览（生成中显示） */}
+      {conv && (conv.status === 'streaming' || conv.status === 'starting') && (
+        <ActivityStrip conv={conv} />
+      )}
 
       {/* 输入栏（草稿随标签页切换保留/恢复） */}
       <InputBar key={conv?.id ?? 'none'} initialDraft={conv?.draft ?? ''} />

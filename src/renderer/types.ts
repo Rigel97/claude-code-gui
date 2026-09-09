@@ -18,6 +18,28 @@ export interface ThinkingTokensMessage {
   estimated_tokens_delta: number;
 }
 
+/** CLI 每个 API 轮次开始前发出（含工具结果返回后的下一轮） */
+export interface StatusMessage {
+  type: 'system';
+  subtype: 'status';
+  status: string;
+  session_id?: string;
+}
+
+/** 逐 token 流式增量（--include-partial-messages）：包装 Anthropic SDK 原生 delta 事件 */
+export interface StreamEventMessage {
+  type: 'stream_event';
+  event: {
+    type: string;
+    message?: { id?: string };
+    content_block?: { type?: string; id?: string; name?: string };
+    delta?: { type?: string; text?: string; thinking?: string; partial_json?: string };
+    [key: string]: unknown;
+  };
+  parent_tool_use_id: string | null;
+  session_id?: string;
+}
+
 export interface AssistantMessage {
   type: 'assistant';
   message: {
@@ -78,6 +100,8 @@ export interface ResultMessage {
 export type StreamMessage =
   | SystemInitMessage
   | ThinkingTokensMessage
+  | StatusMessage
+  | StreamEventMessage
   | AssistantMessage
   | UserMessage
   | ResultMessage
@@ -123,6 +147,15 @@ export interface ChatMessage {
   status?: 'streaming' | 'completed' | 'error';
 }
 
+/** 活动阶段（反馈条）：由流事件推导的当前执行阶段 */
+export interface ActivityState {
+  phase: 'requesting' | 'thinking' | 'tool' | 'writing';
+  /** 工具调用阶段时的工具名 */
+  toolName?: string;
+  /** 阶段开始时间戳（计时用） */
+  since: number;
+}
+
 /** 对话标签页：多标签页架构下每个 tab 持有独立的会话状态 */
 export interface Conversation {
   /** GUI 侧 tab 标识（创建即有，早于 CLI sessionId） */
@@ -143,12 +176,14 @@ export interface Conversation {
   currentModel: string;
   /** 输入框草稿（切 tab 保留） */
   draft: string;
+  /** 当前执行阶段（瞬态，不持久化；反馈条显示用） */
+  activity: ActivityState | null;
 }
 
 export type UIBlock =
 | { kind: 'text'; text: string; msgId?: string }
 | { kind: 'thinking'; text: string; msgId?: string }
-  | { kind: 'tool_use'; toolName: string; toolId: string; input: Record<string, unknown>; status: 'running' | 'done' | 'error'; result?: string; children?: UIBlock[] }
+  | { kind: 'tool_use'; toolName: string; toolId: string; input: Record<string, unknown>; status: 'running' | 'done' | 'error'; result?: string; children?: UIBlock[]; startedAt?: number; finishedAt?: number }
   | { kind: 'stderr'; text: string }
   | { kind: 'stats'; data: ResultMessage };
 
