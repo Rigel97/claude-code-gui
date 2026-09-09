@@ -17,7 +17,8 @@ const api = {
 
   claude: {
     send: (payload) => ipcRenderer.invoke('claude:send', payload),
-    abort: () => ipcRenderer.invoke('claude:abort'),
+    // 中断指定对话（多标签页各自的 runner）
+    abort: (conversationId) => ipcRenderer.invoke('claude:abort', conversationId),
     // 零成本查询会话当前上下文占用（/context 本地命令）
     getContext: (cwd, sessionId) => ipcRenderer.invoke('claude:context', { cwd, sessionId }),
     // 压缩会话上下文（/compact，需一次总结调用）；返回 { success, error?, context? }

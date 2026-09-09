@@ -1,19 +1,24 @@
 import { useStore } from '../store';
 import { ChatMessageView } from './ChatMessageView';
 import { InputBar } from './InputBar';
+import { TabBar } from './TabBar';
 import { useRef, useEffect } from 'react';
+import type { Conversation } from '../types';
 
 export function ChatArea() {
-  const messages = useStore((s) => s.messages);
-  const streamingMessage = useStore((s) => s.streamingMessage);
-  const status = useStore((s) => s.status);
-  const thinkingTokens = useStore((s) => s.thinkingTokens);
+  const conv = useStore((s): Conversation | undefined =>
+    s.conversations.find((c) => c.id === s.activeConversationId)
+  );
   const highlightMessageId = useStore((s) => s.highlightMessageId);
   const setHighlightMessage = useStore((s) => s.setHighlightMessage);
   const forceScrollNonce = useStore((s) => s.forceScrollNonce);
   const scrollRef = useRef<HTMLDivElement>(null);
   // 用户是否贴在底部（向上翻阅历史时暂停自动滚动）
   const stickToBottom = useRef(true);
+
+  const messages = conv?.messages ?? [];
+  const streamingMessage = conv?.streamingMessage ?? null;
+  const thinkingTokens = conv?.thinkingTokens ?? 0;
 
   const handleScroll = () => {
     const el = scrollRef.current;
@@ -28,8 +33,7 @@ export function ChatArea() {
     }
   }, [messages, streamingMessage, thinkingTokens]);
 
-  // 用户发送新消息（含失败重试/队列续发等外部发送路径）时强制回到底部：
-  // addUserMessage 会发 nonce，这里监听并恢复贴底状态
+  // 用户发送新消息（含失败重试/后台队列续发）时强制回到底部
   useEffect(() => {
     if (forceScrollNonce && scrollRef.current) {
       stickToBottom.current = true;
@@ -57,6 +61,9 @@ export function ChatArea() {
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
+      {/* 对话标签栏：多会话并行 */}
+      <TabBar />
+
       {/* 消息流 */}
       <div
         ref={scrollRef}
@@ -74,7 +81,7 @@ export function ChatArea() {
         )}
 
         {/* 空状态提示 */}
-        {isEmpty && status === 'idle' && (
+        {isEmpty && (!conv || conv.status === 'idle') && (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div className="relative mb-6">
               <div className="absolute inset-0 bg-accent-cyan/20 blur-3xl rounded-full" />
@@ -97,13 +104,13 @@ export function ChatArea() {
         )}
 
         {/* 思考中指示器 */}
-        {status === 'streaming' && thinkingTokens > 0 && !streamingMessage && (
+        {conv?.status === 'streaming' && thinkingTokens > 0 && !streamingMessage && (
           <ThinkingIndicator tokens={thinkingTokens} />
         )}
       </div>
 
-      {/* 输入栏 */}
-      <InputBar />
+      {/* 输入栏（草稿随标签页切换保留/恢复） */}
+      <InputBar key={conv?.id ?? 'none'} initialDraft={conv?.draft ?? ''} />
     </div>
   );
 }

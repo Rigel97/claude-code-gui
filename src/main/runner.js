@@ -25,13 +25,22 @@ function escapeWindowsArg(arg) {
  * - abort() 解除 currentProcess 引用后，旧进程的一切 stdout/stderr 输出按残流丢弃，
  *   其 close 只负责兑现上一次 send 的 promise，不再发出任何状态/流事件。
  * 由此保证：任一时刻最多只有一个活跃进程；旧运行的事件永远不会混入新会话。
+ *
+ * 多标签页：每个对话标签页持有一个独立 runner（见 main.js 的池），
+ * conversationId 随每个 stream/status 事件下发供渲染层路由。
  */
 class ClaudeRunner {
-  constructor() {
+  constructor(conversationId = 'default') {
+    this.conversationId = conversationId;
     this.currentProcess = null;
     this.dyingProcess = null;
     this.buffer = '';
     this.pendingResolve = null;
+  }
+
+  /** 进程已结束且无待兑现 promise：可从池中回收 */
+  isIdle() {
+    return this.currentProcess === null && this.dyingProcess === null && this.pendingResolve === null;
   }
 
   async send(payload) {
@@ -262,16 +271,18 @@ class ClaudeRunner {
   }
 
   emitStream(data) {
+    // conversationId 附着在每个事件上：渲染层据此刻将事件路由到对应标签页
+    const payload = { ...data, conversationId: this.conversationId };
     const windows = BrowserWindow.getAllWindows();
     for (const win of windows) {
-      win.webContents.send('claude:stream', data);
+      win.webContents.send('claude:stream', payload);
     }
   }
 
   emitStatus(status) {
     const windows = BrowserWindow.getAllWindows();
     for (const win of windows) {
-      win.webContents.send('claude:status', status);
+      win.webContents.send('claude:status', { conversationId: this.conversationId, status });
     }
   }
 }

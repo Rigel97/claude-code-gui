@@ -4,7 +4,7 @@ import { DiffView } from './DiffView';
 import {
   Terminal, FileEdit, FileSearch, FilePlus, FileMinus,
   ChevronDown, ChevronRight, Loader, CheckCircle, XCircle,
-  Globe, Search, GitBranch, Wrench
+  Globe, Search, GitBranch, Wrench, Bot
 } from 'lucide-react';
 
 const TOOL_ICONS: Record<string, React.ReactNode> = {
@@ -16,6 +16,8 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
   WebFetch: <Globe className="w-4 h-4" />,
   WebSearch: <Search className="w-4 h-4" />,
   Task: <Wrench className="w-4 h-4" />,
+  // CLI 2.x 子代理工具已从 Task 改名为 Agent（实测 2.1.229）
+  Agent: <Bot className="w-4 h-4" />,
 };
 
 const TOOL_COLORS: Record<string, string> = {
@@ -26,6 +28,7 @@ const TOOL_COLORS: Record<string, string> = {
   WebFetch: 'text-accent-purple border-accent-purple/30 bg-accent-purple/5',
   WebSearch: 'text-accent-purple border-accent-purple/30 bg-accent-purple/5',
   Task: 'text-accent-yellow border-accent-yellow/30 bg-accent-yellow/5',
+  Agent: 'text-accent-yellow border-accent-yellow/30 bg-accent-yellow/5',
 };
 
 export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { kind: 'tool_use' }>; depth?: number }) {
@@ -213,6 +216,8 @@ function generateSummary(toolName: string, input: Record<string, unknown>): stri
     case 'WebFetch':
       return (input.url as string) || '';
     case 'Task':
+      return (input.description as string) || '';
+    case 'Agent':
       return (input.description as string) || '';
     default:
       return Object.values(input).map(String).join(' ').slice(0, 80);

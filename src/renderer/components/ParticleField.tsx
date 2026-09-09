@@ -22,7 +22,10 @@ const BASE_LINK_DIST = 110;
 export function ParticleField() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const statusRef = useRef<string>('idle');
-  const status = useStore((s) => s.status);
+  // 多标签页：任一标签页生成中即加速（活跃与否不影响视觉效果）
+  const status = useStore((s) =>
+    s.conversations.some((c) => c.status === 'streaming' || c.status === 'starting') ? 'streaming' : 'idle'
+  );
 
   // 用 ref 同步 status，避免重建动画循环
   useEffect(() => {

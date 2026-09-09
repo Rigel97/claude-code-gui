@@ -3,14 +3,14 @@ import { useStore } from '../store';
 
 export function WelcomeScreen() {
   const setCwd = useStore((s) => s.setCwd);
-  const newSession = useStore((s) => s.newSession);
+  const newConversation = useStore((s) => s.newConversation);
 
   const handleOpenDir = async () => {
     const dir = await (window as any).api.openDirectory();
     if (dir) {
-      // 先归档旧对话再切目录，避免旧对话被归到新目录名下
-      newSession();
+      // 先更新全局 cwd，再基于新目录开首个标签页
       setCwd(dir);
+      newConversation();
     }
   };
 
@@ -35,7 +35,7 @@ export function WelcomeScreen() {
       <p className="text-text-muted text-center max-w-md mb-8 text-sm leading-relaxed">
         Claude Code 的图形界面，实时展示流式输出与工具调用，
         <br />
-        支持多会话管理与成本统计。
+        支持多标签页并行对话与会话管理。
       </p>
 
       {/* 选择目录按钮 */}

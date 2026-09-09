@@ -29,8 +29,24 @@ const { saveImageDataUrl } = require('./images');
 const { Store } = require('./store');
 
 let mainWindow = null;
-let runner = null;
 let store = null;
+
+// ─── 多标签页 Runner 池 ──────────────────────
+// 每个对话标签页一个独立 runner（进程槽位互不干扰，支持并行生成）；
+// idle 的 runner（进程已结束、无待兑现 promise）在下次 send 时回收防泄漏
+const runnerPool = new Map();
+function getRunner(conversationId) {
+  const id = typeof conversationId === 'string' && conversationId ? conversationId : 'default';
+  for (const [key, r] of runnerPool) {
+    if (key !== id && r.isIdle()) runnerPool.delete(key);
+  }
+  let r = runnerPool.get(id);
+  if (!r) {
+    r = new ClaudeRunner(id);
+    runnerPool.set(id, r);
+  }
+  return r;
+}
 
 const http = require('http');
 
@@ -186,11 +202,12 @@ ipcMain.on('store:flush', (_e, value) => {
 // ─── IPC: Claude Code 执行 ──────────────────────────────
 ipcMain.handle('claude:send', async (_e, payload) => {
   await auxCommandLock;
-  return runner.send(payload);
+  return getRunner(payload?.conversationId).send(payload);
 });
 
-ipcMain.handle('claude:abort', () => {
-  runner.abort();
+ipcMain.handle('claude:abort', (_e, conversationId) => {
+  const r = runnerPool.get(typeof conversationId === 'string' && conversationId ? conversationId : 'default');
+  if (r) r.abort();
   return true;
 });
 
@@ -434,9 +451,8 @@ if (!app.requestSingleInstanceLock()) {
         app.dock.setIcon(iconPath);
       }
     }
-    runner = new ClaudeRunner();
-    store = new Store();
     setupApplicationMenu();
+    store = new Store();
     createWindow();
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

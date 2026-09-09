@@ -123,6 +123,28 @@ export interface ChatMessage {
   status?: 'streaming' | 'completed' | 'error';
 }
 
+/** 对话标签页：多标签页架构下每个 tab 持有独立的会话状态 */
+export interface Conversation {
+  /** GUI 侧 tab 标识（创建即有，早于 CLI sessionId） */
+  id: string;
+  /** tab 标题（首条用户消息前 30 字，初始为「新对话」） */
+  title: string;
+  /** CLI 会话 id（init 后回填；新对话为 null） */
+  sessionId: string | null;
+  /** 会话所在项目目录（创建时快照，切换全局 cwd 不影响已开会话） */
+  cwd: string;
+  messages: ChatMessage[];
+  streamingMessage: ChatMessage | null;
+  status: RunStatus;
+  thinkingTokens: number;
+  contextUsage: ContextUsage | null;
+  queue: string[];
+  /** CLI init 回显的实际模型 */
+  currentModel: string;
+  /** 输入框草稿（切 tab 保留） */
+  draft: string;
+}
+
 export type UIBlock =
 | { kind: 'text'; text: string; msgId?: string }
 | { kind: 'thinking'; text: string; msgId?: string }

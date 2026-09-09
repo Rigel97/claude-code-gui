@@ -7,7 +7,6 @@ import { User, Copy, Check, RotateCcw } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useStore } from '../store';
 import { copyText } from '../utils/clipboard';
-import { sendPrompt } from '../utils/send';
 
 /** 提取消息纯文本正文（不含 thinking / 工具调用 / stats）*/
 function messageText(message: ChatMessage): string {
@@ -49,13 +48,13 @@ function MessageCopyButton({ getText }: { getText: () => string }) {
 }
 
 /** 失败重试：移除最后一轮（含失败的回复）并重发原文，相当于「这轮重来」。
- *  仅挂在 messages 末尾的 error 消息上，避免对历史旧错误误操作 */
+ *  仅挂在活跃标签页末尾的 error 消息上，避免对历史旧错误误操作 */
 function RetryButton() {
   const removeLastTurn = useStore((s) => s.removeLastTurn);
 
   const handleRetry = () => {
     const text = removeLastTurn();
-    if (text) sendPrompt(text);
+    if (text) useStore.getState().sendPrompt(text);
   };
 
   return (
@@ -78,8 +77,11 @@ function RetryButton() {
  */
 export const ChatMessageView = memo(function ChatMessageView({ message }: { message: ChatMessage }) {
   const showThinking = useStore((s) => s.showThinking);
-  // 是否为消息列表末尾（重试按钮只对最新的 error 消息显示）
-  const isLatest = useStore((s) => s.messages[s.messages.length - 1]?.id === message.id);
+  // 是否为活跃标签页消息列表末尾（重试按钮只对最新的 error 消息显示）
+  const isLatest = useStore((s) => {
+    const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+    return conv?.messages[conv.messages.length - 1]?.id === message.id;
+  });
 
   if (message.role === 'user') {
     const text = messageText(message);

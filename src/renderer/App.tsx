@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react';
-import { useStore } from './store';
+import { useStore, snapshotConversations } from './store';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { StatusBar } from './components/StatusBar';
@@ -12,43 +12,7 @@ export default function App() {
   const cwd = useStore((s) => s.cwd);
   const handleStream = useStore((s) => s.handleStream);
   const setStatus = useStore((s) => s.setStatus);
-  const currentSessionId = useStore((s) => s.currentSessionId);
-
-  // 零成本查询当前会话的上下文占用（/context 本地命令，不调 API）：
-  // 轮末、会话切换、hydrate 恢复后触发；流式事件里的 usage 恒为零/
-  // 多轮累计失真，均不可作为占用值，真实值只能来自这里
-  const refreshContextUsage = useCallback(async () => {
-    const api = (window as any).api;
-    if (typeof api?.claude?.getContext !== 'function') return;
-    const { cwd, currentSessionId } = useStore.getState();
-    if (!cwd || !currentSessionId) return;
-    try {
-      const r = await api.claude.getContext(cwd, currentSessionId);
-      // 竞态防护：查询期间（约 1~3s）用户可能已切换会话
-      if (
-        r &&
-        typeof r.used === 'number' &&
-        typeof r.limit === 'number' &&
-        r.limit > 0 &&
-        useStore.getState().currentSessionId === currentSessionId
-      ) {
-        useStore.getState().setContextUsage({
-          used: r.used,
-          limit: r.limit,
-          free: typeof r.free === 'number' ? r.free : undefined,
-          autocompactBuffer: typeof r.autocompactBuffer === 'number' ? r.autocompactBuffer : undefined,
-        });
-      }
-    } catch {
-      /* 查询失败静默降级：保留旧值 */
-    }
-  }, []);
-
-  // 会话变化（切换会话 / hydrate 恢复 / 首次 init）时刷新
-  useEffect(() => {
-    if (!currentSessionId) return;
-    void refreshContextUsage();
-  }, [currentSessionId, refreshContextUsage]);
+  const activeConversationId = useStore((s) => s.activeConversationId);
 
   // 启动时恢复持久化状态
   useEffect(() => {
@@ -59,8 +23,14 @@ export default function App() {
     });
   }, []);
 
+  // 选择项目目录后确保至少有一个对话标签页
+  useEffect(() => {
+    if (cwd && useStore.getState().conversations.length === 0) {
+      useStore.getState().newConversation();
+    }
+  }, [cwd]);
+
   // 状态变更时节流持久化（3s 内最多写一次、带 trailing）：
-  // - 旧实现是 1s 防抖且被流式事件不断重置，长流式期间永不落盘，崩溃即丢整段对话
   // - 节流保证流式期间也周期性落盘，最大丢失窗口收敛到 3s；
   //   窗口关闭/退出前另有 beforeunload fire-and-forget 兜底
   useEffect(() => {
@@ -73,10 +43,9 @@ export default function App() {
     const snapshot = (state: StateSnapshot) => ({
       cwd: state.cwd,
       sessions: state.sessions,
-      // 当前对话也持久化：被中断/未归档的对话重启后不丢失
-      messages: state.messages,
-      activeSessionIndex: state.activeSessionIndex,
-      currentSessionId: state.currentSessionId,
+      // 全部标签页（含草稿/流式中断收敛），重启后原样恢复
+      conversations: snapshotConversations(state.conversations),
+      activeConversationId: state.activeConversationId,
       totalCost: state.totalCost,
       totalInputTokens: state.totalInputTokens,
       totalOutputTokens: state.totalOutputTokens,
@@ -124,27 +93,81 @@ export default function App() {
     };
   }, []);
 
-  // 监听 claude 流式事件
+  // 零成本查询指定标签页的上下文占用（/context 本地命令，不调 API）：
+  // 轮末、切换标签页时触发；流式事件里的 usage 恒为零/多轮累计失真，
+  // 均不可作为占用值，真实值只能来自这里
+  const refreshContextUsage = useCallback(async (conversationId?: string) => {
+    const api = (window as any).api;
+    if (typeof api?.claude?.getContext !== 'function') return;
+    const store = useStore.getState();
+    const convId = conversationId || store.activeConversationId;
+    const conv = store.conversations.find((c) => c.id === convId);
+    if (!conv || !conv.cwd || !conv.sessionId) return;
+    const { cwd, sessionId } = conv;
+    try {
+      const r = await api.claude.getContext(cwd, sessionId);
+      // 竞态防护：查询期间（约 1~3s）标签页可能被关闭或已换会话
+      const cur = useStore
+        .getState()
+        .conversations.find((c) => c.id === convId);
+      if (
+        r &&
+        typeof r.used === 'number' &&
+        typeof r.limit === 'number' &&
+        r.limit > 0 &&
+        cur &&
+        cur.sessionId === sessionId
+      ) {
+        useStore.getState().setContextUsage(
+          {
+            used: r.used,
+            limit: r.limit,
+            free: typeof r.free === 'number' ? r.free : undefined,
+            autocompactBuffer: typeof r.autocompactBuffer === 'number' ? r.autocompactBuffer : undefined,
+          },
+          convId
+        );
+      }
+    } catch {
+      /* 查询失败静默降级：保留旧值 */
+    }
+  }, []);
+
+  // 活跃标签页变化（切 tab / 新建 / 打开会话 / hydrate）时刷新其占用
+  useEffect(() => {
+    if (!activeConversationId) return;
+    void refreshContextUsage(activeConversationId);
+  }, [activeConversationId, refreshContextUsage]);
+
+  // 监听 claude 流式事件（事件携带 conversationId，路由到对应标签页）
   useEffect(() => {
     const removeStream = (window as any).api.claude.onStream((data: unknown) => {
       handleStream(data as any);
     });
 
-    const removeStatus = (window as any).api.claude.onStatusChange((status: string) => {
-      setStatus(status as any);
-      // 任务完成且窗口不在前台时，发系统通知
-      if (status === 'completed' && document.visibilityState !== 'visible') {
-        const state = useStore.getState();
-        if (!state.notifyOnComplete) return;
-        const lastUserMsg = [...state.messages].reverse().find((m) => m.role === 'user');
-        const snippet = lastUserMsg?.blocks.find((b) => b.kind === 'text')?.text?.slice(0, 60) || '';
-        (window as any).api.notify('Claude 任务完成', snippet);
+    const removeStatus = (window as any).api.claude.onStatusChange(
+      (payload: { conversationId?: string; status?: string }) => {
+        const { conversationId, status } = payload || {};
+        if (typeof status !== 'string') return;
+        setStatus(status as any, conversationId);
+
+        const store = useStore.getState();
+        const conv = store.conversations.find((c) => c.id === (conversationId || store.activeConversationId));
+
+        // 任务完成且窗口不在前台时，发系统通知（附该标签页的最后一条用户消息）
+        if (status === 'completed' && document.visibilityState !== 'visible') {
+          if (!store.notifyOnComplete) return;
+          const lastUserMsg = [...(conv?.messages ?? [])].reverse().find((m) => m.role === 'user');
+          const snippet = lastUserMsg?.blocks.find((b) => b.kind === 'text')?.text?.slice(0, 60) || '';
+          (window as any).api.notify('Claude 任务完成', snippet);
+        }
+
+        // 轮末（含中断，部分输出已入上下文）刷新该标签页的上下文占用
+        if (status === 'completed' || status === 'aborted') {
+          void refreshContextUsage(conversationId);
+        }
       }
-      // 轮末（含中断，部分输出已入上下文）刷新上下文占用
-      if (status === 'completed' || status === 'aborted') {
-        void refreshContextUsage();
-      }
-    });
+    );
 
     return () => {
       removeStream();
@@ -184,7 +207,8 @@ export default function App() {
         <div className="flex flex-1 overflow-hidden">
           <Sidebar />
           <div className="flex flex-col flex-1 overflow-hidden">
-            {cwd ? <ChatArea /> : <WelcomeScreen />}
+            {/* key 按标签页切换重挂载：滚动位置/草稿各自独立 */}
+            {cwd ? <ChatArea key={activeConversationId} /> : <WelcomeScreen />}
           </div>
         </div>
 

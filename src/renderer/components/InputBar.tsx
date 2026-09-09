@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useStore } from '../store';
 import { Send, Square, Sparkles, X, ListOrdered } from 'lucide-react';
-import { sendPrompt } from '../utils/send';
+import { abortConversation } from '../utils/deliver';
+import type { Conversation } from '../types';
 
 // ─── 斜杠命令定义 ──────────────────────────────────────
 interface SlashCommand {
@@ -14,7 +15,7 @@ interface SlashCommand {
 }
 
 const SLASH_COMMANDS: SlashCommand[] = [
-  { cmd: '/clear', desc: '清空当前对话，开始新会话', action: 'clear' },
+  { cmd: '/clear', desc: '新开一个对话标签页', action: 'clear' },
   { cmd: '/commit', desc: '查看 git 改动并生成 commit message', prompt: '请查看当前的 git 改动（git status 和 git diff），然后为我生成一条规范的 commit message。' },
   { cmd: '/review', desc: '审查代码，指出问题与改进建议', prompt: '请审查以下代码，指出潜在问题、代码异味和改进建议：\n\n' },
   { cmd: '/explain', desc: '解释代码的工作原理', prompt: '请详细解释以下代码的工作原理：\n\n' },
@@ -25,8 +26,8 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: '/optimize', desc: '分析并优化性能', prompt: '请分析以下代码的性能瓶颈并给出优化方案：\n\n' },
 ];
 
-export function InputBar() {
-  const [input, setInput] = useState('');
+export function InputBar({ initialDraft }: { initialDraft: string }) {
+  const [input, setInput] = useState(initialDraft);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -34,23 +35,45 @@ export function InputBar() {
   const [dragOver, setDragOver] = useState(false);
   // 输入法组合状态（中文输入法打字中），组合期间的按键属于输入法而非发送动作
   const isComposingRef = useRef(false);
+  // 草稿镜像：卸载时回写到对应标签页（切 tab 保留草稿）
+  const inputRef = useRef(input);
+  inputRef.current = input;
 
+  const conv = useStore((s): Conversation | undefined =>
+    s.conversations.find((c) => c.id === s.activeConversationId)
+  );
   const cwd = useStore((s) => s.cwd);
-  const status = useStore((s) => s.status);
   const model = useStore((s) => s.model);
-  const currentModel = useStore((s) => s.currentModel);
   const injectedText = useStore((s) => s.injectedText);
   const injectText = useStore((s) => s.injectText);
-  const newSession = useStore((s) => s.newSession);
-  const sessionId = useStore((s) => s.currentSessionId);
-  const queue = useStore((s) => s.queue);
+  const newConversation = useStore((s) => s.newConversation);
+  const sendPrompt = useStore((s) => s.sendPrompt);
   const enqueueMessage = useStore((s) => s.enqueueMessage);
-  const dequeueMessage = useStore((s) => s.dequeueMessage);
   const removeQueuedMessage = useStore((s) => s.removeQueuedMessage);
-  const clearQueue = useStore((s) => s.clearQueue);
-  const displayModel = model || currentModel;
 
-  const isStreaming = status === 'streaming' || status === 'starting';
+  const conversationId = conv?.id ?? '';
+  const queue = conv?.queue ?? [];
+  const sessionId = conv?.sessionId ?? null;
+  const displayModel = model || conv?.currentModel || '';
+
+  const isStreaming = conv?.status === 'streaming' || conv?.status === 'starting';
+
+  // 卸载时把草稿写回标签页（组件按 conversationId 重新挂载）
+  useEffect(() => {
+    return () => {
+      useStore.getState().setDraft(inputRef.current);
+    };
+  }, []);
+
+  // 初始草稿高度适配（切 tab 恢复长草稿时撑开输入框）
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (el && initialDraft) {
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 斜杠命令过滤（输入以 / 开头且单行时触发）
   const slashMatch = /^\/(\S*)$/.exec(input);
@@ -89,24 +112,6 @@ export function InputBar() {
     }
   }, [injectText]);
 
-  // 生成结束后自动发送队列中的下一条
-  const prevStatusRef = useRef(status);
-  useEffect(() => {
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = status;
-    if ((prev === 'streaming' || prev === 'starting') && status === 'completed') {
-      const next = dequeueMessage();
-      if (next) {
-        sendPrompt(next);
-      }
-    }
-    // 中断/出错时清空待发队列：这些消息是针对已失败的上下文排队的，
-    // 若保留会在下一轮完成后突然发出，与用户随后的新指令串台
-    if ((prev === 'streaming' || prev === 'starting') && (status === 'error' || status === 'aborted')) {
-      clearQueue();
-    }
-  }, [status, dequeueMessage, clearQueue]);
-
   const handleSend = useCallback(() => {
     if (!input.trim()) return;
 
@@ -118,24 +123,27 @@ export function InputBar() {
       textareaRef.current.style.height = 'auto';
     }
 
-    // 生成中：进入队列，等当前轮结束后自动续发
+    // 当前标签页生成中：进入其队列，本轮结束后自动续发
+    // （后台标签页的队列续发由 store 在 result 事件时处理）
     if (isStreaming) {
       enqueueMessage(prompt);
       return;
     }
 
-    sendPrompt(prompt);
-  }, [input, isStreaming, enqueueMessage]);
+    sendPrompt(prompt, conversationId);
+  }, [input, isStreaming, enqueueMessage, sendPrompt, conversationId]);
 
   const handleAbort = useCallback(() => {
-    (window as any).api.claude.abort();
-  }, []);
+    if (conversationId) abortConversation(conversationId);
+  }, [conversationId]);
 
   // 选中斜杠命令
   const selectCommand = useCallback((cmd: SlashCommand) => {
     setSlashOpen(false);
     if (cmd.action === 'clear') {
-      newSession();
+      // 先保存当前草稿，再新开标签页（当前对话保留在自己的 tab 里）
+      useStore.getState().setDraft(inputRef.current);
+      newConversation();
       setInput('');
       return;
     }
@@ -148,7 +156,7 @@ export function InputBar() {
         el.style.height = Math.min(el.scrollHeight, 200) + 'px';
       }
     });
-  }, [newSession]);
+  }, [newConversation]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // 输入法组合中：Enter 是确认候选词上屏，方向键是候选词导航，
@@ -181,7 +189,7 @@ export function InputBar() {
       }
     }
 
-    // ESC 中断生成
+    // ESC 中断当前标签页的生成（其他标签页不受影响）
     if (e.key === 'Escape' && isStreaming) {
       e.preventDefault();
       handleAbort();
@@ -237,7 +245,7 @@ export function InputBar() {
   return (
     <div className="px-6 py-4 border-t border-border/30 bg-bg-deep/50 backdrop-blur-sm">
       <div className="relative">
-        {/* 待发队列 */}
+        {/* 待发队列（当前标签页的） */}
         {queue.length > 0 && (
           <div className="mb-2 space-y-1 animate-fade-in">
             <div className="flex items-center gap-1.5 px-1 text-[10px] text-text-dim font-mono uppercase tracking-wider">

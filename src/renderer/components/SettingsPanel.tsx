@@ -45,7 +45,10 @@ function Toggle({ on, color, label, onClick }: {
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const model = useStore((s) => s.model);
   const setModel = useStore((s) => s.setModel);
-  const currentModel = useStore((s) => s.currentModel);
+  // 当前实际使用：活跃标签页的 CLI init 回显（各标签页可能不同）
+  const currentModel = useStore(
+    (s) => s.conversations.find((c) => c.id === s.activeConversationId)?.currentModel || ''
+  );
   const permissionMode = useStore((s) => s.permissionMode);
   const setPermissionMode = useStore((s) => s.setPermissionMode);
   const showThinking = useStore((s) => s.showThinking);

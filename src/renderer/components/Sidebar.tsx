@@ -18,17 +18,25 @@ export function Sidebar() {
   const cwd = useStore((s) => s.cwd);
   const setCwd = useStore((s) => s.setCwd);
   const sessions = useStore((s) => s.sessions);
-  const switchSession = useStore((s) => s.switchSession);
+  const openSessionTab = useStore((s) => s.openSessionTab);
   const deleteSession = useStore((s) => s.deleteSession);
-  const activeSessionIndex = useStore((s) => s.activeSessionIndex);
-  const newSession = useStore((s) => s.newSession);
+  // 活跃会话高亮：由当前标签页的 sessionId 派生（不再是存储的索引）
+  const activeSessionId = useStore((s) => {
+    const conv = s.conversations.find((c) => c.id === s.activeConversationId);
+    return conv?.sessionId ?? null;
+  });
+  const newConversation = useStore((s) => s.newConversation);
   const renameSession = useStore((s) => s.renameSession);
   const totalInputTokens = useStore((s) => s.totalInputTokens);
   const totalOutputTokens = useStore((s) => s.totalOutputTokens);
-  const status = useStore((s) => s.status);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
   const setSidebarWidth = useStore((s) => s.setSidebarWidth);
-  const isStreaming = status === 'streaming' || status === 'starting';
+  const conversations = useStore((s) => s.conversations);
+  /** 删除限制：该会话是否有正在生成的标签页 */
+  const isStreamingRow = (sessionId: string) =>
+    conversations.some(
+      (c) => c.sessionId === sessionId && (c.status === 'streaming' || c.status === 'starting')
+    );
 
   const [showSettings, setShowSettings] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
@@ -75,14 +83,12 @@ export function Sidebar() {
   }, [sidebarWidth, setSidebarWidth]);
 
   const handleOpenDir = async () => {
-    // 生成中禁止切换项目：newSession 会被状态机静默跳过，否则会落下
-    // 「新目录 + 旧会话 --resume」的跨项目串台组合
-    if (isStreaming) return;
     const dir = await (window as any).api.openDirectory();
     if (dir) {
-      // 先归档旧对话（携带旧 cwd），再切到新目录；顺序颠倒会把旧对话归到新目录名下
-      newSession();
+      // 先更新全局 cwd，再基于新目录新开标签页；
+      // 已开标签页各自持有创建时的 cwd 快照，运行中的任务不受影响
       setCwd(dir);
+      newConversation();
     }
   };
 
@@ -103,9 +109,8 @@ export function Sidebar() {
         <div className="p-3 border-b border-border/30">
           <button
             onClick={handleOpenDir}
-            disabled={isStreaming}
-            title={isStreaming ? '生成中，请先停止或等待完成' : undefined}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-light hover:bg-bg-lighter border border-border hover:border-accent-cyan/40 transition-all group disabled:opacity-40 disabled:cursor-not-allowed"
+            title="切换项目目录（只影响新开的对话标签页，运行中的任务不受影响）"
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-light hover:bg-bg-lighter border border-border hover:border-accent-cyan/40 transition-all group"
           >
             <FolderOpen className="w-4 h-4 text-accent-cyan shrink-0" />
             <div className="flex-1 text-left min-w-0">
@@ -125,9 +130,9 @@ export function Sidebar() {
         {/* 新建会话 */}
         <div className="p-3 pb-2">
           <button
-            onClick={newSession}
-            disabled={!cwd || isStreaming}
-            title={isStreaming ? '生成中，请先停止或等待完成' : undefined}
+            onClick={() => newConversation()}
+            disabled={!cwd}
+            title={cwd ? '新对话标签页（可与其他标签页并行生成）' : '先选择项目目录'}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r from-accent-cyan/10 to-accent-blue/10 hover:from-accent-cyan/20 hover:to-accent-blue/20 border border-accent-cyan/30 hover:border-accent-cyan/50 transition-all disabled:opacity-40 disabled:cursor-not-allowed group"
           >
             <Plus className="w-4 h-4 text-accent-cyan group-hover:rotate-90 transition-transform" />
@@ -171,30 +176,30 @@ export function Sidebar() {
                   {sessions.map((session, i) => {
                     const confirming = confirmDeleteIdx === i;
                     const editing = editingIdx === i;
+                    const isActive = session.sessionId === activeSessionId;
                     return (
                     <div
                       key={session.sessionId}
                       onClick={() => {
-                        if (isStreaming) return;
                         // 重命名/删除确认中的行：点击行体视为退出该模式
                         if (editing) { setEditingIdx(-1); return; }
                         if (confirming) { setConfirmDeleteIdx(-1); return; }
                         setConfirmDeleteIdx(-1);
-                        switchSession(i);
+                        // 点击归档会话：已开则激活对应标签页，未开则新 tab 载入
+                        // （多标签页下切换会话不再受生成中限制，其他标签页照常运行）
+                        openSessionTab(session.sessionId);
                       }}
                       className={`w-full flex items-start gap-2 px-2.5 py-2 rounded-lg transition-all text-left group ${
-                        isStreaming ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
-                      } ${
                         confirming
                           ? 'bg-red-500/10 border border-red-500/40'
-                          : i === activeSessionIndex
+                          : isActive
                             ? 'bg-accent-cyan/10 border border-accent-cyan/30'
                             : 'hover:bg-bg-light border border-transparent'
                       }`}
                     >
                       <MessageSquare
                         className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
-                          confirming ? 'text-red-400' : i === activeSessionIndex ? 'text-accent-cyan' : 'text-text-muted'
+                          confirming ? 'text-red-400' : isActive ? 'text-accent-cyan' : 'text-text-muted'
                         }`}
                       />
                       <div className="flex-1 min-w-0">
@@ -288,10 +293,10 @@ export function Sidebar() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (!isStreaming) setConfirmDeleteIdx(i);
+                              if (!isStreamingRow(session.sessionId)) setConfirmDeleteIdx(i);
                             }}
-                            disabled={isStreaming}
-                            title={isStreaming ? '生成中无法删除' : '删除会话'}
+                            disabled={isStreamingRow(session.sessionId)}
+                            title={isStreamingRow(session.sessionId) ? '该会话正在生成，无法删除' : '删除会话'}
                             className="text-text-dim hover:text-red-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                           >
                             <Trash2 className="w-3.5 h-3.5" />

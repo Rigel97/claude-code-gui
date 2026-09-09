@@ -5,7 +5,7 @@ import cp from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// 捕获 runner 广播的 stream/status 事件
+// 捕获 runner 广播的 stream/status 事件（多标签页：status 为 {conversationId, status}）
 const captured = { stream: [], status: [] };
 
 // electron stub：纯 Node 环境 require('electron') 返回二进制路径字符串
@@ -78,10 +78,11 @@ describe.skipIf(process.platform === 'win32')('ClaudeRunner 生命周期（代�
     captured.status.length = 0;
   });
 
-  it('T1 正常完成：状态序列 starting → completed', async () => {
+  it('T1 正常完成：状态序列 starting → completed（携带 conversationId）', async () => {
     const r = await runner.send({ prompt: 'normal', cwd: '/tmp' });
     expect(r.success).toBe(true);
-    expect(captured.status).toEqual(['starting', 'completed']);
+    expect(captured.status.map((d) => d.status)).toEqual(['starting', 'completed']);
+    expect(captured.status.every((d) => typeof d.conversationId === 'string')).toBe(true);
   });
 
   it('T2 中断后立即重发：旧进程完全退出后才启动新进程，残流被丢弃', async () => {
@@ -92,15 +93,15 @@ describe.skipIf(process.platform === 'win32')('ClaudeRunner 生命周期（代�
     const pidA = initA.pid;
 
     runner.abort();
-    expect(captured.status).toContain('aborted');
+    expect(captured.status.map((d) => d.status)).toContain('aborted');
     const streamLenAtAbort = captured.stream.length;
 
     const sendB = runner.send({ prompt: 'normal', cwd: '/tmp' }); // A 可能仍在退出中
     await sendB;
 
     expect(alive(pidA)).toBe(false); // waitForExit 生效
-    expect(captured.status[0]).toBe('starting');
-    expect(captured.status).toContain('completed');
+    expect(captured.status.map((d) => d.status)[0]).toBe('starting');
+    expect(captured.status.map((d) => d.status)).toContain('completed');
     // abort 之后不得再出现 A 的任何输出（黑洞生效）
     const tail = captured.stream.slice(streamLenAtAbort);
     expect(tail.filter((d) => d.type === 'assistant' && String(d.message?.content?.[0]?.text || '').includes(`hello-from-${pidA}`))).toHaveLength(0);
@@ -134,7 +135,7 @@ describe.skipIf(process.platform === 'win32')('ClaudeRunner 生命周期（代�
     const sendE = runner.send({ prompt: 'normal', cwd: '/tmp' }); // 等 stubborn 退出后启动
     // stubborn 需等 SIGKILL（~2s），轮询到 E 的 starting 再断言
     let waited = 0;
-    while (!captured.status.slice(1).includes('starting') && waited < 5000) {
+    while (!captured.status.slice(1).some((d) => d.status === 'starting') && waited < 5000) {
       await sleep(100);
       waited += 100;
     }
@@ -142,7 +143,7 @@ describe.skipIf(process.platform === 'win32')('ClaudeRunner 生命周期（代�
     runner.abort(); // 再次 ESC 应能停掉 E
     await sendE;
     expect(runner.currentProcess).toBeNull();
-    expect(captured.status).toEqual(['starting', 'aborted', 'starting', 'aborted']);
+    expect(captured.status.map((d) => d.status)).toEqual(['starting', 'aborted', 'starting', 'aborted']);
     await sendD; // 兜底回收（SIGKILL 后早已 resolve）
   });
 
@@ -150,7 +151,28 @@ describe.skipIf(process.platform === 'win32')('ClaudeRunner 生命周期（代�
     const r = await runner.send({ prompt: 'x', cwd: '/definitely/not/exist' });
     expect(r.success).toBe(false);
     expect(r.error).toContain('工作目录不存在');
-    expect(captured.status).toEqual(['starting', 'error']);
+    expect(captured.status.map((d) => d.status)).toEqual(['starting', 'error']);
     expect(runner.currentProcess).toBeNull();
+  });
+
+  it('T6 多标签页：不同 conversationId 的 runner 互不干扰，流事件携带各自 id', async () => {
+    const runnerA = new ClaudeRunner('conv-a');
+    const runnerB = new ClaudeRunner('conv-b');
+    captured.stream.length = 0;
+
+    // 并行发送（两个进程同时运行）
+    const sendA = runnerA.send({ prompt: 'normal', cwd: '/tmp' });
+    const sendB = runnerB.send({ prompt: 'normal', cwd: '/tmp' });
+    const [ra, rb] = await Promise.all([sendA, sendB]);
+
+    expect(ra.success).toBe(true);
+    expect(rb.success).toBe(true);
+    // 两个进程的 init 事件各自携带自己的 conversationId
+    const initsA = captured.stream.filter((d) => d.type === 'system' && d.conversationId === 'conv-a');
+    const initsB = captured.stream.filter((d) => d.type === 'system' && d.conversationId === 'conv-b');
+    expect(initsA.length).toBeGreaterThan(0);
+    expect(initsB.length).toBeGreaterThan(0);
+    expect(runnerA.isIdle()).toBe(true);
+    expect(runnerB.isIdle()).toBe(true);
   });
 });

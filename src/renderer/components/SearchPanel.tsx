@@ -4,13 +4,16 @@ import { Search, X, User, Bot } from 'lucide-react';
 import type { ChatMessage, Session, UIBlock } from '../types';
 
 interface SearchHit {
-  session: Session;
-  sessionIndex: number;
+  /** 展示用标题（标签页/会话标题） */
+  title: string;
   message: ChatMessage;
   snippet: string;
   /** 命中片段在原文中的起始位置（用于高亮） */
   matchStart: number;
   queryLen: number;
+  /** 跳转目标：优先激活已打开的标签页；归档会话则打开为标签页 */
+  conversationId: string | null;
+  sessionId: string | null;
 }
 
 /** 提取消息的可搜索纯文本（含工具调用的命令/路径摘要） */
@@ -46,17 +49,15 @@ export function SearchPanel() {
   const open = useStore((s) => s.searchOpen);
   const setOpen = useStore((s) => s.setSearchOpen);
   const sessions = useStore((s) => s.sessions);
-  const messages = useStore((s) => s.messages);
-  const activeSessionIndex = useStore((s) => s.activeSessionIndex);
-  const switchSession = useStore((s) => s.switchSession);
+  const conversations = useStore((s) => s.conversations);
+  const setActiveConversation = useStore((s) => s.setActiveConversation);
+  const openSessionTab = useStore((s) => s.openSessionTab);
   const setHighlightMessage = useStore((s) => s.setHighlightMessage);
-  const status = useStore((s) => s.status);
 
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   // 输入法组合状态：组合中的 Enter 是确认上屏而非跳转
   const isComposingRef = useRef(false);
-  const isStreaming = status === 'streaming' || status === 'starting';
 
   useEffect(() => {
     if (open) {
@@ -65,59 +66,53 @@ export function SearchPanel() {
     }
   }, [open]);
 
-  // 跨会话搜索（当前未归档会话也参与）
+  // 跨会话搜索：所有打开的标签页（含活跃）+ 全部归档会话，按消息 id 去重
   const hits = useMemo(() => {
     const q = query.trim();
     if (q.length < 2) return [];
     const results: SearchHit[] = [];
+    const seen = new Set<string>();
     const MAX_RESULTS = 50;
 
-    outer: for (let sessionIndex = 0; sessionIndex < sessions.length; sessionIndex++) {
-      const session = sessions[sessionIndex];
-      // 会话标题命中
-      for (const message of session.messages) {
+    const scan = (messages: ChatMessage[], title: string, conversationId: string | null, sessionId: string | null) => {
+      for (const message of messages) {
+        if (seen.has(message.id)) continue;
         const text = messageText(message);
         const hit = makeSnippet(text, q);
         if (hit) {
-          results.push({ session, sessionIndex, message, queryLen: q.length, ...hit });
-          if (results.length >= MAX_RESULTS) break outer;
+          seen.add(message.id);
+          results.push({ title, message, queryLen: q.length, conversationId, sessionId, ...hit });
+          if (results.length >= MAX_RESULTS) return true;
         }
       }
-    }
+      return false;
+    };
 
-    // 当前对话（可能未归档到 sessions：新会话首轮回复前、或被中断的对话）
-    const covered = activeSessionIndex >= 0 ? sessions[activeSessionIndex]?.messages : null;
-    if (messages.length > 0 && messages !== covered) {
-      const pseudoSession: Session = {
-        sessionId: '__current__',
-        cwd: '',
-        title: '当前会话（未归档）',
-        messages,
-        createdAt: Date.now(),
-        cost: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      };
-      for (const message of messages) {
-        const text = messageText(message);
-        const hit = makeSnippet(text, q);
-        if (hit) {
-          results.push({ session: pseudoSession, sessionIndex: -1, message, queryLen: q.length, ...hit });
-          if (results.length >= MAX_RESULTS) break;
-        }
+    // 打开的标签页优先（跳转直接激活，不必新开）
+    for (const conv of conversations) {
+      if (scan(conv.messages, conv.title || '未命名对话', conv.id, conv.sessionId)) break;
+    }
+    // 归档会话（未被标签页覆盖的消息）
+    if (results.length < MAX_RESULTS) {
+      for (const session of sessions) {
+        // 已有同 sessionId 的标签页：其消息已扫过，跳过会话条目避免重复展示
+        const covered = conversations.some((c) => c.sessionId === session.sessionId);
+        if (covered) continue;
+        if (scan(session.messages, session.title, null, session.sessionId)) break;
       }
     }
 
     return results.slice(0, MAX_RESULTS);
-  }, [query, sessions, messages, activeSessionIndex]);
+  }, [query, sessions, conversations]);
 
   if (!open) return null;
 
   const jumpTo = (hit: SearchHit) => {
-    if (isStreaming) return; // 生成中禁止切换会话
-    // sessionIndex 为 -1 表示当前未归档会话，无需切换，直接高亮
-    if (hit.sessionIndex >= 0 && hit.sessionIndex !== activeSessionIndex) {
-      switchSession(hit.sessionIndex);
+    // 先切到目标标签页（多标签页下跳转不受生成中限制）
+    if (hit.conversationId) {
+      setActiveConversation(hit.conversationId);
+    } else if (hit.sessionId) {
+      openSessionTab(hit.sessionId);
     }
     setHighlightMessage(hit.message.id);
     setOpen(false);
@@ -167,8 +162,7 @@ export function SearchPanel() {
             <button
               key={`${hit.message.id}-${i}`}
               onClick={() => jumpTo(hit)}
-              disabled={isStreaming}
-              className="w-full flex items-start gap-2.5 px-4 py-2.5 text-left hover:bg-bg-light transition-colors border-b border-border/20 last:border-0 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full flex items-start gap-2.5 px-4 py-2.5 text-left hover:bg-bg-light transition-colors border-b border-border/20 last:border-0"
             >
               {hit.message.role === 'user' ? (
                 <User className="w-3.5 h-3.5 text-accent-blue shrink-0 mt-0.5" />
@@ -178,7 +172,7 @@ export function SearchPanel() {
               <div className="flex-1 min-w-0">
                 <HighlightedSnippet snippet={hit.snippet} query={query.trim()} />
                 <div className="text-[10px] text-text-dim font-mono mt-0.5 truncate">
-                  {hit.session.title} · {new Date(hit.message.timestamp).toLocaleString()}
+                  {hit.title} · {new Date(hit.message.timestamp).toLocaleString()}
                 </div>
               </div>
             </button>

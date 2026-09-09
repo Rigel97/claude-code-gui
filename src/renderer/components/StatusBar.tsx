@@ -1,7 +1,7 @@
 import { useStore } from '../store';
 import { Circle, Loader, CheckCircle, XCircle, Pause, Activity, Zap, Database, Archive } from 'lucide-react';
 import { useState } from 'react';
-import type { RunStatus, ContextUsage } from '../types';
+import type { RunStatus, ContextUsage, Conversation } from '../types';
 
 const STATUS_CONFIG: Record<RunStatus, { icon: React.ReactNode; label: string; color: string }> = {
   idle: { icon: <Circle className="w-3 h-3" />, label: '就绪', color: 'text-text-muted' },
@@ -13,24 +13,38 @@ const STATUS_CONFIG: Record<RunStatus, { icon: React.ReactNode; label: string; c
 };
 
 export function StatusBar() {
-  const status = useStore((s) => s.status);
-  const thinkingTokens = useStore((s) => s.thinkingTokens);
+  const conv = useStore((s): Conversation | undefined =>
+    s.conversations.find((c) => c.id === s.activeConversationId)
+  );
+  // 其他标签页的运行计数（并行会话指示）
+  const runningOthers = useStore(
+    (s) => s.conversations.filter((c) => c.id !== s.activeConversationId && (c.status === 'streaming' || c.status === 'starting')).length
+  );
   const totalInputTokens = useStore((s) => s.totalInputTokens);
   const totalOutputTokens = useStore((s) => s.totalOutputTokens);
   const cwd = useStore((s) => s.cwd);
-  const currentModel = useStore((s) => s.currentModel);
-  const contextUsage = useStore((s) => s.contextUsage);
-  const sessionId = useStore((s) => s.currentSessionId);
+  const model = useStore((s) => s.model);
   const setContextUsage = useStore((s) => s.setContextUsage);
+
+  const status = conv?.status ?? 'idle';
+  const thinkingTokens = conv?.thinkingTokens ?? 0;
+  const contextUsage = conv?.contextUsage ?? null;
+  const sessionId = conv?.sessionId ?? null;
+  const convCwd = conv?.cwd ?? cwd;
+  const currentModel = conv?.currentModel || '';
+  const displayModel = model || currentModel;
+
+  const config = STATUS_CONFIG[status];
+  const isBusy = status === 'streaming' || status === 'starting';
 
   // 上下文压缩进行中（CLI /compact，需一次总结调用，可能耗时较长）
   const [compacting, setCompacting] = useState(false);
 
   const handleCompact = async () => {
-    if (compacting || !cwd || !sessionId) return;
+    if (compacting || !convCwd || !sessionId) return;
     setCompacting(true);
     try {
-      const r = await (window as any).api.claude.compact(cwd, sessionId);
+      const r = await (window as any).api.claude.compact(convCwd, sessionId);
       if (r?.context) setContextUsage(r.context);
       if (r && r.success === false) {
         (window as any).api.notify('上下文压缩失败', String(r.error || '未知错误'));
@@ -41,9 +55,6 @@ export function StatusBar() {
       setCompacting(false);
     }
   };
-
-  const config = STATUS_CONFIG[status];
-  const isBusy = status === 'streaming' || status === 'starting';
 
   return (
     <div className="flex items-center justify-between h-7 px-4 bg-bg-deep border-t border-border/30 text-[10px] font-mono shrink-0">
@@ -60,7 +71,15 @@ export function StatusBar() {
           </div>
         )}
 
-        {/* 上下文水位计 + 压缩按钮 */}
+        {/* 并行会话指示：其他标签页正在生成 */}
+        {runningOthers > 0 && (
+          <div className="flex items-center gap-1 text-accent-cyan" title="其他标签页正在生成，点击对应标签查看">
+            <Activity className="w-3 h-3 animate-pulse" />
+            <span>{runningOthers} 个后台对话运行中</span>
+          </div>
+        )}
+
+        {/* 上下文水位计 + 压缩按钮（当前标签页的） */}
         {contextUsage && (
           <>
             <ContextMeter usage={contextUsage} />
@@ -82,12 +101,12 @@ export function StatusBar() {
 
       {/* 右侧：统计 */}
       <div className="flex items-center gap-4 text-text-muted">
-        {currentModel && (
-          <span className="text-accent-purple">{currentModel}</span>
+        {displayModel && (
+          <span className="text-accent-purple">{displayModel}</span>
         )}
 
-        {cwd && (
-          <span className="text-text-dim truncate max-w-xs">{cwd}</span>
+        {convCwd && (
+          <span className="text-text-dim truncate max-w-xs">{convCwd}</span>
         )}
 
         <div className="flex items-center gap-1 text-accent-blue">
