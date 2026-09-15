@@ -56,9 +56,13 @@ setMaxBudgetUsd: (n: number) => void;
   renameSession: (index: number, title: string) => void;
   deleteSession: (index: number) => void;
 
-  // 输入框文本注入（文件树点击 @引用 / 粘贴图片路径等）
-  injectedText: { text: string; nonce: number } | null;
+  // 输入框文本注入（文件树点击 @引用 / 粘贴图片路径等）。
+  // convId 记录注入时的目标标签页：消费端（InputBar）按其匹配后才消费，
+  // 且消费后立即清除——否则 InputBar 每次重挂载（切 tab/新开/关闭标签页）
+  // 都会因 effect 随挂载执行而把残留路径重复追加进输入框
+  injectedText: { text: string; nonce: number; convId: string } | null;
   injectText: (text: string) => void;
+  clearInjectedText: () => void;
 
   // 待发消息队列（作用于活跃标签页；后台标签页的队列在 result 时自动续发）
   enqueueMessage: (text: string) => void;
@@ -505,6 +509,8 @@ permissionMode: state.permissionMode,
       set({
         sessions,
         conversations,
+        // 清理指向被关闭标签页的未消费注入，避免其永久滞留 store
+        injectedText: state.injectedText?.convId === id ? null : state.injectedText,
         activeConversationId:
           state.activeConversationId === id ? conversations[0].id : state.activeConversationId,
       });
@@ -655,7 +661,11 @@ maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.rou
     },
 
     injectedText: null,
-    injectText: (text) => set({ injectedText: { text, nonce: Date.now() } }),
+    injectText: (text) =>
+      set({ injectedText: { text, nonce: Date.now(), convId: get().activeConversationId } }),
+    clearInjectedText: () => {
+      if (get().injectedText) set({ injectedText: null });
+    },
 
     enqueueMessage: (text) => {
       const state = get();

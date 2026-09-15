@@ -82,12 +82,16 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
     : [];
   const showSlash = slashOpen && filteredCommands.length > 0;
 
-  // 消费外部注入的文本（文件树 @引用 / 粘贴图片路径）
+  // 消费外部注入的文本（文件树 @引用 / 粘贴图片路径）。
+  // 只消费目标为当前标签页的注入，且消费后立即清除：
+  // 若不清除，InputBar 每次重挂载（切 tab / 新开 / 关闭标签页）时本 effect
+  // 都会随挂载重新执行，把残留的路径一遍遍追加进输入框并抢走焦点
   useEffect(() => {
-    if (!injectedText) return;
+    if (!injectedText || injectedText.convId !== conversationId) return;
     setInput((prev) => prev + injectedText.text);
+    useStore.getState().clearInjectedText();
     textareaRef.current?.focus();
-  }, [injectedText]);
+  }, [injectedText, conversationId]);
 
   /** 粘贴图片（截图等）→ 存临时文件 → 插入 @ 引用，可继续补文字后发送；
    *  纯文本粘贴不受影响，走浏览器默认行为 */

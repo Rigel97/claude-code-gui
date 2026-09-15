@@ -44,6 +44,7 @@ const reset = () => {
     searchOpen: false,
     highlightMessageId: null,
     forceScrollNonce: 0,
+    injectedText: null,
   });
   s().newConversation();
 };
@@ -801,5 +802,46 @@ describe('activity 阶段反馈（反馈条数据源）', () => {
     expect(conv().activity).not.toBeNull();
     const snap = snapshotConversations(s().conversations);
     expect(snap[0].activity).toBeNull();
+  });
+});
+
+describe('输入框注入（injectedText）的定向与清理', () => {
+  it('injectText 记录注入时的目标标签页（活跃页）', () => {
+    const a = conv().id;
+    s().injectText('@src/a.ts ');
+    expect(s().injectedText).not.toBeNull();
+    expect(s().injectedText!.text).toBe('@src/a.ts ');
+    expect(s().injectedText!.convId).toBe(a);
+
+    // 切到另一个标签页后注入：目标跟随新的活跃页
+    const b = s().newConversation();
+    s().injectText('@src/b.ts ');
+    expect(s().injectedText!.convId).toBe(b);
+    expect(s().injectedText!.convId).not.toBe(a);
+  });
+
+  it('clearInjectedText 消费即清除（重复调用无副作用）', () => {
+    s().injectText('@x ');
+    expect(s().injectedText).not.toBeNull();
+    s().clearInjectedText();
+    expect(s().injectedText).toBeNull();
+    // 已为 null 时再调不得抛异常/产生新状态
+    s().clearInjectedText();
+    expect(s().injectedText).toBeNull();
+  });
+
+  it('关闭目标标签页时清理其未消费的注入，非目标注入保留', () => {
+    const a = conv().id;
+    const b = s().newConversation(); // 活跃页切到 b
+    s().setActiveConversation(a);
+    s().injectText('@only-a '); // 目标是 a
+
+    // 关闭非目标标签页 b：注入保留（仍待 a 消费）
+    s().closeConversation(b);
+    expect(s().injectedText?.text).toBe('@only-a ');
+
+    // 关闭目标标签页 a：注入随之清理，不残留
+    s().closeConversation(a);
+    expect(s().injectedText).toBeNull();
   });
 });
