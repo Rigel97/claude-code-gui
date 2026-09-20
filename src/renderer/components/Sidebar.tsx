@@ -1,10 +1,12 @@
 import { useStore } from '../store';
-import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3, Download, Trash2, Check, X, Zap, Pencil } from 'lucide-react';
+import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3, Download, Trash2, Check, X, Zap, Pencil, Pin, GitBranch } from 'lucide-react';
 import { useState, useCallback, useRef } from 'react';
 import { SettingsPanel } from './SettingsPanel';
 import { FileTree } from './FileTree';
 import { SkillList } from './SkillList';
 import { CostDashboard } from './CostDashboard';
+import { GitPanel } from './GitPanel';
+import { TokenPet } from './TokenPet';
 import { sessionToMarkdown } from '../utils/exportSession';
 import type { Session } from '../types';
 
@@ -27,6 +29,7 @@ export function Sidebar() {
   });
   const newConversation = useStore((s) => s.newConversation);
   const renameSession = useStore((s) => s.renameSession);
+  const togglePinSession = useStore((s) => s.togglePinSession);
   const totalInputTokens = useStore((s) => s.totalInputTokens);
   const totalOutputTokens = useStore((s) => s.totalOutputTokens);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
@@ -40,7 +43,7 @@ export function Sidebar() {
 
   const [showSettings, setShowSettings] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
-  const [tab, setTab] = useState<'sessions' | 'files' | 'skills'>('sessions');
+  const [tab, setTab] = useState<'sessions' | 'files' | 'git' | 'skills'>('sessions');
   // 正在确认删除的会话索引（-1 表示无）
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState(-1);
   // 正在重命名的会话索引（-1 表示无）与其编辑框内容
@@ -140,7 +143,7 @@ export function Sidebar() {
           </button>
         </div>
 
-        {/* 标签页切换：会话 / 文件 / 技能 */}
+        {/* 标签页切换：会话 / 文件 / Git / 技能 */}
         <div className="flex gap-1 px-3 pb-2">
           <TabButton
             active={tab === 'sessions'}
@@ -153,6 +156,13 @@ export function Sidebar() {
             onClick={() => setTab('files')}
             icon={<Files className="w-3 h-3" />}
             label="文件"
+            disabled={!cwd}
+          />
+          <TabButton
+            active={tab === 'git'}
+            onClick={() => setTab('git')}
+            icon={<GitBranch className="w-3 h-3" />}
+            label="Git"
             disabled={!cwd}
           />
           <TabButton
@@ -177,6 +187,7 @@ export function Sidebar() {
                     const confirming = confirmDeleteIdx === i;
                     const editing = editingIdx === i;
                     const isActive = session.sessionId === activeSessionId;
+                    const pinned = !!session.pinned;
                     return (
                     <div
                       key={session.sessionId}
@@ -194,12 +205,14 @@ export function Sidebar() {
                           ? 'bg-red-500/10 border border-red-500/40'
                           : isActive
                             ? 'bg-accent-cyan/10 border border-accent-cyan/30'
-                            : 'hover:bg-bg-light border border-transparent'
+                            : pinned
+                              ? 'bg-bg-light/60 border border-accent-yellow/25'
+                              : 'hover:bg-bg-light border border-transparent'
                       }`}
                     >
                       <MessageSquare
                         className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
-                          confirming ? 'text-red-400' : isActive ? 'text-accent-cyan' : 'text-text-muted'
+                          confirming ? 'text-red-400' : isActive ? 'text-accent-cyan' : pinned ? 'text-accent-yellow/80' : 'text-text-muted'
                         }`}
                       />
                       <div className="flex-1 min-w-0">
@@ -228,7 +241,7 @@ export function Sidebar() {
                               renameSession(i, editTitle);
                               setEditingIdx(-1);
                             }}
-                            className="w-full px-1.5 py-0.5 rounded-md text-xs text-text-primary bg-bg-deeper border border-accent-cyan/40 outline-none font-mono"
+                            className="w-full px-1.5 py-0.5 rounded-md text-xs text-text-primary bg-bg-deepest border border-accent-cyan/40 outline-none font-mono caret-accent-cyan"
                           />
                         ) : (
                           <>
@@ -267,40 +280,55 @@ export function Sidebar() {
                           </button>
                         </div>
                       ) : (
-                        // 重命名 + 导出 + 删除（hover 显示）
-                        <div className="flex items-center gap-1 shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingIdx(i);
-                              setEditTitle(session.title);
-                            }}
-                            className="text-text-dim hover:text-accent-cyan transition-colors"
-                            title="重命名会话"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleExport(session);
-                            }}
-                            className="text-text-dim hover:text-accent-cyan transition-colors"
-                            title="导出为 Markdown"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (!isStreamingRow(session.sessionId)) setConfirmDeleteIdx(i);
-                            }}
-                            disabled={isStreamingRow(session.sessionId)}
-                            title={isStreamingRow(session.sessionId) ? '该会话正在生成，无法删除' : '删除会话'}
-                            className="text-text-dim hover:text-red-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                        // 置顶标记（常驻小图钉）+ 重命名 + 导出 + 删除（hover 显示）
+                        <div className="flex items-center gap-1 shrink-0 mt-0.5">
+                          {pinned && (
+                            <Pin className="w-3 h-3 text-accent-yellow/70 fill-accent-yellow/30 shrink-0" />
+                          )}
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                togglePinSession(i);
+                              }}
+                              className={`${pinned ? 'text-accent-yellow' : 'text-text-dim hover:text-accent-yellow'} transition-colors`}
+                              title={pinned ? '取消置顶' : '置顶会话'}
+                            >
+                              <Pin className={`w-3.5 h-3.5 ${pinned ? 'fill-accent-yellow/40' : ''}`} />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingIdx(i);
+                                setEditTitle(session.title);
+                              }}
+                              className="text-text-dim hover:text-accent-cyan transition-colors"
+                              title="重命名会话"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleExport(session);
+                              }}
+                              className="text-text-dim hover:text-accent-cyan transition-colors"
+                              title="导出为 Markdown"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!isStreamingRow(session.sessionId)) setConfirmDeleteIdx(i);
+                              }}
+                              disabled={isStreamingRow(session.sessionId)}
+                              title={isStreamingRow(session.sessionId) ? '该会话正在生成，无法删除' : '删除会话'}
+                              className="text-text-dim hover:text-red-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -311,13 +339,19 @@ export function Sidebar() {
             </>
           ) : tab === 'skills' ? (
             <SkillList />
+          ) : tab === 'git' ? (
+            cwd && <GitPanel cwd={cwd} />
           ) : (
             cwd && <FileTree root={cwd} />
           )}
         </div>
 
         {/* 底部 */}
-        <div className="p-3 border-t border-border/30 space-y-2">          {/* 总 Token 用量（点击打开用量统计） */}
+        <div className="p-3 border-t border-border/30 space-y-2">
+          {/* Token 宠物：随用量进化，点击切换形态 */}
+          <TokenPet />
+
+          {/* 总 Token 用量（点击打开用量统计） */}
           <button
             onClick={() => setShowDashboard(true)}
             className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg bg-bg-light/50 hover:bg-bg-light hover:border-accent-green/30 border border-transparent transition-all group"

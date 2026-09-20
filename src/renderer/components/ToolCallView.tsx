@@ -4,7 +4,7 @@ import { DiffView } from './DiffView';
 import {
   Terminal, FileEdit, FileSearch, FilePlus, FileMinus,
   ChevronDown, ChevronRight, Loader, CheckCircle, XCircle,
-  Globe, Search, GitBranch, Wrench, Bot
+  Globe, Search, GitBranch, Wrench, Bot, ListTodo
 } from 'lucide-react';
 
 function formatElapsed(ms: number): string {
@@ -44,6 +44,7 @@ const TOOL_ICONS: Record<string, React.ReactNode> = {
   Task: <Wrench className="w-4 h-4" />,
   // CLI 2.x 子代理工具已从 Task 改名为 Agent（实测 2.1.229）
   Agent: <Bot className="w-4 h-4" />,
+  TodoWrite: <ListTodo className="w-4 h-4" />,
 };
 
 const TOOL_COLORS: Record<string, string> = {
@@ -55,6 +56,7 @@ const TOOL_COLORS: Record<string, string> = {
   WebSearch: 'text-accent-purple border-accent-purple/30 bg-accent-purple/5',
   Task: 'text-accent-yellow border-accent-yellow/30 bg-accent-yellow/5',
   Agent: 'text-accent-yellow border-accent-yellow/30 bg-accent-yellow/5',
+  TodoWrite: 'text-accent-purple border-accent-purple/30 bg-accent-purple/5',
 };
 
 export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { kind: 'tool_use' }>; depth?: number }) {
@@ -246,6 +248,13 @@ function generateSummary(toolName: string, input: Record<string, unknown>): stri
       return (input.description as string) || '';
     case 'Agent':
       return (input.description as string) || '';
+    case 'TodoWrite': {
+      // 摘要显示任务进度（如「3/7 已完成」）
+      const todos = Array.isArray(input.todos) ? (input.todos as { status?: string }[]) : [];
+      if (todos.length === 0) return '';
+      const done = todos.filter((t) => t.status === 'completed').length;
+      return `${done}/${todos.length} 已完成`;
+    }
     default:
       return Object.values(input).map(String).join(' ').slice(0, 80);
   }

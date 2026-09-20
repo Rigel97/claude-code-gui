@@ -1,6 +1,6 @@
 # Claude Code GUI
 
-A futuristic desktop GUI for [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — multi-tab parallel conversations, image input, streaming chat, tool-call visualization, line-level diffs, file tree, cross-session search, and a token usage dashboard.
+A futuristic desktop GUI for [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — multi-tab parallel conversations, image input, streaming chat, tool-call visualization, line-level diffs, file tree, cross-session search, a token usage dashboard, AI session naming, a Git changes panel, a TodoWrite progress panel, a file previewer, and an interactive token-fed pet.
 
 ---
 
@@ -11,18 +11,24 @@ A futuristic desktop GUI for [Claude Code CLI](https://docs.anthropic.com/en/doc
 - **Image Input** — Paste screenshots (⌘V) straight into the input; they are saved to a temp dir and attached as `@path` references. Drag-and-drop of files works too
 - **Copy Anything** — All message content (replies, thinking, tool output) is selectable; hover any message for a one-click copy button below its final reply; standard Edit menu roles make ⌘C/⌘A reliable on macOS
 - **Tool Call Visualization** — Bash, Read, Write, Edit and other tool calls rendered as collapsible cards with status indicators; sub-agent (`Task`/`Agent`) output nests under its parent call
+- **TodoWrite Progress Panel** — The CLI's `TodoWrite` calls are surfaced as a live checklist under the tab bar: progress bar, per-item status, and the current in-progress task at a glance; the list is rebuilt when reopening an archived session
 - **Line-level Diff View** — `Edit` / `Write` / `MultiEdit` calls show red/green diffs with collapsible context (custom LCS diff engine, degrades gracefully on huge files)
-- **File Tree Sidebar** — Browse the project directory, click a file to insert an `@path` reference into the input
+- **File Tree Sidebar** — Browse the project directory, click a file to insert an `@path` reference into the input; hover a file and hit the 👁 button to preview it
+- **File Previewer** — Modal preview with syntax-highlighted text (512KB cap, binary detection, truncation notice) and inline image preview (png/jpg/gif/webp/bmp/ico)
+- **Git Changes Panel** — A fourth sidebar tab showing the current branch and working-tree changes (`M`/`A`/`D`/`?`/staged badges); files Claude touched in the active session get an ✨AI badge, click an entry to expand its unified diff, and revert single files via a confirmed `git checkout --`
 - **Slash Commands** — Type `/` for quick prompts: `/review`, `/fix`, `/test`, `/commit`, `/clear` and more
 - **Message Queue** — Typed messages during a running generation queue up and auto-send when it completes, per tab; failed turns drop their queue so it never bleeds into your next instruction
 - **Cross-session Search** — `⌘F` / `Ctrl+F` searches all open tabs plus archived sessions; jump-to-message routes to the right tab and highlights the hit
 - **Token Usage Dashboard** — Per-day usage chart (last 14 days, local timezone) with input/output breakdown, totals, and top-consuming sessions
 - **Context Water Meter + One-click Compact** — Real context-window usage from the CLI's zero-cost `/context` query, shown as absolute values (`19K/200K`) with free-space and autocompact-buffer details on hover; click the archive icon next to it to compact a session when it runs high
 - **Failed Retry & Session Rename** — A retry button on the latest failed message removes that turn and resends it; rename sessions inline from the sidebar
+- **AI Session Naming** — After a session's first completed turn, a low-cost background CLI call generates a concise title in the conversation's language; manually renamed sessions are never overwritten
+- **Session Pinning** — Pin favorite sessions to the top of the sidebar (📌); pinned entries survive the session-limit trimming
 - **Session Persistence** — Tabs (including input drafts), history and settings survive restarts. Interrupted conversations are archived as drafts and remain resumable via `--resume`
 - **Background Notifications** — System notification with a snippet of your prompt when a task finishes while the window is not focused
 - **Interrupt Anytime** — Stop button or `ESC` aborts the active tab's generation (other tabs keep running); the child process is SIGTERM'd with a SIGKILL fallback (taskkill tree-kill on Windows)
 - **Cyberpunk UI** — Particle network background that speeds up while generating, scan lines, glow effects (Tailwind CSS)
+- **Token Pet** — A hand-drawn SVG companion in the sidebar: bunny / cat / bear, click to morph. Evolves through 4 levels with cumulative token usage; bounces while generating, sleeps when idle. Poke it for chatter, tickle it (5 pokes/second) into a laughing roll, feed it (🥕/🐟/🍪 per species) until it's stuffed and chubby, or grab and throw it — it springs back home. It sweats when a tab's context runs high, tilts its head on errors, wears a nightcap after midnight, dozes off on long runs — and on an empty conversation tab it moves to the welcome-screen stage to roam around freely
 
 ## Prerequisites
 
@@ -71,6 +77,8 @@ npm run pack        # unpacked app only (faster, for debugging)
 5. `⌘F` / `Ctrl+F` searches across all open tabs and archived sessions
 6. Click a session in the sidebar to open it as a tab (already-open sessions just activate); hover for rename / export / delete
 7. Click **TOKENS** (bottom-left) to open the usage dashboard; hover the context meter for details, click the 📦 icon next to it to compact the session
+8. Open the **Git** sidebar tab to review what Claude changed this session (✨AI badge) and revert single files; click 👁 in the file tree to preview a file
+9. The pet at the bottom of the sidebar is interactive — poke / tickle / feed / throw it; open an empty conversation tab to watch it roam the welcome screen
 
 ### Permission Modes
 
@@ -105,7 +113,7 @@ tests/             # Vitest suites: store state machine, diff engine, runner lif
 
 ## Testing
 
-56 unit tests cover the trickiest logic, all runnable without a display or a real Claude session:
+73 unit tests cover the trickiest logic, all runnable without a display or a real Claude session:
 
 - `tests/store.test.ts` — message merging by `message.id`, per-tab state isolation & event routing, background queue continuation, close-tab draft archiving, hydrate migration from the legacy single-session format, malformed-event hardening, immutability guarantees that `React.memo` relies on
 - `tests/diff.test.ts` — LCS diff correctness, degenerate fallback for huge inputs, context folding

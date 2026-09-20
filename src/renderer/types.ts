@@ -178,6 +178,8 @@ export interface Conversation {
   draft: string;
   /** 当前执行阶段（瞬态，不持久化；反馈条显示用） */
   activity: ActivityState | null;
+  /** 当前任务清单（最新一次 TodoWrite；随会话持久化） */
+  todoList?: TodoListState | null;
 }
 
 export type UIBlock =
@@ -219,6 +221,10 @@ export interface Session {
   cost: number;
   inputTokens: number;
   outputTokens: number;
+  /** 置顶/收藏（排序时浮到列表顶部） */
+  pinned?: boolean;
+  /** 标题是否为自动生成（手动改名后置 false，不再被自动命名覆盖） */
+  autoTitled?: boolean;
   /** 该会话使用的模型（取自 result 时的 currentModel） */
   model?: string;
   /** 每一轮执行的成本事件流（旧数据可能没有，退化用 createdAt 单点） */
@@ -228,3 +234,21 @@ export interface Session {
 // ─── 运行状态 ───────────────────────────────────────────
 
 export type RunStatus = 'idle' | 'starting' | 'streaming' | 'completed' | 'aborted' | 'error';
+
+// ─── 任务清单（TodoWrite 工具）──────────────────────
+
+export interface TodoItem {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  activeForm?: string;
+}
+
+/** 会话当前任务清单（由流中最新的 TodoWrite 调用派生） */
+export interface TodoListState {
+  items: TodoItem[];
+  updatedAt: number;
+}
+
+// ─── Token 宠物 ──────────────────────────────────────
+
+export type PetSpecies = 'bunny' | 'cat' | 'bear';

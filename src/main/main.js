@@ -24,7 +24,8 @@ if (process.env.ELECTRON_RUN_AS_NODE && process.type === undefined) {
 const { app, BrowserWindow, ipcMain, dialog, Notification, shell, Menu, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { ClaudeRunner, queryContext, compactSession } = require('./runner');
+const { ClaudeRunner, queryContext, compactSession, generateSessionTitle } = require('./runner');
+const { gitStatus, gitDiffFile, gitCheckoutFile } = require('./git');
 const { saveImageDataUrl } = require('./images');
 const { Store } = require('./store');
 
@@ -226,6 +227,64 @@ ipcMain.handle('claude:context', (_e, payload) => withAuxLock(() => queryContext
 
 // 压缩会话上下文（CLI /compact，需一次总结调用）；返回压缩后的新占用
 ipcMain.handle('claude:compact', (_e, payload) => withAuxLock(() => compactSession(payload || {})));
+
+// AI 自动命名：独立一次性会话生成标题，不触碰原会话上下文，不与生成互斥
+ipcMain.handle('claude:generate-title', (_e, payload) => generateSessionTitle(payload || {}));
+
+// ─── IPC: Git 变更面板 ──────────────────────────────
+ipcMain.handle('git:status', (_e, cwd) => gitStatus(cwd));
+ipcMain.handle('git:diff', (_e, { cwd, path: filePath } = {}) => gitDiffFile(cwd, filePath));
+ipcMain.handle('git:checkout', (_e, { cwd, path: filePath } = {}) => gitCheckoutFile(cwd, filePath));
+
+// ─── IPC: 文件预览（文本/图片，带大小与二进制防御）──────
+const PREVIEW_MAX_BYTES = 512 * 1024; // 512KB：足够阅读源码，避免大文件卡渲染
+const PREVIEW_IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico']);
+
+ipcMain.handle('fs:read-file', async (_e, { path: filePath } = {}) => {
+  try {
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) {
+      return { ok: false, error: '非法路径' };
+    }
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) return { ok: false, error: '不是常规文件' };
+    const ext = path.extname(filePath).toLowerCase();
+
+    // 图片：base64 dataURL（限制 8MB，避免 dataURL 撑爆渲染层）
+    if (PREVIEW_IMAGE_EXT.has(ext)) {
+      if (stat.size > 8 * 1024 * 1024) return { ok: false, error: '图片超过 8MB，不支持预览' };
+      const buf = await fs.promises.readFile(filePath);
+      const mime = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
+        : ext === '.webp' ? 'image/webp'
+        : ext === '.gif' ? 'image/gif'
+        : ext === '.bmp' ? 'image/bmp'
+        : ext === '.ico' ? 'image/x-icon'
+        : 'image/png';
+      return { ok: true, kind: 'image', dataUrl: `data:${mime};base64,${buf.toString('base64')}`, size: stat.size };
+    }
+
+    // 文本：截断到上限；前 8KB 含 NUL 视为二进制
+    const fh = await fs.promises.open(filePath, 'r');
+    try {
+      const head = Buffer.alloc(Math.min(8192, stat.size));
+      await fh.read(head, 0, head.length, 0);
+      if (head.includes(0)) return { ok: false, error: '二进制文件，不支持文本预览' };
+      const len = Math.min(PREVIEW_MAX_BYTES, stat.size);
+      const buf = Buffer.alloc(len);
+      await fh.read(buf, 0, len, 0);
+      return {
+        ok: true,
+        kind: 'text',
+        content: buf.toString('utf8'),
+        size: stat.size,
+        truncated: stat.size > len,
+      };
+    } finally {
+      await fh.close();
+    }
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
 
 // ─── IPC: 图片保存（粘贴截图 → 临时文件 → @ 引用）──
 ipcMain.handle('fs:save-image', (_e, { dataUrl } = {}) => saveImageDataUrl(dataUrl));

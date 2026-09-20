@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useStore } from '../store';
 import {
-  Folder, FolderOpen, File, ChevronRight, ChevronDown, RefreshCw, Loader2,
+  Folder, FolderOpen, File, ChevronRight, ChevronDown, RefreshCw, Loader2, Eye,
 } from 'lucide-react';
+import { FilePreview } from './FilePreview';
 
 interface FsItem {
   name: string;
@@ -64,7 +65,7 @@ export function FileTree({ root }: { root: string }) {
       )}
 
       <div className="text-[10px] text-text-dim/60 font-mono px-2 pt-2 leading-relaxed">
-        点击文件插入 @引用 到输入框
+        点击文件插入 @引用 · 悬停出现 👁 可预览
       </div>
     </div>
   );
@@ -73,6 +74,8 @@ export function FileTree({ root }: { root: string }) {
 function TreeNode({ item, root, depth }: { item: FsItem; root: string; depth: number }) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FsItem[] | null>(null);
+  // 文件预览弹层（仅本行使用，同一时刻最多一个）
+  const [preview, setPreview] = useState<string | null>(null);
   const injectText = useStore((s) => s.injectText);
 
   const toggle = useCallback(async () => {
@@ -90,10 +93,10 @@ function TreeNode({ item, root, depth }: { item: FsItem; root: string; depth: nu
   }, [item, expanded, children, root, injectText]);
 
   return (
-    <div>
+    <div className="relative group/row">
       <button
         onClick={toggle}
-        className="w-full flex items-center gap-1 px-1.5 py-1 rounded hover:bg-bg-light transition-colors group"
+        className="w-full flex items-center gap-1 px-1.5 py-1 rounded hover:bg-bg-light transition-colors group pr-6"
         style={{ paddingLeft: `${depth * 12 + 6}px` }}
       >
         {item.isDir ? (
@@ -118,6 +121,20 @@ function TreeNode({ item, root, depth }: { item: FsItem; root: string; depth: nu
         </span>
       </button>
 
+      {/* 预览按钮（hover 显示；不阻断点击行插入 @引用） */}
+      {!item.isDir && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setPreview(item.path);
+          }}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-text-dim hover:text-accent-cyan opacity-0 group-hover/row:opacity-100 focus:opacity-100 transition-all"
+          title="预览文件"
+        >
+          <Eye className="w-3 h-3" />
+        </button>
+      )}
+
       {item.isDir && expanded && children && (
         <div>
           {children.map((child) => (
@@ -125,6 +142,8 @@ function TreeNode({ item, root, depth }: { item: FsItem; root: string; depth: nu
           ))}
         </div>
       )}
+
+      {preview && <FilePreview path={preview} onClose={() => setPreview(null)} />}
     </div>
   );
 }

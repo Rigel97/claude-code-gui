@@ -411,6 +411,37 @@ async function queryContext({ cwd, sessionId }) {
   return parseContextOutput(r.resultEvent.result);
 }
 
+/** 用一次低成本 CLI 调用为会话生成标题。
+ *  走独立的一次性会话（不 --resume 原会话，不污染其上下文）；
+ *  提示词极小，成本可忽略。返回清洗后的标题或 null */
+async function generateSessionTitle({ cwd, text }) {
+  if (typeof cwd !== 'string' || !cwd || !fs.existsSync(cwd)) return null;
+  if (typeof text !== 'string' || !text.trim()) return null;
+  const snippet = text.slice(0, 400).replace(/\s+/g, ' ').trim();
+  const prompt = [
+    '为下面这个编程助手对话生成一个简短的会话标题。',
+    '要求：只输出标题本身；不要引号、序号、代码块或结尾标点；',
+    '与对话内容相同语言（中文对话用中文，英文用英文）；不超过 16 个字。',
+    '',
+    '对话主题：' + snippet,
+  ].join('\n');
+  const r = await runCli(
+    ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions'],
+    cwd,
+    30000
+  );
+  if (!r || !r.resultEvent || r.resultEvent.is_error || typeof r.resultEvent.result !== 'string') return null;
+  // 清洗：去引号/首尾空白/结尾句号，限制长度
+  const t = r.resultEvent.result
+    .trim()
+    .replace(/^["'“”「『《]+/, '')
+    .replace(/["'“”」』》.。!！?？\s]+$/, '')
+    .replace(/\s+/g, ' ')
+    .slice(0, 30)
+    .trim();
+  return t || null;
+}
+
 /** 压缩会话上下文（CLI /compact：一次总结调用把历史折叠为摘要，需花费一次调用）。
  *  返回 { success, error?, context? }，context 为压缩后的新占用（顺带查询，免二次往返） */
 async function compactSession({ cwd, sessionId }) {
@@ -429,4 +460,4 @@ async function compactSession({ cwd, sessionId }) {
     : { success: false, error: (r.resultEvent && typeof r.resultEvent.result === 'string' && r.resultEvent.result) || `压缩失败（exit ${r.code}）`, context };
 }
 
-module.exports = { ClaudeRunner, queryContext, compactSession };
+module.exports = { ClaudeRunner, queryContext, compactSession, generateSessionTitle, escapeWindowsArg };

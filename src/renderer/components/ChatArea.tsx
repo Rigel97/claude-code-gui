@@ -3,6 +3,8 @@ import { ChatMessageView } from './ChatMessageView';
 import { InputBar } from './InputBar';
 import { TabBar } from './TabBar';
 import { ActivityStrip } from './ActivityStrip';
+import { TodoPanel } from './TodoPanel';
+import { PetStage } from './PetStage';
 import { useRef, useEffect } from 'react';
 import type { Conversation } from '../types';
 
@@ -65,6 +67,9 @@ export function ChatArea() {
       {/* 对话标签栏：多会话并行 */}
       <TabBar />
 
+      {/* 任务清单进度面板（会话内有 TodoWrite 调用时显示） */}
+      {conv && conv.todoList && conv.todoList.items.length > 0 && <TodoPanel conv={conv} />}
+
       {/* 消息流 */}
       <div
         ref={scrollRef}
@@ -101,6 +106,9 @@ export function ChatArea() {
             <p className="text-sm text-text-muted max-w-md font-mono">
               链路已就绪，等待指令输入<span className="stream-cursor" />
             </p>
+
+            {/* 宠物大舞台：空对话时从侧栏小窝搬家过来撒欢 */}
+            <PetStage />
           </div>
         )}
 

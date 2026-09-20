@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ActivityState, ChatMessage, ContextUsage, Conversation, Session, SessionEvent, RunStatus, StreamMessage, UIBlock } from './types';
+import type { ActivityState, ChatMessage, ContextUsage, Conversation, Session, SessionEvent, RunStatus, StreamMessage, UIBlock, TodoItem, PetSpecies } from './types';
 import { deliverPrompt, abortConversation } from './utils/deliver';
 
 interface AppState {
@@ -54,7 +54,13 @@ maxBudgetUsd: number;
 setMaxBudgetUsd: (n: number) => void;
   clearAllSessions: () => void;
   renameSession: (index: number, title: string) => void;
+  /** 置顶/取消置顶（置顶项浮到列表顶部） */
+  togglePinSession: (index: number) => void;
   deleteSession: (index: number) => void;
+
+  // Token 宠物：形态（点击宠物切换）
+  petSpecies: PetSpecies;
+  setPetSpecies: (s: PetSpecies) => void;
 
   // 输入框文本注入（文件树点击 @引用 / 粘贴图片路径等）。
   // convId 记录注入时的目标标签页：消费端（InputBar）按其匹配后才消费，
@@ -95,7 +101,8 @@ maxSessions?: number;
 sidebarWidth?: number;
 effortLevel?: string;
 autocompact?: string;
-maxBudgetUsd?: number;
+    maxBudgetUsd?: number;
+    petSpecies?: string;
     // 旧版单会话格式（迁移用）
     messages?: ChatMessage[];
     currentSessionId?: string | null;
@@ -141,6 +148,7 @@ function makeConversation(cwd: string, over: Partial<Conversation> = {}): Conver
     currentModel: '',
     draft: '',
     activity: null,
+    todoList: null,
     ...over,
   };
 }
@@ -279,6 +287,11 @@ function archiveConversation(sessions: Session[], conv: Conversation, maxSession
   return [draft, ...sessions].slice(0, maxSessions > 0 ? maxSessions : DEFAULT_MAX_SESSIONS);
 }
 
+// 归档时同样保持置顶项浮顶（受 maxSessions 截断保护）
+function archiveConversationSorted(sessions: Session[], conv: Conversation, maxSessions: number): Session[] {
+  return sortSessions(archiveConversation(sessions, conv, maxSessions));
+}
+
 /** 回填已存在 tool_use 卡片的 input（stream_event 预创建卡片后，完整事件到达时补全参数）。
  *  不可变：未命中返回原数组 */
 function backfillToolInput(blocks: UIBlock[], toolId: string, input: Record<string, unknown>): UIBlock[] {
@@ -305,6 +318,61 @@ function backfillToolInput(blocks: UIBlock[], toolId: string, input: Record<stri
 /** 不可变替换指定标签页 */
 function replaceConv(conversations: Conversation[], id: string, next: Conversation): Conversation[] {
   return conversations.map((c) => (c.id === id ? next : c));
+}
+
+/** 置顶会话浮顶排序（Array.sort 稳定：非置顶项保持原有顺序） */
+function sortSessions(sessions: Session[]): Session[] {
+  return [...sessions].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+}
+
+/** 在一个块列表中找最后一次 TodoWrite 调用的清单（同列表多次调用取最新） */
+function findTodoInBlocks(blocks: UIBlock[]): TodoItem[] | null {
+  let found: TodoItem[] | null = null;
+  const walk = (list: UIBlock[]) => {
+    for (const b of list) {
+      if (b.kind !== 'tool_use') continue;
+      if (b.toolName === 'TodoWrite' && b.input && Array.isArray((b.input as Record<string, unknown>).todos)) {
+        const items = ((b.input as Record<string, unknown>).todos as unknown[])
+          .filter(
+            (t): t is { content: string; status?: string; activeForm?: unknown } =>
+              !!t && typeof t === 'object' && typeof (t as { content?: unknown }).content === 'string'
+          )
+          .map((t): TodoItem => ({
+            content: t.content,
+            status: t.status === 'in_progress' || t.status === 'completed' ? t.status : 'pending',
+            ...(typeof t.activeForm === 'string' ? { activeForm: t.activeForm } : {}),
+          }));
+        found = items;
+      }
+      if (b.children) walk(b.children);
+    }
+  };
+  walk(blocks);
+  return found;
+}
+
+/** 从会话消息（含流式）倒序提取最新一次 TodoWrite 清单（任务面板数据源） */
+function latestTodoFrom(conv: Pick<Conversation, 'messages' | 'streamingMessage'>): TodoItem[] | null {
+  if (conv.streamingMessage) {
+    const r = findTodoInBlocks(conv.streamingMessage.blocks);
+    if (r) return r;
+  }
+  for (let i = conv.messages.length - 1; i >= 0; i--) {
+    const r = findTodoInBlocks(conv.messages[i].blocks);
+    if (r) return r;
+  }
+  return null;
+}
+
+/** hydrate 防御：只接受形状合法的 todoList */
+function sanitizeTodoList(v: unknown): Conversation['todoList'] {
+  if (!v || typeof v !== 'object') return null;
+  const items = (v as { items?: unknown }).items;
+  if (!Array.isArray(items)) return null;
+  const ok = items.every(
+    (t) => t && typeof t === 'object' && typeof (t as { content?: unknown }).content === 'string'
+  );
+  return ok ? (v as Conversation['todoList']) : null;
 }
 
 /** 持久化快照可安全序列化的标签页子集（运行态字段收敛） */
@@ -400,6 +468,52 @@ export const useStore = create<AppState>((set, get) => {
     });
   };
 
+  /** 同步 TodoWrite 任务清单到会话状态（assistant 事件后调用，fresh 读取） */
+  const syncTodosFromBlocks = (convId: string) => {
+    const state = get();
+    const conv = state.conversations.find((c) => c.id === convId);
+    if (!conv) return;
+    const items = latestTodoFrom(conv);
+    if (!items) return; // 本轮无 TodoWrite：保留旧清单
+    const cur = conv.todoList;
+    if (cur && JSON.stringify(cur.items) === JSON.stringify(items)) return; // 无变化不 set
+    set({
+      conversations: replaceConv(state.conversations, convId, {
+        ...conv,
+        todoList: { items, updatedAt: Date.now() },
+      }),
+    });
+  };
+
+  /** AI 自动命名（异步）：会话首次归档后触发一次；
+   *  仅覆盖 autoTitled 标记的会话（手动改名后标记清除，永不覆盖） */
+  const autoTitleSession = async (
+    sessionId: string,
+    cwd: string,
+    fallbackConvTitle: string,
+    firstUserText: string
+  ) => {
+    try {
+      const api = (window as any).api;
+      if (typeof api?.claude?.generateTitle !== 'function') return;
+      const t = await api.claude.generateTitle(cwd, firstUserText.slice(0, 400));
+      if (typeof t !== 'string' || !t.trim()) return;
+      const state = get();
+      const idx = state.sessions.findIndex((s) => s.sessionId === sessionId);
+      if (idx < 0) return; // 条目已被删除
+      const sess = state.sessions[idx];
+      if (sess.autoTitled !== true || sess.title === t) return; // 手动改名/已同名：不覆盖
+      set({
+        sessions: state.sessions.map((s, i) => (i === idx ? { ...s, title: t, autoTitled: true } : s)),
+        conversations: state.conversations.map((c) =>
+          c.sessionId === sessionId && c.title === fallbackConvTitle ? { ...c, title: t } : c
+        ),
+      });
+    } catch {
+      /* 静默：保留截断标题 */
+    }
+  };
+
   const dropDeltaState = (convId: string) => {
     const timer = deltaTimers.get(convId);
     if (timer) {
@@ -471,14 +585,20 @@ permissionMode: state.permissionMode,
 
     newConversation: (opts) => {
       const state = get();
-      const conv = opts?.fromSession
-        ? makeConversation(opts.fromSession.cwd, {
-            title: opts.fromSession.title,
-            sessionId: opts.fromSession.sessionId,
-            messages: opts.fromSession.messages,
-            currentModel: opts.fromSession.model || '',
-          })
-        : makeConversation(state.cwd);
+      let conv: Conversation;
+      if (opts?.fromSession) {
+        // 恢复归档会话时重建任务清单（历史里最后一次 TodoWrite）
+        const items = latestTodoFrom({ messages: opts.fromSession.messages, streamingMessage: null });
+        conv = makeConversation(opts.fromSession.cwd, {
+          title: opts.fromSession.title,
+          sessionId: opts.fromSession.sessionId,
+          messages: opts.fromSession.messages,
+          currentModel: opts.fromSession.model || '',
+          todoList: items ? { items, updatedAt: Date.now() } : null,
+        });
+      } else {
+        conv = makeConversation(state.cwd);
+      }
       set({
         conversations: [...state.conversations, conv],
         activeConversationId: conv.id,
@@ -501,7 +621,7 @@ permissionMode: state.permissionMode,
         conv.streamingMessage && (conv.status === 'streaming' || conv.status === 'starting')
           ? { ...conv, ...finalizeStreaming(conv, 'completed'), status: 'aborted' }
           : conv;
-      const sessions = archiveConversation(state.sessions, settled, state.maxSessions);
+      const sessions = archiveConversationSorted(state.sessions, settled, state.maxSessions);
       const conversations = state.conversations.filter((c) => c.id !== id);
       if (conversations.length === 0) {
         conversations.push(makeConversation(state.cwd));
@@ -623,13 +743,29 @@ maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.rou
       if (!t || t === sessions[index].title) return;
       const sessionId = sessions[index].sessionId;
       set({
-        sessions: sessions.map((s, i) => (i === index ? { ...s, title: t } : s)),
+        // 手动改名：清除自动命名标记，后续不再被 AI 命名覆盖
+        sessions: sessions.map((s, i) => (i === index ? { ...s, title: t, autoTitled: false } : s)),
         // 同步已打开的对应标签页标题（按 sessionId 关联），
         // 保持 TabBar 与侧栏一致；否则标签页仍显示旧名
         conversations: state.conversations.map((c) =>
           c.sessionId === sessionId ? { ...c, title: t } : c
         ),
       });
+    },
+
+    togglePinSession: (index) => {
+      const state = get();
+      const sessions = state.sessions;
+      if (index < 0 || index >= sessions.length) return;
+      const next = sortSessions(
+        sessions.map((s, i) => (i === index ? { ...s, pinned: !s.pinned } : s))
+      );
+      set({ sessions: next });
+    },
+
+    petSpecies: 'bunny',
+    setPetSpecies: (petSpecies) => {
+      if (petSpecies !== get().petSpecies) set({ petSpecies });
     },
 
     deleteSession: (index) => {
@@ -893,6 +1029,8 @@ maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.rou
             activity,
           }),
         });
+        // TodoWrite 清单同步（fresh 读取；无 TodoWrite 调用时为 no-op）
+        syncTodosFromBlocks(convId);
         break;
       }
 
@@ -989,6 +1127,8 @@ maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.rou
           // 消息归档与成本累计照常进行
           const hasSessionId = typeof msg.session_id === 'string' && msg.session_id.length > 0;
           let sessions = state.sessions;
+          // 是否为本会话的首次归档（触发 AI 自动命名用）
+          let isNewSessionEntry = false;
           if (hasSessionId) {
             const newSession: Session = {
               sessionId: msg.session_id,
@@ -1001,10 +1141,13 @@ maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.rou
               outputTokens,
               model: convNow.currentModel || undefined,
               events: [event],
+              // 标记为自动标题：AI 命名只覆盖带此标记的条目（手动改名后转为 false）
+              autoTitled: true,
             };
 
             // 同 sessionId 的会话更新而非重复添加（多轮对话）
             const existingIdx = state.sessions.findIndex((s) => s.sessionId === msg.session_id);
+            isNewSessionEntry = existingIdx < 0;
             sessions = existingIdx >= 0
               ? state.sessions.map((s, i) => (i === existingIdx ? {
                   ...newSession,
@@ -1014,6 +1157,8 @@ maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.rou
                   // 自动命名只在首次归档时生效；旧条目 title 为空时才回退自动值
                   title: s.title || title,
                   createdAt: s.createdAt, // 保留首次创建时间
+                  pinned: s.pinned, // 保留置顶标记（newSession 无此字段，展开会丢失）
+                  autoTitled: s.autoTitled, // 保留手动改名标记
                   cost: s.cost + cost,
                   inputTokens: s.inputTokens + inputTokens,
                   outputTokens: s.outputTokens + outputTokens,
@@ -1022,8 +1167,8 @@ maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.rou
                 } : s))
               : [newSession, ...state.sessions];
 
-            // 限制会话数量，超出部分丢弃最旧的
-            sessions = sessions.slice(0, state.maxSessions > 0 ? state.maxSessions : DEFAULT_MAX_SESSIONS);
+            // 限制会话数量，超出部分丢弃最旧的（置顶项浮顶后受截断保护）
+            sessions = sortSessions(sessions).slice(0, state.maxSessions > 0 ? state.maxSessions : DEFAULT_MAX_SESSIONS);
           }
 
           set({
@@ -1040,6 +1185,15 @@ maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.rou
             totalOutputTokens: state.totalOutputTokens + outputTokens,
             sessions,
           });
+
+          // 首次归档的新会话：触发 AI 自动命名（异步，不阻塞队列续发；
+          // 仅当首条用户消息非空，失败静默保留截断标题）
+          if (isNewSessionEntry && !msg.is_error) {
+            const firstText = firstUserMsg?.blocks.find((b) => b.kind === 'text')?.text || '';
+            if (firstText.trim()) {
+              void autoTitleSession(msg.session_id, convNow.cwd, firstText.slice(0, 30), firstText);
+            }
+          }
 
           // 队列续发/清空：result 是本轮的确定性终点（比 status 事件先到），
           // 即便该标签页在后台也必须处理
@@ -1152,6 +1306,7 @@ maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.rou
             ...makeConversation(typeof c.cwd === 'string' ? c.cwd : data.cwd || ''),
             ...c,
             activity: null, // 瞬态：重启后清除
+            todoList: sanitizeTodoList(c.todoList), // 形状防御：畸形数据置空
             // 应用重启后进程已消失：运行态收敛
             status: c.status === 'streaming' || c.status === 'starting' ? 'aborted' : c.status || 'idle',
             streamingMessage: null,
@@ -1187,7 +1342,7 @@ restored.messages = [...restored.messages, { ...c.streamingMessage, status: 'com
 
       set({
         cwd: data.cwd || '',
-        sessions,
+        sessions: sortSessions(sessions),
         conversations,
         activeConversationId,
         totalCost: data.totalCost || 0,
@@ -1212,6 +1367,9 @@ autocompact: ['', 'auto', '100k', '200k', '400k', '800k', '1M'].includes(data.au
 maxBudgetUsd: typeof data.maxBudgetUsd === 'number' && data.maxBudgetUsd > 0
 ? data.maxBudgetUsd
 : 0,
+petSpecies: ['bunny', 'cat', 'bear'].includes(data.petSpecies as any)
+? (data.petSpecies as PetSpecies)
+: 'bunny',
       });
     },
   };

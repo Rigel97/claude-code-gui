@@ -58,6 +58,7 @@ export default function App() {
       effortLevel: state.effortLevel,
       autocompact: state.autocompact,
       maxBudgetUsd: state.maxBudgetUsd,
+      petSpecies: state.petSpecies,
     });
 
     const flush = () => {

@@ -341,3 +341,167 @@ textarea {
   opacity: 0.025;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
+
+/* ─── Token 宠物动画 ─────────────────────────────────── */
+/* 空闲漂浮（睡觉） */
+@keyframes pet-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+.pet-float { animation: pet-float 3s ease-in-out infinite; }
+
+/* 生成中兴奋蹦跳 */
+@keyframes pet-bounce {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-6px) scale(1.05); }
+}
+.pet-bounce { animation: pet-bounce 0.7s ease-in-out infinite; }
+
+/* 点击切换形态的弹跳 */
+@keyframes pet-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.25) rotate(-8deg); }
+  100% { transform: scale(1); }
+}
+.pet-pop { animation: pet-pop 0.45s ease-out; }
+
+/* 睡觉 Zzz 逐个上浮 */
+@keyframes pet-zzz {
+  0% { opacity: 0; transform: translateY(3px) scale(0.8); }
+  30% { opacity: 0.9; }
+  100% { opacity: 0; transform: translateY(-7px) scale(1.05); }
+}
+.pet-zzz span {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  color: #94a3b8;
+  font-family: 'JetBrains Mono', monospace;
+  animation: pet-zzz 2.4s ease-out infinite;
+}
+.pet-zzz span:nth-child(2) { animation-delay: 0.8s; font-size: 7.5px; }
+.pet-zzz span:nth-child(3) { animation-delay: 1.6s; font-size: 6.5px; }
+
+/* Lv3+ 进化光环旋转 */
+@keyframes pet-ring-rotate {
+  to { transform: rotate(360deg); }
+}
+.pet-ring {
+  transform-origin: 32px 34px;
+  animation: pet-ring-rotate 9s linear infinite;
+}
+
+/* 偶尔眨眼 */
+@keyframes pet-blink {
+  0%, 91%, 100% { opacity: 1; }
+  94% { opacity: 0.05; }
+  97% { opacity: 1; }
+}
+.pet-blink { animation: pet-blink 4.5s ease-in-out infinite; }
+
+/* ─── 宠物互动动画 ─────────────────────────────────── */
+/* 气泡台词：浮现 → 停留 → 淡出（与组件内 3.2s 定时同步） */
+@keyframes pet-speech-in {
+  0% { opacity: 0; transform: translateY(4px) scale(0.85); }
+  10% { opacity: 1; transform: translateY(0) scale(1); }
+  86% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-3px); }
+}
+.pet-speech { animation: pet-speech-in 3.2s ease-out forwards; }
+
+/* 开心：快速小跳两下 */
+@keyframes pet-happy {
+  0%, 100% { transform: translateY(0); }
+  20% { transform: translateY(-5px); }
+  40% { transform: translateY(0); }
+  60% { transform: translateY(-3px); }
+  80% { transform: translateY(0); }
+}
+.pet-happy { animation: pet-happy 0.9s ease-in-out; }
+
+/* 吃东西：摇摆三次 */
+@keyframes pet-eating {
+  0%, 100% { transform: rotate(0) scale(1); }
+  25% { transform: rotate(-6deg) scale(1.02); }
+  50% { transform: rotate(0) scale(1.04); }
+  75% { transform: rotate(6deg) scale(1.02); }
+}
+.pet-eating { animation: pet-eating 0.5s ease-in-out 3; }
+
+/* 爱心粒子：从宠物头顶飘散 */
+@keyframes pet-heart {
+  0% { opacity: 0; transform: translateY(0) scale(0.5); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-26px) scale(1.15); }
+}
+.pet-heart {
+  position: absolute;
+  bottom: 55%;
+  font-size: 10px;
+  color: #f49bb3;
+  animation: pet-heart 1.6s ease-out forwards;
+}
+
+/* ─── 宠物情绪/物理互动动画 ────────────────────────── */
+/* 长任务挂机打盹：缓慢呼吸（替代蹦跳） */
+@keyframes pet-drowse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+.pet-drowse { animation: pet-drowse 3.2s ease-in-out infinite; }
+
+/* 挠痒痒打滚：左右快速摇摆 */
+@keyframes pet-roll {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-14deg); }
+  40% { transform: rotate(12deg); }
+  60% { transform: rotate(-10deg); }
+  80% { transform: rotate(8deg); }
+}
+.pet-roll { animation: pet-roll 0.55s ease-in-out 2; }
+
+/* 生气：跺脚式快速下蹲两次 */
+@keyframes pet-angry {
+  0%, 100% { transform: translateY(0); }
+  25% { transform: translateY(2px) scale(1.03, 0.97); }
+  50% { transform: translateY(0); }
+  75% { transform: translateY(2px) scale(1.03, 0.97); }
+}
+.pet-angry { animation: pet-angry 0.5s ease-in-out 2; }
+
+/* 焦虑冷汗滴：闪烁 */
+@keyframes pet-sweat {
+  0%, 100% { opacity: 0.9; transform: translateY(0); }
+  50% { opacity: 0.4; transform: translateY(1.5px); }
+}
+.pet-sweat { animation: pet-sweat 1.1s ease-in-out infinite; }
+
+/* 困惑问号：上下浮动 */
+@keyframes pet-question {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2.5px); }
+}
+.pet-question { animation: pet-question 1s ease-in-out infinite; }
+
+/* 打盹时的大号 Zzz（比普通睡觉更明显） */
+.pet-zzz-big span { font-size: 12px; color: #94a3b8; }
+.pet-zzz-big span:nth-child(2) { font-size: 10px; }
+.pet-zzz-big span:nth-child(3) { font-size: 8.5px; }
+
+/* ─── 宠物大舞台动画 ───────────────────────────── */
+/* 舞台跳跃：高高跳起两下 */
+@keyframes pet-stage-jump {
+  0%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-34px); }
+  45% { transform: translateY(0); }
+  60% { transform: translateY(-16px); }
+  75% { transform: translateY(0); }
+}
+.pet-stage-jump { animation: pet-stage-jump 1.4s ease-in-out; }
+
+/* 舞台奔跑：轻微上下颠簸（配合容器位移） */
+@keyframes pet-stage-run {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+.pet-stage-run { animation: pet-stage-run 0.32s ease-in-out infinite; }

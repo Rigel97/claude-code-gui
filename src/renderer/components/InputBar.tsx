@@ -341,7 +341,7 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
           <div className="absolute right-2 bottom-2 flex items-center gap-2">
             {/* 模型指示器 */}
             {displayModel && (
-              <span className="text-[10px] font-mono text-text-dim px-2 py-1 rounded bg-bg-deeper/50">
+              <span className="text-[10px] font-mono text-text-dim px-2 py-1 rounded bg-bg-deepest/50">
                 {displayModel}
               </span>
             )}

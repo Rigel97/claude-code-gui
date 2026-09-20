@@ -23,6 +23,8 @@ const api = {
     getContext: (cwd, sessionId) => ipcRenderer.invoke('claude:context', { cwd, sessionId }),
     // 压缩会话上下文（/compact，需一次总结调用）；返回 { success, error?, context? }
     compact: (cwd, sessionId) => ipcRenderer.invoke('claude:compact', { cwd, sessionId }),
+    // AI 自动命名：传入首条用户消息文本，返回标题或 null（失败静默）
+    generateTitle: (cwd, text) => ipcRenderer.invoke('claude:generate-title', { cwd, text }),
 
     onStream: (callback) => {
       const handler = (_e, data) => callback(data);
@@ -41,6 +43,17 @@ const api = {
     readDir: (dirPath) => ipcRenderer.invoke('fs:read-dir', dirPath),
     // 粘贴的图片（dataURL）存为临时文件，返回绝对路径供 @ 引用
     saveImage: (dataUrl) => ipcRenderer.invoke('fs:save-image', { dataUrl }),
+    // 文件预览：返回 { ok, kind: 'text'|'image', content?, dataUrl?, size, truncated? }
+    readFile: (filePath) => ipcRenderer.invoke('fs:read-file', { path: filePath }),
+  },
+
+  git: {
+    // 返回 { repo, branch?, changes?: [{path, change, staged}] }
+    status: (cwd) => ipcRenderer.invoke('git:status', cwd),
+    // 单文件 unified diff 文本（无差异返回 ''）
+    diff: (cwd, filePath) => ipcRenderer.invoke('git:diff', { cwd, path: filePath }),
+    // 回滚单文件工作区改动，返回 { ok, error? }
+    checkoutFile: (cwd, filePath) => ipcRenderer.invoke('git:checkout', { cwd, path: filePath }),
   },
 
   skills: {
