@@ -4,7 +4,6 @@ import { InputBar } from './InputBar';
 import { TabBar } from './TabBar';
 import { ActivityStrip } from './ActivityStrip';
 import { TodoPanel } from './TodoPanel';
-import { PetStage } from './PetStage';
 import { useRef, useEffect } from 'react';
 import type { Conversation } from '../types';
 
@@ -107,8 +106,6 @@ export function ChatArea() {
               链路已就绪，等待指令输入<span className="stream-cursor" />
             </p>
 
-            {/* 宠物大舞台：空对话时从侧栏小窝搬家过来撒欢 */}
-            <PetStage />
           </div>
         )}
 

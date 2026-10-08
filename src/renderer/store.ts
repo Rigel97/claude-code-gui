@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ActivityState, ChatMessage, ContextUsage, Conversation, Session, SessionEvent, RunStatus, StreamMessage, UIBlock, TodoItem, PetSpecies } from './types';
+import type { ActivityState, ChatMessage, ContextUsage, Conversation, Session, SessionEvent, RunStatus, StreamMessage, UIBlock, TodoItem } from './types';
 import { deliverPrompt, abortConversation } from './utils/deliver';
 
 interface AppState {
@@ -58,10 +58,6 @@ setMaxBudgetUsd: (n: number) => void;
   togglePinSession: (index: number) => void;
   deleteSession: (index: number) => void;
 
-  // Token 宠物：形态（点击宠物切换）
-  petSpecies: PetSpecies;
-  setPetSpecies: (s: PetSpecies) => void;
-
   // 输入框文本注入（文件树点击 @引用 / 粘贴图片路径等）。
   // convId 记录注入时的目标标签页：消费端（InputBar）按其匹配后才消费，
   // 且消费后立即清除——否则 InputBar 每次重挂载（切 tab/新开/关闭标签页）
@@ -102,7 +98,6 @@ sidebarWidth?: number;
 effortLevel?: string;
 autocompact?: string;
     maxBudgetUsd?: number;
-    petSpecies?: string;
     // 旧版单会话格式（迁移用）
     messages?: ChatMessage[];
     currentSessionId?: string | null;
@@ -763,10 +758,6 @@ maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.rou
       set({ sessions: next });
     },
 
-    petSpecies: 'bunny',
-    setPetSpecies: (petSpecies) => {
-      if (petSpecies !== get().petSpecies) set({ petSpecies });
-    },
 
     deleteSession: (index) => {
       const state = get();
@@ -1367,9 +1358,6 @@ autocompact: ['', 'auto', '100k', '200k', '400k', '800k', '1M'].includes(data.au
 maxBudgetUsd: typeof data.maxBudgetUsd === 'number' && data.maxBudgetUsd > 0
 ? data.maxBudgetUsd
 : 0,
-petSpecies: ['bunny', 'cat', 'bear'].includes(data.petSpecies as any)
-? (data.petSpecies as PetSpecies)
-: 'bunny',
       });
     },
   };

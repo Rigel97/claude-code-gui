@@ -248,7 +248,3 @@ export interface TodoListState {
   items: TodoItem[];
   updatedAt: number;
 }
-
-// ─── Token 宠物 ──────────────────────────────────────
-
-export type PetSpecies = 'bunny' | 'cat' | 'bear';

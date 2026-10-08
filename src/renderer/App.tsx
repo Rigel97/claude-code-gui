@@ -7,6 +7,7 @@ import { TitleBar } from './components/TitleBar';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { ParticleField } from './components/ParticleField';
 import { SearchPanel } from './components/SearchPanel';
+import { WhalePet } from './components/WhalePet';
 
 export default function App() {
   const cwd = useStore((s) => s.cwd);
@@ -58,7 +59,6 @@ export default function App() {
       effortLevel: state.effortLevel,
       autocompact: state.autocompact,
       maxBudgetUsd: state.maxBudgetUsd,
-      petSpecies: state.petSpecies,
     });
 
     const flush = () => {
@@ -193,6 +193,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen tech-grid-bg bg-bg-deepest">
+      <WhalePet />
       {/* 粒子网络背景 */}
       <ParticleField />
 

@@ -6,7 +6,6 @@ import { FileTree } from './FileTree';
 import { SkillList } from './SkillList';
 import { CostDashboard } from './CostDashboard';
 import { GitPanel } from './GitPanel';
-import { TokenPet } from './TokenPet';
 import { sessionToMarkdown } from '../utils/exportSession';
 import type { Session } from '../types';
 
@@ -348,9 +347,6 @@ export function Sidebar() {
 
         {/* 底部 */}
         <div className="p-3 border-t border-border/30 space-y-2">
-          {/* Token 宠物：随用量进化，点击切换形态 */}
-          <TokenPet />
-
           {/* 总 Token 用量（点击打开用量统计） */}
           <button
             onClick={() => setShowDashboard(true)}
@@ -369,6 +365,7 @@ export function Sidebar() {
           {/* 设置按钮 */}
           <button
             onClick={() => setShowSettings(true)}
+            data-claude-whale-settings="true"
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-bg-light text-text-muted hover:text-text-primary transition-colors"
           >
             <Settings className="w-4 h-4" />

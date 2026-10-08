@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStore } from '../store';
-import { X, Cpu, Info, Shield, Bell, Archive, Trash2, RotateCcw, Gauge, Boxes, DollarSign } from 'lucide-react';
+import { X, Cpu, Info, Shield, Bell, Archive, Trash2, RotateCcw, Gauge, Boxes, DollarSign, Heart } from 'lucide-react';
 
 type EffortLevel = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 type Autocompact = '' | 'auto' | '100k' | '200k' | '400k' | '800k' | '1M';
@@ -37,6 +37,46 @@ const PERMISSION_MODES = [
 ];
 
 const SESSION_LIMIT_OPTIONS = [20, 50, 100, 200];
+const WHALE_SWITCHES = [
+  ['pet', '显示鲸鱼娘'], ['chat', '台词气泡'], ['particles', '粒子特效'],
+  ['game', '小游戏'], ['idle-nudge', '摸鱼提醒'], ['night', '深夜模式'],
+  ['weatherFx', '天气特效'], ['toolPose', '工具细分姿态'],
+  ['dragPhysics', '拖拽惯性'], ['proactive', '主动关怀'], ['a11y', '无障碍模式'],
+] as const;
+const WHALE_OFF_BY_DEFAULT = new Set(['a11y']);
+function whalePref(key: string): boolean {
+  try { const value = localStorage.getItem(`whale-moe:${key}`); return value === null ? !WHALE_OFF_BY_DEFAULT.has(key) : value === '1'; }
+  catch { return !WHALE_OFF_BY_DEFAULT.has(key); }
+}
+function WhaleSettings() {
+  const [prefs, setPrefs] = useState(() => Object.fromEntries(WHALE_SWITCHES.map(([key]) => [key, whalePref(key)])));
+  const [city, setCity] = useState(() => localStorage.getItem('whale-moe:weatherCity') ?? '');
+  const [title, setTitle] = useState(() => localStorage.getItem('whale-moe:title') ?? '主人');
+  const [selfName, setSelfName] = useState(() => localStorage.getItem('whale-moe:selfName') ?? '鲸鱼娘');
+  const [tts, setTts] = useState(() => localStorage.getItem('claude-whale:tts') === '1');
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  useEffect(() => {
+    const update = () => setVoices(window.speechSynthesis?.getVoices() ?? []);
+    update();
+    window.speechSynthesis?.addEventListener('voiceschanged', update);
+    return () => window.speechSynthesis?.removeEventListener('voiceschanged', update);
+  }, []);
+  const save = (key: string, value: string) => {
+    localStorage.setItem(`whale-moe:${key}`, value);
+    window.dispatchEvent(new CustomEvent('whale-moe-prefs-change', { detail: { key, value } }));
+  };
+  return <section className="space-y-2">
+    <div className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider"><Heart className="w-3.5 h-3.5" />鲸鱼娘</div>
+    <div className="grid grid-cols-2 gap-1.5">{WHALE_SWITCHES.map(([key, label]) => <Toggle key={key} on={prefs[key]} color="blue" label={label} onClick={() => {
+      const next = !prefs[key]; save(key, next ? '1' : '0'); setPrefs((current) => ({ ...current, [key]: next }));
+    }} />)}</div>
+    <div className="grid grid-cols-2 gap-2">{([['title', '如何称呼你', title, setTitle], ['selfName', '她的自称', selfName, setSelfName]] as const).map(([key, label, value, setter]) => <label key={key} className="text-xs text-text-muted">{label}<input className="w-full mt-1 px-2 py-1.5 rounded-lg bg-bg-light border border-border text-text-primary" maxLength={key === 'title' ? 8 : 12} value={value} onChange={(e) => { setter(e.target.value); save(key, e.target.value); }} /></label>)}</div>
+    <label className="block text-xs text-text-muted">天气城市（留空不联网）<input className="w-full mt-1 px-2 py-1.5 rounded-lg bg-bg-light border border-border text-text-primary" maxLength={24} value={city} onChange={(e) => { setCity(e.target.value); save('weatherCity', e.target.value); }} placeholder="例如：上海" /></label>
+    {voices.length > 0 && <Toggle on={tts} color="blue" label="本机语音播报（默认关闭）" onClick={() => { const next = !tts; setTts(next); localStorage.setItem('claude-whale:tts', next ? '1' : '0'); if (!next) window.speechSynthesis.cancel(); }} />}
+    <p className="text-[10px] text-text-dim leading-relaxed">设置实时生效。养成、签到、成就与小游戏数据仅保存在本机；余额代理和 DSH TTS 不适用于 Claude Code。播报使用本机语音。</p>
+  </section>;
+}
+
 
 function Toggle({ on, color, label, onClick }: {
   on: boolean;
@@ -64,6 +104,14 @@ function Toggle({ on, color, label, onClick }: {
 }
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
+  useEffect(() => {
+    document.body.setAttribute('data-claude-whale-settings-open', 'true');
+    window.dispatchEvent(new Event('claude-whale-signals-change'));
+    return () => {
+      document.body.removeAttribute('data-claude-whale-settings-open');
+      window.dispatchEvent(new Event('claude-whale-signals-change'));
+    };
+  }, []);
   const model = useStore((s) => s.model);
   const setModel = useStore((s) => s.setModel);
   // 当前实际使用：活跃标签页的 CLI init 回显（各标签页可能不同）
@@ -283,6 +331,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               />
             </div>
           </div>
+
+          <WhaleSettings />
 
           {/* 历史会话 */}
           <div>
