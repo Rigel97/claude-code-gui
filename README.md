@@ -1,6 +1,6 @@
 # Claude Code GUI
 
-A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/overview) — multi-tab parallel conversations, image input, streaming chat, tool-call visualization, line-level diffs, file tree, cross-session search, a token usage dashboard, AI session naming, a Git changes panel, a TodoWrite progress panel, a file previewer, and an interactive whale-girl companion.
+A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/overview) — multi-tab parallel conversations, image input, streaming chat, tool-call visualization, line-level diffs, file tree, cross-session search, a token usage dashboard, AI session naming, a Git changes panel, a TodoWrite progress panel, a file previewer, a project management center with LLM-powered project recognition, and an interactive whale-girl companion.
 
 ---
 
@@ -16,6 +16,14 @@ A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/o
 - **File Tree Sidebar** — Browse the project directory, click a file to insert an `@path` reference into the input; hover a file and hit the 👁 button to preview it
 - **File Previewer** — Modal preview with syntax-highlighted text (512KB cap, binary detection, truncation notice) and inline image preview (png/jpg/gif/webp/bmp/ico)
 - **Git Changes Panel** — A fourth sidebar tab showing the current branch and working-tree changes (`M`/`A`/`D`/`?`/staged badges); files Claude touched in the active session get an ✨AI badge, click an entry to expand its unified diff, and revert single files via a confirmed `git checkout --`
+- **Project Management Center** — A dedicated view that turns your conversation history into trackable long-term projects:
+  - **LLM semantic recognition** (default) — sends bounded excerpts of your local history (GUI sessions + `~/.claude/projects` JSONL) to the model you already use via Claude Code, after an explicit scope/privacy/budget confirmation dialog; the model's output is then **locally verified against real evidence** — every project field and task must cite real source quotes, "completed" requires matching structured Todo/Task records, actual file outputs require successful write tools during that task's execution, and dependencies require recorded `TaskUpdate` edges. Unverifiable claims are downgraded to "pending confirmation" rather than silently trusted
+  - **Local rules mode** (opt-in, zero upload) — conservative regex/structure-based recognition; short Q&A and trivial edits never become projects
+  - **Review gate** — candidates are never auto-created; you select, edit, associate-with-existing, or reject each one before anything is written to disk
+  - **Project overview** — statuses (not started / in progress / completed) with counts, filtering, and search; project status is derived from task states plus your explicit goal acceptance, never from "the session ended"
+  - **Project detail** — background/constraints/decisions/deliverables, related files (preview / reveal in Finder), task list with per-task status editing and full audit trail back to the original conversations
+  - **Workflow view** — a DAG flowchart of tasks with real dependency edges (branch/merge supported), node details with inputs/outputs, zoom/pan, and viewport culling for large projects; node states always match task states
+  - **Persistence** — projects live in `userData/claude-gui-projects.json` (atomic writes, version-checked, refuses to overwrite externally corrupted files); re-recognition associates with existing projects by same-directory + real-source overlap instead of duplicating
 - **Slash Commands** — Type `/` for quick prompts: `/review`, `/fix`, `/test`, `/commit`, `/clear` and more
 - **Message Queue** — Typed messages during a running generation queue up and auto-send when it completes, per tab; failed turns drop their queue so it never bleeds into your next instruction
 - **Cross-session Search** — `⌘F` / `Ctrl+F` searches all open tabs plus archived sessions; jump-to-message routes to the right tab and highlights the hit
@@ -78,13 +86,18 @@ npm run pack        # unpacked app only (faster, for debugging)
 6. Click a session in the sidebar to open it as a tab (already-open sessions just activate); hover for rename / export / delete
 7. Click **TOKENS** (bottom-left) to open the usage dashboard; hover the context meter for details, click the 📦 icon next to it to compact the session
 8. Open the **Git** sidebar tab to review what Claude changed this session (✨AI badge) and revert single files; click 👁 in the file tree to preview a file
-9. The whale girl floats inside the app window. Click to interact, drag to reposition, or right-click for feeding, games, and settings. Use **Settings → 鲸鱼娘** to control dialogue, effects, tool poses, weather, and opt-in local speech
+9. Open **项目管理中心** (sidebar) to recognize, review, and track long-term projects from your history. Pick the recognition mode (LLM semantic / local rules), confirm the send scope and budget when prompted, then review candidates before any project is created. Click a project for background, tasks, files, and the dependency workflow view
+10. The whale girl floats inside the app window. Click to interact, drag to reposition, or right-click for feeding, games, and settings. Use **Settings → 鲸鱼娘** to control dialogue, effects, tool poses, weather, and opt-in local speech
 
 ### Whale Girl: scope and privacy
 
 The mascot follows Claude Code sessions launched **inside this GUI**, including background tabs; it does not follow Claude Code in another terminal, IDE, or the standalone Claude desktop app. The bridge passes tool names and aggregate activity/status counts to the mascot, not prompt text, tool arguments, or tool output. Optional keyword sensing from the original Harness plugin is disabled in this integration.
 
 Mascot interactions, growth, achievements, and preferences are stored locally under `whale-moe:*` in the app's renderer storage; they are separate from the GUI's session history and do not migrate from DeepSeek Harness. Weather makes requests to Open-Meteo only after you enter a city; local speech uses the OS speech engine and is off by default. The original DeepSeek-specific balance proxy and MiMo TTS integration are not available. The mascot lives **within the GUI window**, not in a system-wide transparent overlay. Its original bar/side display modes depend on Harness-specific layout anchors and are not supported here; use the default floating mode. Local speech currently covers mascot interaction lines only.
+
+### Project recognition: privacy, cost, and verification
+
+LLM recognition sends conversation excerpts (user/assistant text, whitelisted tool summaries — never thinking blocks, file contents, or full tool output) to the model service configured in your Claude Code CLI. Before anything is sent, a consent dialog shows the data volume, sample excerpts, and a per-run budget cap. The snapshot is frozen at consent time and single-use. Canceled, timed-out, or failed runs may still have incurred API costs. Model explanations are never trusted blindly: task statuses, actual file outputs, and dependencies must be backed by locally verified structured evidence, and everything else is marked "pending confirmation". The local rules mode recognizes projects entirely offline with no upload and no cost.
 
 ### Permission Modes
 
@@ -112,24 +125,32 @@ The model field is passed through verbatim as `--model`, so custom endpoints (GL
 
 ```
 src/
-├── main/          # Electron main process (CLI runner pool, IPC, file tree, persistence)
+├── main/          # Electron main process (CLI runner pool, IPC, file tree, persistence, projects backend)
 └── renderer/      # React app, whale status bridge, and public/whale/ artwork + scripts
-tests/             # Vitest suites: store state machine, diff engine, runner and whale bridge
+tests/             # Vitest suites: store state machine, diff engine, runner, whale bridge,
+                   # projects backend/LLM validation, analyzer CLI contract, and browser E2E
 ```
 
 ## Testing
 
-75 unit tests cover the trickiest logic, all runnable without a display or a real Claude session (the optional end-to-end test is skipped by default):
+316 unit tests cover the trickiest logic, all runnable without a display or a real Claude session (the optional end-to-end and browser-UI tests are skipped by default):
 
 - `tests/store.test.ts` — message merging by `message.id`, per-tab state isolation & event routing, background queue continuation, close-tab draft archiving, hydrate migration from the legacy single-session format, malformed-event hardening, immutability guarantees that `React.memo` relies on
 - `tests/diff.test.ts` — LCS diff correctness, degenerate fallback for huge inputs, context folding
 - `tests/runner.test.js` — real subprocess lifecycle: normal completion, abort-and-resend isolation, SIGKILL fallback, invalid cwd, and parallel multi-runner generation with per-conversation event tagging
 - `tests/whale.test.ts` — Claude Code-to-mascot status mapping, privacy boundary and completion/abort handling
+- `tests/projects-backend.test.js` — project recognition rules (short-Q&A filtering, dedup, cwd scoping), confirmation gating, atomic persistence, task status/dependency validation, edited-fields protection on re-recognition
+- `tests/projects-llm.test.js` — LLM analysis contract: citation validation (fabricated quotes rejected), status/IO/dependency grounding in real local evidence, cross-batch grouping, cancel/budget handling
+- `tests/projects-analyzer.test.js` — the tool-free Claude CLI invocation: stdin-only prompts, disabled tools/MCP/skills/session persistence, timeout/cancel process-group kill, malformed output rejection
+- `tests/projects-llm-backend.test.js` — consent gating, single-use frozen snapshots, early-cancel race, no silent rules fallback
+- `tests/project-store.test.ts` / `tests/project-model.test.ts` — renderer store gating and workflow DAG layout
+- `tests/project-ui.test.ts` — opt-in (`RUN_PROJECT_UI=1`) real-browser E2E over an isolated history fixture and mocked model
 
 ## Notes
 
 - Model selection is passed through as `--model`; leave it empty to use your CLI default
-- Session data is stored locally in `userData/claude-gui-config.json`; nothing is uploaded anywhere
+- Session data is stored locally in `userData/claude-gui-config.json`; project data in `userData/claude-gui-projects.json`; nothing is uploaded anywhere unless you explicitly confirm an LLM recognition run
+- LLM project recognition uses your Claude Code CLI credentials and may incur API costs; the consent dialog enforces a per-run budget cap
 - macOS is the tested packaging target; Linux and Windows are not verified for this whale integration. The existing CLI Windows `.cmd` shim and `taskkill` handling remain in place
 
 ## License

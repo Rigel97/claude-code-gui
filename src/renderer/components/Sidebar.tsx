@@ -8,6 +8,8 @@ import { CostDashboard } from './CostDashboard';
 import { GitPanel } from './GitPanel';
 import { sessionToMarkdown } from '../utils/exportSession';
 import type { Session } from '../types';
+import { useProjectsStore } from '../projectStore';
+import { FolderKanban } from 'lucide-react';
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
@@ -16,6 +18,10 @@ function formatTokens(n: number): string {
 }
 
 export function Sidebar() {
+  const projectsOpen = useProjectsStore((s) => s.open);
+  const projectCount = useProjectsStore((s) => s.projects.length);
+  const showProjects = useProjectsStore((s) => s.showProjects);
+  const showChat = useProjectsStore((s) => s.showChat);
   const cwd = useStore((s) => s.cwd);
   const setCwd = useStore((s) => s.setCwd);
   const sessions = useStore((s) => s.sessions);
@@ -91,6 +97,7 @@ export function Sidebar() {
       // 已开标签页各自持有创建时的 cwd 快照，运行中的任务不受影响
       setCwd(dir);
       newConversation();
+      showChat();
     }
   };
 
@@ -129,10 +136,22 @@ export function Sidebar() {
           )}
         </div>
 
+        <div className="px-3 pt-3">
+          <button
+            onClick={showProjects}
+            aria-pressed={projectsOpen}
+            className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border transition-colors ${projectsOpen ? 'bg-accent-cyan/10 border-accent-cyan/40 text-accent-cyan' : 'border-border text-text-secondary hover:bg-bg-light hover:text-accent-cyan'}`}
+          >
+            <FolderKanban className="w-4 h-4 shrink-0" />
+            <span className="text-sm flex-1 text-left">项目管理中心</span>
+            <span className="font-mono text-xs">{projectCount}</span>
+          </button>
+        </div>
+
         {/* 新建会话 */}
         <div className="p-3 pb-2">
           <button
-            onClick={() => newConversation()}
+            onClick={() => { newConversation(); showChat(); }}
             disabled={!cwd}
             title={cwd ? '新对话标签页（可与其他标签页并行生成）' : '先选择项目目录'}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r from-accent-cyan/10 to-accent-blue/10 hover:from-accent-cyan/20 hover:to-accent-blue/20 border border-accent-cyan/30 hover:border-accent-cyan/50 transition-all disabled:opacity-40 disabled:cursor-not-allowed group"
@@ -198,6 +217,7 @@ export function Sidebar() {
                         // 点击归档会话：已开则激活对应标签页，未开则新 tab 载入
                         // （多标签页下切换会话不再受生成中限制，其他标签页照常运行）
                         openSessionTab(session.sessionId);
+                        showChat();
                       }}
                       className={`w-full flex items-start gap-2 px-2.5 py-2 rounded-lg transition-all text-left group ${
                         confirming

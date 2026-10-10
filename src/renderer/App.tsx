@@ -8,9 +8,13 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { ParticleField } from './components/ParticleField';
 import { SearchPanel } from './components/SearchPanel';
 import { WhalePet } from './components/WhalePet';
+import { ProjectCenter } from './components/ProjectCenter';
+import { useProjectsStore } from './projectStore';
 
 export default function App() {
   const cwd = useStore((s) => s.cwd);
+  const projectsOpen = useProjectsStore((s) => s.open);
+  useEffect(() => { void useProjectsStore.getState().load(); }, []);
   const handleStream = useStore((s) => s.handleStream);
   const setStatus = useStore((s) => s.setStatus);
   const activeConversationId = useStore((s) => s.activeConversationId);
@@ -213,7 +217,7 @@ export default function App() {
           <Sidebar />
           <div className="flex flex-col flex-1 overflow-hidden">
             {/* key 按标签页切换重挂载：滚动位置/草稿各自独立 */}
-            {cwd ? <ChatArea key={activeConversationId} /> : <WelcomeScreen />}
+            {projectsOpen ? <ProjectCenter /> : cwd ? <ChatArea key={activeConversationId} /> : <WelcomeScreen />}
           </div>
         </div>
 

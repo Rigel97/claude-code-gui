@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import Module from 'node:module';
 import { createRequire } from 'node:module';
 import cp from 'node:child_process';
@@ -87,9 +87,12 @@ describe.skipIf(process.platform === 'win32')('ClaudeRunner 生命周期（代�
 
   it('T2 中断后立即重发：旧进程完全退出后才启动新进程，残流被丢弃', async () => {
     const sendA = runner.send({ prompt: 'normal', cwd: '/tmp' });
-    await sleep(80); // A 已 spawn，init 已到
-    const initA = captured.stream.find((d) => d.type === 'system');
-    expect(initA).toBeTruthy();
+    // 固定 sleep 在机器高负载时不够等 fixture 输出 init，改为带超时轮询
+    const initA = await vi.waitFor(() => {
+      const found = captured.stream.find((d) => d.type === 'system');
+      if (!found) throw new Error('init 事件未到达');
+      return found;
+    }, { timeout: 5000, interval: 20 });
     const pidA = initA.pid;
 
     runner.abort();

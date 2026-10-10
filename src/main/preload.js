@@ -15,6 +15,21 @@ const api = {
     flush: (value) => ipcRenderer.send('store:flush', value),
   },
 
+  projects: {
+    list: () => ipcRenderer.invoke('projects:list'),
+    prepare: (data) => ipcRenderer.invoke('projects:prepare', data),
+    scan: (data) => ipcRenderer.invoke('projects:scan', data),
+    cancelScan: (requestId) => ipcRenderer.invoke('projects:cancelScan', requestId),
+    onScanProgress: (callback) => {
+      const handler = (_event, progress) => callback(progress);
+      ipcRenderer.on('projects:progress', handler);
+      return () => ipcRenderer.removeListener('projects:progress', handler);
+    },
+    confirm: (scanId, reviews) => ipcRenderer.invoke('projects:confirm', scanId, reviews),
+    update: (project) => ipcRenderer.invoke('projects:update', project),
+    reveal: (filePath) => ipcRenderer.invoke('projects:reveal', filePath),
+  },
+
   claude: {
     send: (payload) => ipcRenderer.invoke('claude:send', payload),
     // 中断指定对话（多标签页各自的 runner）

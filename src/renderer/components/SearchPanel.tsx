@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useStore } from '../store';
+import { useProjectsStore } from '../projectStore';
 import { Search, X, User, Bot } from 'lucide-react';
 import type { ChatMessage, Session, UIBlock } from '../types';
 
@@ -66,6 +67,20 @@ export function SearchPanel() {
     }
   }, [open]);
 
+  // 搜索位于审核弹层之上；即便自动聚焦尚未完成，Esc 也只关闭搜索。
+  useEffect(() => {
+    if (!open) return;
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onEscape, true);
+    return () => window.removeEventListener('keydown', onEscape, true);
+  }, [open, setOpen]);
+
   // 跨会话搜索：所有打开的标签页（含活跃）+ 全部归档会话，按消息 id 去重
   const hits = useMemo(() => {
     const q = query.trim();
@@ -115,12 +130,14 @@ export function SearchPanel() {
       openSessionTab(hit.sessionId);
     }
     setHighlightMessage(hit.message.id);
+    useProjectsStore.getState().showChat();
     setOpen(false);
   };
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center pt-24 bg-black/50 backdrop-blur-sm animate-fade-in"
+      data-search-panel="true"
       onClick={() => setOpen(false)}
     >
       <div

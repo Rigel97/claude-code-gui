@@ -80,8 +80,10 @@ export function FilePreview({ path, onClose }: { path: string; onClose: () => vo
   useEffect(() => {
     let cancelled = false;
     setData(null);
-    (window as any).api.fs.readFile(path).then((r: PreviewData) => {
+    Promise.resolve().then(() => (window as any).api.fs.readFile(path)).then((r: PreviewData) => {
       if (!cancelled) setData(r);
+    }).catch((error: unknown) => {
+      if (!cancelled) setData({ ok: false, error: error instanceof Error ? error.message : String(error) });
     });
     return () => { cancelled = true; };
   }, [path]);
@@ -98,13 +100,14 @@ export function FilePreview({ path, onClose }: { path: string; onClose: () => vo
     return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
-  const fileName = path.split('/').pop() || path;
+  const fileName = path.split(/[\\/]/).pop() || path;
   const ext = fileName.includes('.') ? fileName.split('.').pop()!.toLowerCase() : '';
   const lang = useMemo(() => EXT_LANG[ext], [ext]);
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in"
+      data-file-preview="true"
       onClick={onClose}
     >
       <div

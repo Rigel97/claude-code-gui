@@ -2,9 +2,21 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import { syncWhaleSignals } from '../src/renderer/components/WhalePet';
 import type { Conversation, UIBlock } from '../src/renderer/types';
 
-function element() {
+interface FixtureElement {
+  attributes: Map<string, string>;
+  children: FixtureElement[];
+  style: Record<string, string>;
+  textContent: string;
+  getAttribute(name: string): string | null;
+  setAttribute(name: string, value: string): void;
+  querySelector(selector: string): FixtureElement | null;
+  appendChild(child: FixtureElement): void;
+  remove(): void;
+}
+
+function element(): FixtureElement {
   const attributes = new Map<string, string>();
-  const children: ReturnType<typeof element>[] = [];
+  const children: FixtureElement[] = [];
   return {
     attributes, children, style: {}, textContent: '',
     getAttribute(name: string) { return attributes.get(name) ?? null; },

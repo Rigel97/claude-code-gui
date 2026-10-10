@@ -40,8 +40,10 @@ nodeRequire.cache[ELECTRON_PATH] = {
   loaded: true,
   exports: electronStub,
 } as any;
-const origResolve = Module._resolveFilename;
-Module._resolveFilename = function (request: string, ...args: any[]) {
+// Node's internal resolver is deliberately patched for the Electron fixture.
+const moduleInternals = Module as unknown as { _resolveFilename: (request: string, ...args: any[]) => string };
+const origResolve = moduleInternals._resolveFilename;
+moduleInternals._resolveFilename = function (request: string, ...args: any[]) {
   if (request === 'electron') return ELECTRON_PATH;
   return origResolve.call(this, request, ...args);
 };
@@ -51,7 +53,7 @@ describe.skipIf(!RUN_E2E)('真实 CLI 端到端：partial messages 全链路', (
   let useStore: any;
 
   beforeAll(async () => {
-    ({ ClaudeRunner } = await import('../src/main/runner.js'));
+    ({ ClaudeRunner } = nodeRequire('../src/main/runner.js'));
     ({ useStore } = await import('../src/renderer/store'));
   });
 

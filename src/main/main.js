@@ -28,9 +28,21 @@ const { ClaudeRunner, queryContext, compactSession, generateSessionTitle } = req
 const { gitStatus, gitDiffFile, gitCheckoutFile } = require('./git');
 const { saveImageDataUrl } = require('./images');
 const { Store } = require('./store');
+const { ProjectsBackend } = require('./projects');
 
 let mainWindow = null;
 let store = null;
+let projects = null;
+
+for (const method of ['list', 'prepare', 'scan', 'cancelScan', 'confirm', 'update', 'reveal']) {
+  ipcMain.handle(`projects:${method}`, async (event, ...args) => {
+    if (!projects) throw new Error('Projects 后端尚未初始化，请稍后重试');
+    if (method === 'scan') return projects.scan(args[0], progress => {
+      if (event.sender && !event.sender.isDestroyed()) event.sender.send('projects:progress', progress);
+    });
+    return projects[method](...args);
+  });
+}
 
 // ─── 多标签页 Runner 池 ──────────────────────
 // 每个对话标签页一个独立 runner（进程槽位互不干扰，支持并行生成）；
@@ -104,7 +116,8 @@ async function createWindow() {
     if (app.dock) app.dock.setBadge('');
   });
 
-  const devServerUp = await isDevServerRunning();
+  // 安装版必须使用内置资源，不能被本机恰好运行的开发服务器劫持。
+  const devServerUp = !app.isPackaged && await isDevServerRunning();
   if (devServerUp) {
     // 开发模式：加载 Vite dev server（支持热更新）
     mainWindow.loadURL('http://localhost:5170');
@@ -512,6 +525,11 @@ if (!app.requestSingleInstanceLock()) {
     }
     setupApplicationMenu();
     store = new Store();
+    projects = new ProjectsBackend({
+      home: app.getPath('home'),
+      userData: app.getPath('userData'),
+      revealFile: (filePath) => shell.showItemInFolder(filePath),
+    });
     createWindow();
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
