@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Check, FolderKanban, Loader2, ScanSearch, Search, X, AlertTriangle, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Check, FolderKanban, Loader2, ScanSearch, Search, X, AlertTriangle, RefreshCw, Pencil } from 'lucide-react';
 import { useStore } from '../store';
 import { useProjectsStore } from '../projectStore';
 import { PROJECT_LABELS, projectCounts, projectSummary, TASK_LABELS } from '../projectModel';
@@ -194,10 +194,9 @@ function CandidateReview({ onSource }: { onSource: (source: ProjectSource) => vo
   const { scanResult, reviews, operation, projects, error, clearError, review, associate, cancelReview, confirm } = useProjectsStore();
   const dialog = useRef<HTMLElement>(null);
   const [page, setPage] = useState(0);
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [taskPage, setTaskPage] = useState(0);
-  useEffect(() => { setPage(0); setExpanded(null); }, [scanResult?.scanId]);
-  useEffect(() => { setTaskPage(0); }, [expanded]);
+  const [detail, setDetail] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  useEffect(() => { setPage(0); setDetail(null); setEditing(null); }, [scanResult?.scanId]);
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
     dialog.current?.querySelector<HTMLButtonElement>('button')?.focus();
@@ -220,41 +219,81 @@ function CandidateReview({ onSource }: { onSource: (source: ProjectSource) => vo
   const selected = Object.values(reviews).filter(review => review.selected).length;
   return <div className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
     <section ref={dialog} role="dialog" aria-modal="true" aria-labelledby="review-title" className="flex flex-col w-full max-w-4xl max-h-[90vh] rounded-xl bg-bg-deep border border-border-light shadow-2xl overflow-hidden">
-      <header className="flex items-start justify-between gap-4 p-5 border-b border-border">
-        <div><h2 id="review-title" className="text-lg text-text-primary">审核识别结果</h2><p className="text-xs text-text-secondary mt-2">发现 {scanResult.candidates.length} 个候选 · GUI {scanResult.coverage.guiSessions} 个会话 · Claude Code {scanResult.coverage.claudeSessions} 个会话 · 跳过 {scanResult.coverage.skipped} 项</p></div>
+      <header className="flex items-center justify-between gap-4 px-5 py-4 border-b border-border">
+        <div className="min-w-0">
+          <h2 id="review-title" className="text-lg text-text-primary">审核识别结果</h2>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+            <span>{scanResult.candidates.length} 个候选</span>
+            {scanResult.analysis?.mode === 'llm'
+              ? <span className="inline-flex items-center rounded-md px-1.5 py-0.5 bg-accent-cyan/10 text-accent-cyan">LLM 识别 · {scanResult.analysis.model || '默认模型'} · ${Number(scanResult.analysis.costUsd || 0).toFixed(4)}</span>
+              : <span className="inline-flex items-center rounded-md px-1.5 py-0.5 bg-bg-lighter/70 text-text-secondary">本地规则 · 未上传</span>}
+          </div>
+        </div>
         <button className={button} onClick={cancelReview} disabled={busy} aria-label="取消审核"><X className="w-4 h-4" /></button>
       </header>
-      {scanResult.analysis && <div className="mx-5 mt-3 p-3 border border-accent-cyan/20 rounded-lg text-xs text-text-secondary"><span className="text-accent-cyan">{scanResult.analysis.mode === 'llm' ? 'LLM 语义识别 + 本地证据校验' : '本地规则识别（未上传）'}</span>{scanResult.analysis.mode === 'llm' && <span> · 模型 {scanResult.analysis.model || 'Claude Code 默认'} · {scanResult.analysis.calls || 0} 次调用 · 实际报告 ${Number(scanResult.analysis.costUsd || 0).toFixed(4)}</span>}</div>}
       {error && <div role="alert" className="mx-5 mt-3 p-3 rounded-lg border border-accent-red/30 bg-accent-red/10 text-xs text-accent-red flex gap-2"><span className="flex-1 break-words">{error}</span><button aria-label="关闭审核错误" onClick={clearError}><X className="w-4 h-4" /></button></div>}
-      <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4">
-        <details className="rounded-lg border border-border bg-bg-deepest/60 px-3 py-2 text-xs text-text-secondary"><summary className="cursor-pointer">扫描覆盖范围与限制（{scanResult.coverage.warnings.length} 条说明）</summary><div className="mt-3 space-y-2 selectable-text"><p className="break-all">{scanResult.coverage.roots.join('\n')}</p>{scanResult.coverage.warnings.map((warning, index) => <p key={index} className="break-words leading-5">{warning}</p>)}</div></details>
-        <p className="text-xs text-accent-orange leading-6">候选默认不勾选，只有选中并确认后才保存。请核对目标、任务及不确定信息；已有项目默认关联，不会覆盖你已编辑的任务状态。若手动选择另建项目，可能重复，请确认项目边界。</p>
-        {!scanResult.candidates.length && <div className="py-10 text-center text-sm text-text-secondary">未发现同时具有明确目标和多步骤证据的项目。可能是历史仅包含短任务、目标表述不明确，或部分数据不可访问；请查看扫描说明。</div>}
-        {scanResult.candidates.slice(page * 8, (page + 1) * 8).map(candidate => {
+      <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-3">
+        <p className="text-xs text-text-dim leading-5">勾选要保存的项目；点 ✎ 修改名称与目标，点击卡片也可勾选。默认关联已有项目，未确认前不会写入。</p>
+        {!scanResult.candidates.length && <div className="py-12 text-center text-sm text-text-secondary leading-6">未发现值得长期跟踪的项目。<br />短问答与小改动不会成为项目；数据范围与限制见底部说明。</div>}
+        {scanResult.candidates.slice(page * 10, (page + 1) * 10).map(candidate => {
           const current = reviews[candidate.id];
           if (!current) return null;
-          return <article key={candidate.id} className={`p-4 rounded-xl border ${current.selected ? 'border-accent-cyan/40 bg-accent-cyan/5' : 'border-border bg-bg-light/40'}`}>
-            <div className="flex items-center justify-between gap-3 mb-3"><label className="flex items-center gap-2 text-sm text-text-primary cursor-pointer"><input type="checkbox" checked={current.selected} disabled={busy} onChange={event => review(candidate.id, { selected: event.target.checked })} className="accent-accent-cyan" />选择此候选</label><span className="text-xs text-text-secondary">{candidate.tasks.length} 个任务 · {new Set(candidate.sources.map(source => source.sessionId)).size} 个会话</span></div>
-            <div className="space-y-3"><label className="block text-xs text-text-secondary">项目名称<input aria-label={`候选项目名称 ${candidate.id}`} className={`${input} mt-1`} value={current.name} disabled={busy} maxLength={500} onChange={event => review(candidate.id, { name: event.target.value })} /></label>
-              <label className="block text-xs text-text-secondary">明确目标<textarea className={`${input} mt-1 resize-y`} value={current.goal} rows={2} disabled={busy} maxLength={20000} onChange={event => review(candidate.id, { goal: event.target.value })} /></label>
-              <label className="block text-xs text-text-secondary">项目简述<textarea className={`${input} mt-1 resize-y`} placeholder="信息不足可留空，后续在项目详情中补充" value={current.description} rows={2} disabled={busy} maxLength={20000} onChange={event => review(candidate.id, { description: event.target.value })} /></label>
-              <label className="block text-xs text-text-secondary">创建方式<select className={`${input} mt-1`} value={current.existingProjectId || ''} disabled={busy} onChange={event => associate(candidate.id, event.target.value)}><option value="">创建独立项目</option>{projects.map(project => <option key={project.id} value={project.id}>关联已有：{project.name}</option>)}</select></label>
-              {candidate.existingProjectId && !current.existingProjectId && <label className="flex gap-2 items-start text-xs text-accent-orange leading-5"><input className="accent-accent-orange mt-1" type="checkbox" checked={!!current.allowDuplicate} disabled={busy} onChange={event => review(candidate.id, { allowDuplicate: event.target.checked })} />我确认这是另一个独立项目，允许与相同历史目标另建（可能重复）。</label>}
+          const sessions = new Set(candidate.sources.map(source => source.sessionId)).size;
+          const dependencies = candidate.tasks.reduce((total, task) => total + task.dependsOn.length, 0);
+          const linked = current.existingProjectId ? projects.find(project => project.id === current.existingProjectId) : undefined;
+          const chip = 'inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] leading-4';
+          return <article key={candidate.id} className={`rounded-xl border overflow-hidden transition-colors ${current.selected ? 'border-accent-cyan/40 bg-accent-cyan/[0.04]' : 'border-border bg-bg-light/30'}`}>
+            <div className="p-4 flex items-start gap-3">
+              <input type="checkbox" className="mt-1 accent-accent-cyan shrink-0" checked={current.selected} disabled={busy} onChange={event => review(candidate.id, { selected: event.target.checked })} aria-label={`选择项目 ${current.name}`} />
+              <div className="flex-1 min-w-0">
+                {editing === candidate.id ? (
+                  <div className="space-y-2">
+                    <input aria-label={`项目名称 ${current.name}`} className={input} value={current.name} maxLength={500} disabled={busy} onChange={event => review(candidate.id, { name: event.target.value })} placeholder="项目名称" />
+                    <textarea aria-label={`项目目标 ${current.name}`} className={`${input} resize-y`} value={current.goal} rows={2} maxLength={20000} disabled={busy} onChange={event => review(candidate.id, { goal: event.target.value })} placeholder="目标（必填）" />
+                    <textarea aria-label={`项目简述 ${current.name}`} className={`${input} resize-y`} value={current.description} rows={2} maxLength={20000} disabled={busy} onChange={event => review(candidate.id, { description: event.target.value })} placeholder="简述（可选，确认后可再补）" />
+                    <button className={button} onClick={() => setEditing(null)}>完成编辑</button>
+                  </div>
+                ) : (
+                  <div className="cursor-pointer group" onClick={() => { if (!busy) review(candidate.id, { selected: !current.selected }); }}>
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="text-sm font-medium text-text-primary break-words leading-6 group-hover:text-accent-cyan transition-colors">{current.name}</h3>
+                      <button className="text-text-dim hover:text-accent-cyan shrink-0" aria-label={`编辑 ${current.name}`} disabled={busy} onClick={event => { event.stopPropagation(); setEditing(candidate.id); }}><Pencil className="w-3.5 h-3.5" /></button>
+                    </div>
+                    <p className="mt-1 text-xs text-text-secondary leading-5 line-clamp-2 break-words">{current.goal}</p>
+                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                      <span className={`${chip} bg-bg-lighter/70 text-text-secondary`}>{candidate.tasks.length} 任务</span>
+                      <span className={`${chip} bg-bg-lighter/70 text-text-secondary`}>{sessions} 会话</span>
+                      {dependencies > 0 && <span className={`${chip} bg-bg-lighter/70 text-text-secondary`}>{dependencies} 依赖</span>}
+                      {linked ? <span className={`${chip} bg-accent-cyan/10 text-accent-cyan`}>关联：{linked.name}</span> : <span className={`${chip} bg-bg-lighter/70 text-text-secondary`}>新项目</span>}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="mt-4 text-xs text-text-secondary space-y-2"><div className="font-medium text-text-primary">识别依据</div>{candidate.evidence.slice(0, 5).map((evidence, index) => <p key={index} className="break-words leading-5 selectable-text">{evidence}</p>)}{candidate.evidence.length > 5 && <p>另有 {candidate.evidence.length - 5} 条结构化证据，可在来源中追溯。</p>}</div>
-            <details className="mt-3 text-xs text-accent-orange"><summary className="cursor-pointer">不确定之处（{candidate.uncertainties.length}）</summary><div className="space-y-2 mt-2">{candidate.uncertainties.map((uncertainty, index) => <p key={index} className="leading-5 break-words selectable-text">{uncertainty}</p>)}</div></details>
-            <button className={`${button} mt-3`} onClick={() => setExpanded(expanded === candidate.id ? null : candidate.id)}>{expanded === candidate.id ? '收起关联任务' : '查看关联任务与原文'}</button>
-            {expanded === candidate.id && <div className="mt-3 space-y-2">
-              {candidate.tasks.slice(taskPage * 10, (taskPage + 1) * 10).map(task => <div className="flex items-start justify-between gap-2 p-2 rounded-lg bg-bg-deepest border border-border text-xs" key={task.id}><div><p className="text-text-primary">{task.name}</p>{task.description && <p className="text-text-secondary mt-1">{task.description}</p>}<p className="text-text-secondary mt-1">{task.dependsOn.length} 个明确前置依赖 · {task.inputs.length} 个输入 · {task.outputs.length} 个输出</p></div><span className="text-text-secondary shrink-0">{TASK_LABELS[task.status]}</span></div>)}
-              <Pagination page={taskPage} total={candidate.tasks.length} size={10} onChange={setTaskPage} />
-              {candidate.sources.slice(0, 8).map(item => <button className={`${button} w-full text-left justify-start`} key={item.id} onClick={() => onSource(item)}><span className="truncate">{item.kind === 'gui' ? 'GUI' : 'Claude Code'} · {item.title || item.sessionId} · {item.excerpt.slice(0, 70)}</span></button>)}
-              {candidate.sources.length > 8 && <p className="text-xs text-text-secondary">保存后可在项目详情查看全部 {candidate.sources.length} 条来源。</p>}
+            <div className="px-4 pb-3 flex items-center justify-between gap-2 flex-wrap">
+              <select aria-label={`创建方式 ${current.name}`} className="rounded-lg bg-bg-deepest border border-border px-2 py-1.5 text-xs text-text-secondary max-w-[220px]" value={current.existingProjectId || ''} disabled={busy} onChange={event => associate(candidate.id, event.target.value)}>
+                <option value="">创建为新项目</option>
+                {projects.map(project => <option key={project.id} value={project.id}>关联已有：{project.name}</option>)}
+              </select>
+              <button className="text-xs text-text-secondary hover:text-accent-cyan transition-colors" onClick={() => setDetail(detail === candidate.id ? null : candidate.id)} aria-expanded={detail === candidate.id}>{detail === candidate.id ? '收起详情' : `详情 · ${candidate.tasks.length} 任务`}</button>
+            </div>
+            {candidate.existingProjectId && !current.existingProjectId && <label className="px-4 pb-3 flex gap-2 items-start text-[11px] text-accent-orange leading-5"><input className="accent-accent-orange mt-1" type="checkbox" checked={!!current.allowDuplicate} disabled={busy} onChange={event => review(candidate.id, { allowDuplicate: event.target.checked })} />另建为独立项目（与相同历史目标重复时需勾选确认）</label>}
+            {detail === candidate.id && <div className="border-t border-border/60 bg-bg-deepest/40 px-4 py-3 space-y-3 text-xs">
+              <section>
+                <h4 className="text-text-primary font-medium mb-1">任务（{candidate.tasks.length}）</h4>
+                {candidate.tasks.slice(0, 6).map(task => <div key={task.id} className="flex items-center justify-between gap-3 py-0.5"><span className="truncate text-text-secondary">{task.name}</span><span className="shrink-0 text-text-dim">{TASK_LABELS[task.status]}{task.dependsOn.length ? ` · ${task.dependsOn.length} 依赖` : ''}</span></div>)}
+                {candidate.tasks.length > 6 && <p className="text-text-dim mt-1">确认后在项目详情查看全部 {candidate.tasks.length} 个任务。</p>}
+              </section>
+              {candidate.evidence.length > 0 && <section><h4 className="text-text-primary font-medium mb-1">识别依据（{candidate.evidence.length}）</h4>{candidate.evidence.slice(0, 2).map((evidence, index) => <p key={index} className="text-text-secondary leading-5 break-words line-clamp-2 selectable-text">{evidence}</p>)}</section>}
+              {candidate.uncertainties.length > 0 && <section><h4 className="text-accent-orange/90 font-medium mb-1">待确认（{candidate.uncertainties.length}）</h4>{candidate.uncertainties.slice(0, 2).map((uncertainty, index) => <p key={index} className="text-text-secondary leading-5 break-words line-clamp-2">{uncertainty}</p>)}</section>}
+              {candidate.sources.length > 0 && <section><h4 className="text-text-primary font-medium mb-1">来源（{candidate.sources.length}）</h4><div className="flex flex-wrap gap-1.5">{candidate.sources.slice(0, 4).map(item => <button key={item.id} className={`${chip} border border-border hover:border-accent-cyan/40 text-text-secondary transition-colors`} onClick={() => onSource(item)} title={item.excerpt.slice(0, 120)}>{item.kind === 'gui' ? 'GUI' : 'Claude Code'} · {item.title || item.sessionId}</button>)}</div></section>}
             </div>}
           </article>;
         })}
-        <Pagination page={page} total={scanResult.candidates.length} size={8} onChange={setPage} />
+        <Pagination page={page} total={scanResult.candidates.length} size={10} onChange={setPage} />
+        {scanResult.coverage.warnings.length > 0 && <details className="text-xs text-text-dim"><summary className="cursor-pointer">覆盖范围与限制（{scanResult.coverage.warnings.length}）</summary><div className="mt-2 space-y-1.5 selectable-text"><p className="break-all">{scanResult.coverage.roots.join('\n')}</p>{scanResult.coverage.warnings.map((warning, index) => <p key={index} className="leading-5 break-words">{warning}</p>)}</div></details>}
       </div>
-      <footer className="flex justify-between items-center gap-3 p-4 border-t border-border bg-bg-deepest/50"><span className="text-xs text-text-secondary">已选择 {selected} 个 · 未确认内容不会落盘</span><div className="flex gap-2"><button className={button} onClick={cancelReview} disabled={busy}>取消，不创建</button><button className={`${button} bg-accent-cyan/10 border-accent-cyan/40 text-accent-cyan`} onClick={() => void confirm()} disabled={busy || !selected}>{busy && <Loader2 className="w-4 h-4 animate-spin" />}确认创建 / 关联</button></div></footer>
+      <footer className="flex justify-between items-center gap-3 px-5 py-4 border-t border-border bg-bg-deepest/50"><span className="text-xs text-text-secondary">已选 {selected} 个 · 未确认不保存</span><div className="flex gap-2"><button className={button} onClick={cancelReview} disabled={busy}>取消，不创建</button><button className={`${button} bg-accent-cyan/10 border-accent-cyan/40 text-accent-cyan`} onClick={() => void confirm()} disabled={busy || !selected}>{busy && <Loader2 className="w-4 h-4 animate-spin" />}确认创建 / 关联</button></div></footer>
     </section>
   </div>;
 }

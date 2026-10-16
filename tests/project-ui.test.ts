@@ -156,10 +156,11 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     await clickButton('识别项目');
     const review = page.getByRole('dialog', { name: '审核识别结果' });
     await review.waitFor();
-    expect(await review.getByText(/发现 1 个候选/).count()).toBe(1);
-    expect(await review.getByRole('checkbox', { name: '选择此候选' }).isChecked()).toBe(false);
+    expect(await review.getByText(/1 个候选/).count()).toBe(1);
+    expect(await review.getByRole('checkbox', { name: /选择项目/ }).isChecked()).toBe(false);
     expect(await review.getByRole('button', { name: '确认创建 / 关联' }).isEnabled()).toBe(false);
-    const nameField = review.getByRole('textbox', { name: /候选项目名称/ });
+    await review.getByRole('button', { name: /^编辑/ }).click();
+    const nameField = review.getByRole('textbox', { name: /项目名称/ });
     await nameField.fill('会员长期项目');
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+f' : 'Control+f');
     await page.getByPlaceholder('搜索所有会话的消息内容…').waitFor();
@@ -172,9 +173,10 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
 
     await clickButton('识别项目');
     await review.waitFor();
+    await review.getByRole('button', { name: /^编辑/ }).click();
     await nameField.fill('会员长期项目');
-    await review.getByRole('checkbox', { name: '选择此候选' }).check();
-    await review.getByRole('button', { name: '查看关联任务与原文' }).click();
+    await review.getByRole('checkbox', { name: /选择项目/ }).check();
+    await review.getByRole('button', { name: /详情/ }).click();
     expect(await review.getByText('接口阶段', { exact: true }).count()).toBe(1);
     await review.getByRole('button', { name: /^Claude Code/ }).first().click();
     await page.getByRole('dialog', { name: '历史来源详情' }).waitFor();
@@ -230,9 +232,9 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     await clickButton('项目总览');
     await clickButton('识别项目');
     await review.waitFor();
-    const mode = review.getByRole('combobox', { name: '创建方式' });
-    expect(await mode.inputValue()).toBe((await projects())[0].id);
-    await review.getByRole('checkbox', { name: '选择此候选' }).check();
+const mode = review.getByRole('combobox', { name: /创建方式/ });
+expect(await mode.inputValue()).toBe((await projects())[0].id);
+await review.getByRole('checkbox', { name: /选择项目/ }).check();
     await review.getByRole('button', { name: '确认创建 / 关联' }).click();
     await review.waitFor({ state: 'hidden' });
     expect(await projects()).toHaveLength(1);
@@ -339,9 +341,9 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     const review = page.getByRole('dialog', { name: '审核识别结果' });
     await review.waitFor();
     expect(llmCalls).toBe(1);
-    expect(await review.getByText('LLM 语义识别 + 本地证据校验', { exact: true }).count()).toBe(1);
-    expect(await projects()).toEqual(before);
-    await review.getByRole('checkbox', { name: '选择此候选' }).check();
+expect(await review.getByText(/LLM 识别 · /).count()).toBe(1);
+expect(await projects()).toEqual(before);
+await review.getByRole('checkbox', { name: /选择项目/ }).check();
     await review.getByRole('button', { name: '确认创建 / 关联' }).click();
     await review.waitFor({ state: 'hidden' });
     expect(await projects()).toHaveLength(1);
