@@ -52,6 +52,9 @@ setAutocompact: (v: '' | 'auto' | '100k' | '200k' | '400k' | '800k' | '1M') => v
 // 单次任务预算上限美元（--max-budget-usd），0 = 不限制
 maxBudgetUsd: number;
 setMaxBudgetUsd: (n: number) => void;
+// 动态视频背景：path 为本机绝对路径，经主进程 bgmedia:// 协议流式播放
+videoBg: { enabled: boolean; path: string | null };
+setVideoBg: (patch: { enabled?: boolean; path?: string | null }) => void;
   clearAllSessions: () => void;
   renameSession: (index: number, title: string) => void;
   /** 置顶/取消置顶（置顶项浮到列表顶部） */
@@ -98,6 +101,7 @@ sidebarWidth?: number;
 effortLevel?: string;
 autocompact?: string;
     maxBudgetUsd?: number;
+    videoBg?: { enabled?: boolean; path?: string | null };
     // 旧版单会话格式（迁移用）
     messages?: ChatMessage[];
     currentSessionId?: string | null;
@@ -710,6 +714,8 @@ maxBudgetUsd: 0,
 setMaxBudgetUsd: (maxBudgetUsd) => set({
 maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.round(maxBudgetUsd * 100) / 100,
 }),
+videoBg: { enabled: false, path: null },
+setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
 
     clearAllSessions: () => {
       const state = get();
@@ -1358,6 +1364,10 @@ autocompact: ['', 'auto', '100k', '200k', '400k', '800k', '1M'].includes(data.au
 maxBudgetUsd: typeof data.maxBudgetUsd === 'number' && data.maxBudgetUsd > 0
 ? data.maxBudgetUsd
 : 0,
+videoBg: {
+  enabled: data.videoBg?.enabled === true,
+  path: typeof data.videoBg?.path === 'string' && data.videoBg.path ? data.videoBg.path : null,
+},
       });
     },
   };

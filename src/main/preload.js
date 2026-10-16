@@ -78,6 +78,16 @@ const api = {
     reveal: (skillPath) => ipcRenderer.invoke('skills:reveal', skillPath),
   },
 
+  // 动态视频背景：选择本机视频 / 重新登记播放路径（主进程 bgmedia:// 协议提供流）
+  videoBg: {
+    // 弹出系统选框选择视频文件，返回绝对路径或 null（取消）
+    pick: () => ipcRenderer.invoke('dialog:open-video'),
+    // 启动恢复时把持久化的路径重新登记进主进程白名单
+    setPath: (filePath) => ipcRenderer.invoke('video-bg:set-path', filePath),
+    // 清除登记（关闭视频背景时释放白名单）
+    clear: () => ipcRenderer.invoke('video-bg:clear'),
+  },
+
   // 拖入窗口的 File 对象取真实路径（Electron 32+ 移除了 File.path，必须走 webUtils）
   getFilePath: (file) => webUtils.getPathForFile(file),
 

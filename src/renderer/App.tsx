@@ -6,6 +6,7 @@ import { StatusBar } from './components/StatusBar';
 import { TitleBar } from './components/TitleBar';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { ParticleField } from './components/ParticleField';
+import { VideoBackground } from './components/VideoBackground';
 import { SearchPanel } from './components/SearchPanel';
 import { WhalePet } from './components/WhalePet';
 import { ProjectCenter } from './components/ProjectCenter';
@@ -63,6 +64,7 @@ export default function App() {
       effortLevel: state.effortLevel,
       autocompact: state.autocompact,
       maxBudgetUsd: state.maxBudgetUsd,
+      videoBg: state.videoBg,
     });
 
     const flush = () => {
@@ -198,6 +200,9 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen tech-grid-bg bg-bg-deepest">
       <WhalePet />
+      {/* 动态视频背景（最底层，可选；失败时静默回落深色背景） */}
+      <VideoBackground />
+
       {/* 粒子网络背景 */}
       <ParticleField />
 

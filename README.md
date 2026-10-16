@@ -1,6 +1,6 @@
 # Claude Code GUI
 
-A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/overview) — multi-tab parallel conversations, image input, streaming chat, tool-call visualization, line-level diffs, file tree, cross-session search, a token usage dashboard, AI session naming, a Git changes panel, a TodoWrite progress panel, a file previewer, a project management center with LLM-powered project recognition, and an interactive whale-girl companion.
+A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/overview) — multi-tab parallel conversations, image input, streaming chat, tool-call visualization, line-level diffs, file tree, cross-session search, a token usage dashboard, AI session naming, a Git changes panel, a TodoWrite progress panel, a file previewer, a project management center with LLM-powered project recognition, an optional live video background, and an interactive whale-girl companion.
 
 ---
 
@@ -36,6 +36,7 @@ A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/o
 - **Background Notifications** — System notification with a snippet of your prompt when a task finishes while the window is not focused
 - **Interrupt Anytime** — Stop button or `ESC` aborts the active tab's generation (other tabs keep running); the child process is SIGTERM'd with a SIGKILL fallback (taskkill tree-kill on Windows)
 - **Cyberpunk UI** — Particle network background that speeds up while generating, scan lines, glow effects (Tailwind CSS)
+- **Live Video Background** (opt-in) — Set any local video (mp4/webm/mov/m4v/ogv) as the animated window backdrop from **Settings → Dynamic Video Background**. Played muted, looping, and cover-fitted; a darkening overlay keeps text readable while the particle network keeps floating on top. Served through a custom privileged `bgmedia://` protocol with HTTP Range streaming (seek-friendly, memory-friendly) and a single-path whitelist — the protocol only ever serves the one file you picked, video never leaves your machine. Pauses automatically when the window is hidden, and silently falls back to the default background if the file is moved or deleted
 - **Claude Code Whale Girl** — Replaces the old bunny/cat/bear pet with an interactive, draggable mascot adapted from [dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume). Reacts to this GUI's Claude Code sessions (working, tool type, completion, errors), with original artwork, dialogue, feeding, games, growth, achievements, weather effects, and optional local speech. Settings are available from the GUI's **Settings → 鲸鱼娘** section or the mascot's context menu
 
 ## Prerequisites
@@ -88,6 +89,7 @@ npm run pack        # unpacked app only (faster, for debugging)
 8. Open the **Git** sidebar tab to review what Claude changed this session (✨AI badge) and revert single files; click 👁 in the file tree to preview a file
 9. Open **项目管理中心** (sidebar) to recognize, review, and track long-term projects from your history. Pick the recognition mode (LLM semantic / local rules), confirm the send scope and budget when prompted, then review candidates before any project is created. Click a project for background, tasks, files, and the dependency workflow view
 10. The whale girl floats inside the app window. Click to interact, drag to reposition, or right-click for feeding, games, and settings. Use **Settings → 鲸鱼娘** to control dialogue, effects, tool poses, weather, and opt-in local speech
+11. Want an animated backdrop? Open **Settings → Dynamic Video Background**, pick a local video file, and toggle it on/off anytime; low-bitrate loopable clips are recommended to keep power draw minimal
 
 ### Whale Girl: scope and privacy
 

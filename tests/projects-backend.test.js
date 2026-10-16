@@ -1024,7 +1024,7 @@ describe('Projects IPC 接入', () => {
       loadFile(file) { loadFile(file); }
       static getAllWindows() { return []; }
     }
-    const electron = { app, BrowserWindow: WindowMock, ipcMain: { handle: (channel, handler) => handlers.set(channel, handler), on: vi.fn() }, shell: { showItemInFolder: vi.fn() }, Menu: { buildFromTemplate: () => [], setApplicationMenu: vi.fn() } };
+    const electron = { app, BrowserWindow: WindowMock, ipcMain: { handle: (channel, handler) => handlers.set(channel, handler), on: vi.fn() }, shell: { showItemInFolder: vi.fn() }, Menu: { buildFromTemplate: () => [], setApplicationMenu: vi.fn() }, protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() } };
     const nativeRequire = createRequire(mainPath);
     class BackendMock { constructor(value) { options = value; Object.assign(this, methods); } }
     const mainSource = await fs.promises.readFile(mainPath, 'utf8');
@@ -1066,6 +1066,13 @@ describe('Projects IPC 接入', () => {
     expect(methods.scan).toHaveBeenCalledExactlyOnceWith(data(), expect.any(Function));
     expect(methods.prepare).toHaveBeenCalledExactlyOnceWith(data());
     expect(methods.cancelScan).toHaveBeenCalledExactlyOnceWith('request-id');
+    // 动态视频背景：bgmedia 协议特权声明 + handler 安装 + preload 桥接与路径校验
+    expect(electron.protocol.registerSchemesAsPrivileged).toHaveBeenCalledExactlyOnceWith([
+      { scheme: 'bgmedia', privileges: { stream: true } },
+    ]);
+    expect(electron.protocol.handle).toHaveBeenCalledExactlyOnceWith('bgmedia', expect.any(Function));
+    expect(await api.videoBg.clear()).toBe(true);
+    expect(await api.videoBg.setPath('not-absolute.mp4')).toBe(false);
   });
 });
 

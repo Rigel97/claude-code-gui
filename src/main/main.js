@@ -21,9 +21,10 @@ if (process.env.ELECTRON_RUN_AS_NODE && process.type === undefined) {
   process.exit(0);
 }
 
-const { app, BrowserWindow, ipcMain, dialog, Notification, shell, Menu, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Notification, shell, Menu, clipboard, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { Readable } = require('stream');
 const { ClaudeRunner, queryContext, compactSession, generateSessionTitle } = require('./runner');
 const { gitStatus, gitDiffFile, gitCheckoutFile } = require('./git');
 const { saveImageDataUrl } = require('./images');
@@ -33,6 +34,124 @@ const { ProjectsBackend } = require('./projects');
 let mainWindow = null;
 let store = null;
 let projects = null;
+
+// ─── bgmedia:// 自定义协议：动态视频背景 ──────────────────
+// 渲染层 origin（dev 为 http://localhost:5170、生产为 file://）都无法直接用
+// <video> 引用磁盘上的任意视频文件，注册专用协议统一两条加载路径：
+// - 必须在 app ready 前声明特权（stream: 允许 <video> 边下边播）
+// - 只服务当前登记的唯一视频路径（单一白名单，防止借协议任意读本机文件）
+// - 实现 HTTP Range（206）分段响应：视频 seek / 循环回绕依赖它
+const VIDEO_MIME = {
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.ogv': 'video/ogg',
+};
+const VIDEO_EXT = new Set(Object.keys(VIDEO_MIME));
+let bgVideoPath = null;
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'bgmedia', privileges: { stream: true } },
+]);
+
+/** 解析 Range 头（bytes=start-end / start- / -suffix），返回 [start, end] 或 null */
+function parseRange(header, size) {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(header || '').trim());
+  if (!m) return null;
+  const [, startRaw, endRaw] = m;
+  if (startRaw === '' && endRaw === '') return null;
+  if (startRaw === '') {
+    // suffix range：取文件末尾 N 字节
+    const suffix = parseInt(endRaw, 10);
+    if (!Number.isFinite(suffix) || suffix <= 0) return null;
+    return [Math.max(0, size - suffix), size - 1];
+  }
+  const start = parseInt(startRaw, 10);
+  if (!Number.isFinite(start) || start < 0 || start >= size) return null;
+  const end = endRaw === '' ? size - 1 : Math.min(parseInt(endRaw, 10), size - 1);
+  if (start > end) return null;
+  return [start, end];
+}
+
+/** 以流式 Response 提供视频文件（带 Range 支持） */
+function serveVideoFile(filePath, rangeHeader) {
+  return new Promise((resolve) => {
+    fs.stat(filePath, (err, stat) => {
+      if (err || !stat.isFile()) {
+        resolve(new Response(null, { status: 404 }));
+        return;
+      }
+      const mime = VIDEO_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+      const range = parseRange(rangeHeader, stat.size);
+      const [start, end] = range || [0, stat.size - 1];
+      const nodeStream = fs.createReadStream(filePath, range ? { start, end } : undefined);
+      // 读取中途出错（文件被移走等）：流静默终止，渲染层 onError 兑现降级
+      nodeStream.on('error', () => {});
+      resolve(
+        new Response(Readable.toWeb(nodeStream), {
+          status: range ? 206 : 200,
+          headers: {
+            'Content-Type': mime,
+            'Content-Length': String(end - start + 1),
+            'Accept-Ranges': 'bytes',
+            ...(range ? { 'Content-Range': `bytes ${start}-${end}/${stat.size}` } : {}),
+          },
+        })
+      );
+    });
+  });
+}
+
+function installBgMediaProtocol() {
+  protocol.handle('bgmedia', async (request) => {
+    try {
+      // URL 形如 bgmedia://video/<encodeURIComponent(绝对路径)>
+      const url = new URL(request.url);
+      const requested = decodeURIComponent(url.pathname.replace(/^\//, ''));
+      if (
+        !bgVideoPath ||
+        !requested ||
+        path.resolve(requested) !== path.resolve(bgVideoPath)
+      ) {
+        return new Response(null, { status: 403 });
+      }
+      return await serveVideoFile(bgVideoPath, request.headers.get('range'));
+    } catch {
+      return new Response(null, { status: 404 });
+    }
+  });
+}
+
+// ─── IPC: 动态视频背景 ──────────────────────
+// 选择本机视频文件（同时登记为 bgmedia:// 可服务的白名单路径）
+ipcMain.handle('dialog:open-video', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: '视频文件', extensions: ['mp4', 'webm', 'mov', 'm4v', 'ogv'] }],
+  });
+  const filePath = result.canceled ? null : result.filePaths[0] || null;
+  if (filePath) bgVideoPath = filePath;
+  return filePath;
+});
+
+// 启动恢复：渲染层从持久化 appState 拿回路径后重新登记（校验绝对路径与视频扩展名）
+ipcMain.handle('video-bg:set-path', (_e, filePath) => {
+  if (
+    typeof filePath !== 'string' ||
+    !path.isAbsolute(filePath) ||
+    !VIDEO_EXT.has(path.extname(filePath).toLowerCase())
+  ) {
+    return false;
+  }
+  bgVideoPath = filePath;
+  return true;
+});
+
+ipcMain.handle('video-bg:clear', () => {
+  bgVideoPath = null;
+  return true;
+});
 
 for (const method of ['list', 'prepare', 'scan', 'cancelScan', 'confirm', 'update', 'reveal']) {
   ipcMain.handle(`projects:${method}`, async (event, ...args) => {
@@ -524,6 +643,7 @@ if (!app.requestSingleInstanceLock()) {
       }
     }
     setupApplicationMenu();
+    installBgMediaProtocol();
     store = new Store();
     projects = new ProjectsBackend({
       home: app.getPath('home'),

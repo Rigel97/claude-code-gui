@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store';
-import { X, Cpu, Info, Shield, Bell, Archive, Trash2, RotateCcw, Gauge, Boxes, DollarSign, Heart } from 'lucide-react';
+import { X, Cpu, Info, Shield, Bell, Archive, Trash2, RotateCcw, Gauge, Boxes, DollarSign, Heart, Film, FolderOpen } from 'lucide-react';
 
 type EffortLevel = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 type Autocompact = '' | 'auto' | '100k' | '200k' | '400k' | '800k' | '1M';
@@ -48,6 +48,69 @@ function whalePref(key: string): boolean {
   try { const value = localStorage.getItem(`whale-moe:${key}`); return value === null ? !WHALE_OFF_BY_DEFAULT.has(key) : value === '1'; }
   catch { return !WHALE_OFF_BY_DEFAULT.has(key); }
 }
+function VideoBgSettings() {
+  const videoBg = useStore((s) => s.videoBg);
+  const setVideoBg = useStore((s) => s.setVideoBg);
+
+  // 选择本机视频文件：主进程弹原生选框并登记 bgmedia:// 白名单，选中即生效
+  const pickVideo = async () => {
+    const api = (window as any).api?.videoBg;
+    if (!api) return;
+    const filePath: string | null = await api.pick();
+    if (filePath) setVideoBg({ path: filePath, enabled: true });
+  };
+
+  const fileName = videoBg.path ? videoBg.path.split(/[\\/]/).pop() : null;
+
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider">
+        <Film className="w-3.5 h-3.5" />
+        动态视频背景
+      </div>
+      <Toggle
+        on={videoBg.enabled && !!videoBg.path}
+        color="purple"
+        label="启用视频背景"
+        onClick={() => {
+          // 未选视频时开关无效（需先选择文件）
+          if (!videoBg.path) return;
+          setVideoBg({ enabled: !videoBg.enabled });
+        }}
+      />
+      <div className="flex gap-1.5">
+        <button
+          onClick={pickVideo}
+          className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg text-xs text-text-muted hover:text-accent-cyan bg-bg-light border border-border hover:border-accent-cyan/40 transition-all"
+        >
+          <FolderOpen className="w-3.5 h-3.5" />
+          选择视频文件…
+        </button>
+        <button
+          onClick={() => setVideoBg({ path: null, enabled: false })}
+          disabled={!videoBg.path}
+          title="移除视频文件并恢复默认背景"
+          className="px-2.5 py-2 rounded-lg text-xs text-text-muted hover:text-red-400 bg-bg-light border border-border hover:border-red-500/30 transition-all disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+        >
+          清除
+        </button>
+      </div>
+      {fileName && (
+        <div
+          className="text-[10px] text-text-dim truncate font-mono"
+          title={videoBg.path ?? undefined}
+        >
+          {fileName}
+        </div>
+      )}
+      <p className="text-[10px] text-text-dim leading-relaxed">
+        支持 mp4 / webm / mov / m4v / ogv。建议选择低码率、可无缝循环的短视频以降低功耗；
+        视频经本机 bgmedia 协议直读，不联网，路径仅保存在本机。
+      </p>
+    </section>
+  );
+}
+
 function WhaleSettings() {
   const [prefs, setPrefs] = useState(() => Object.fromEntries(WHALE_SWITCHES.map(([key]) => [key, whalePref(key)])));
   const [city, setCity] = useState(() => localStorage.getItem('whale-moe:weatherCity') ?? '');
@@ -331,6 +394,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               />
             </div>
           </div>
+
+          <VideoBgSettings />
 
           <WhaleSettings />
 
