@@ -1,6 +1,6 @@
 # Claude Code GUI
 
-A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/overview) — multi-tab parallel conversations, image input, streaming chat, tool-call visualization, line-level diffs, file tree, cross-session search, a token usage dashboard, AI session naming, a Git changes panel, a TodoWrite progress panel, a file previewer, a project management center with LLM-powered project recognition, an optional live video background, and an interactive whale-girl companion.
+A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/overview) — multi-tab parallel conversations, image input, streaming chat, a cinematic 3D Agent execution observatory, tool-call visualization, line-level diffs, file tree, cross-session search, a token usage dashboard, AI session naming, a Git changes panel, a TodoWrite progress panel, a file previewer, a project management center with LLM-powered project recognition, an optional live video background, and an interactive whale-girl companion.
 
 ---
 
@@ -11,6 +11,12 @@ A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/o
 - **Image Input** — Paste screenshots (⌘V) straight into the input; they are saved to a temp dir and attached as `@path` references. Drag-and-drop of files works too
 - **Copy Anything** — All message content (replies, thinking, tool output) is selectable; hover any message for a one-click copy button below its final reply; standard Edit menu roles make ⌘C/⌘A reliable on macOS
 - **Tool Call Visualization** — Bash, Read, Write, Edit and other tool calls rendered as collapsible cards with status indicators; sub-agent (`Task`/`Agent`) output nests under its parent call
+- **3D Agent Execution Observatory** — Open **Agent 执行空间** for a lazy-loaded Three.js command center built around the real execution graph:
+  - **Stable, relationship-driven layout** — a central orchestrator, permanent sub-agent sectors, DAG-ranked tool layers, a lower artifact lane, and a separate task rail. Independent calls stay on the same parallel level instead of being turned into a fake serial chain. Slots are collision-aware and retained across status updates, filters, replay, and node additions/removals
+  - **Live, historical, and clearly labeled demo data** — real CLI stream/status events, tool results, file operations, sub-agent relationships, retries, approvals, failures, and completion states; historical replay follows event order. DEMO is always marked as simulated, LIVE never invents missing nodes or metrics, and unknown values remain `—`
+  - **Readable relationship semantics** — distinct call/delegation/dependency/read/write/retry links, directional particles only on active paths, real upstream/downstream highlighting, and subdued unrelated nodes. Main-agent calls retain their root edge and late events cannot regress a completed run back to running
+  - **Purposeful motion and material detail** — a layered metallic/glass core, independent orbital mechanisms, subtle active pulses, spawn/completion feedback, hover/selection feedback, and smooth camera flights instead of force-directed node jitter
+  - **Complex-task controls** — branch collapse/expand, smart density with an explicit hidden-node count, full-node mode, type/status/agent filters, node search, detail inspector, label collision avoidance, fit/reset/top/zoom controls, automatic quality scaling, and a real event timeline with replay
 - **TodoWrite Progress Panel** — The CLI's `TodoWrite` calls are surfaced as a live checklist under the tab bar: progress bar, per-item status, and the current in-progress task at a glance; the list is rebuilt when reopening an archived session
 - **Line-level Diff View** — `Edit` / `Write` / `MultiEdit` calls show red/green diffs with collapsible context (custom LCS diff engine, degrades gracefully on huge files)
 - **File Tree Sidebar** — Browse the project directory, click a file to insert an `@path` reference into the input; hover a file and hit the 👁 button to preview it
@@ -73,9 +79,11 @@ npm test
 **Package as a distributable** (macOS `.dmg` + `.zip`):
 
 ```bash
-npm run dist        # outputs to release/
+npm run dist        # macOS .dmg + .zip installers in release/
 npm run pack        # unpacked app only (faster, for debugging)
 ```
+
+`npm run pack` writes and ad-hoc signs `release/mac-arm64/Claude GUI.app`. Use `npm run dist` when you also need updated DMG/ZIP installers; running `pack` alone does not replace older installer archives.
 
 ## Usage
 
@@ -88,8 +96,9 @@ npm run pack        # unpacked app only (faster, for debugging)
 7. Click **TOKENS** (bottom-left) to open the usage dashboard; hover the context meter for details, click the 📦 icon next to it to compact the session
 8. Open the **Git** sidebar tab to review what Claude changed this session (✨AI badge) and revert single files; click 👁 in the file tree to preview a file
 9. Open **项目管理中心** (sidebar) to recognize, review, and track long-term projects from your history. Pick the recognition mode (LLM semantic / local rules), confirm the send scope and budget when prompted, then review candidates before any project is created. Click a project for background, tasks, files, and the dependency workflow view
-10. The whale girl floats inside the app window. Click to interact, drag to reposition, or right-click for feeding, games, and settings. Use **Settings → 鲸鱼娘** to control dialogue, effects, tool poses, weather, and opt-in local speech
-11. Want an animated backdrop? Open **Settings → Dynamic Video Background**, pick a local video file, and toggle it on/off anytime; low-bitrate loopable clips are recommended to keep power draw minimal
+10. Open **Agent 执行空间** (sidebar) to inspect the 3D execution graph. **实时** uses real live/history data; **演示** uses the explicitly labeled fixture. Drag to rotate, use the wheel to zoom, click a node for its real upstream/downstream path and output, click a branch to focus or collapse it, and use the timeline to replay events. **Space** pauses/resumes scene animation, **R** resets the camera, **F** focuses the selected node/core, and **Esc** clears dialogs/selection
+11. The whale girl floats inside the app window. Click to interact, drag to reposition, or right-click for feeding, games, and settings. Use **Settings → 鲸鱼娘** to control dialogue, effects, tool poses, weather, and opt-in local speech
+12. Want an animated backdrop? Open **Settings → Dynamic Video Background**, pick a local video file, and toggle it on/off anytime; low-bitrate loopable clips are recommended to keep power draw minimal
 
 ### Whale Girl: scope and privacy
 
@@ -122,6 +131,7 @@ The model field is passed through verbatim as `--model`, so custom endpoints (GL
 - **React 18 + TypeScript** — renderer UI
 - **Zustand** — state management. Per-conversation isolated state (multi-tab); streaming shards of the same CLI message are merged by `message.id`; events are routed by `conversationId`; different conversations never mix
 - **Persistence** — a small custom JSON store in `userData` with atomic writes (tmp + rename) and content-diffing to skip redundant disk writes; the renderer persists on a 3s throttle with a `beforeunload` flush
+- **Three.js + @react-three/fiber** — lazy-loaded 3D execution scene, instanced node rendering, metallic/glass materials, bounded particles, post-processing, and quality degradation
 - **Tailwind CSS** — dark sci-fi theme
 - **Vite** — renderer build; **Vitest** — unit tests
 
@@ -130,12 +140,12 @@ src/
 ├── main/          # Electron main process (CLI runner pool, IPC, file tree, persistence, projects backend)
 └── renderer/      # React app, whale status bridge, and public/whale/ artwork + scripts
 tests/             # Vitest suites: store state machine, diff engine, runner, whale bridge,
-                   # projects backend/LLM validation, analyzer CLI contract, and browser E2E
+                   # agent graph/layout, projects backend/LLM validation, analyzer CLI contract, and browser E2E
 ```
 
 ## Testing
 
-316 unit tests cover the trickiest logic, all runnable without a display or a real Claude session (the optional end-to-end and browser-UI tests are skipped by default):
+371 tests cover the trickiest logic, all runnable without a display or a real Claude session (the optional end-to-end and browser-UI tests are skipped by default):
 
 - `tests/store.test.ts` — message merging by `message.id`, per-tab state isolation & event routing, background queue continuation, close-tab draft archiving, hydrate migration from the legacy single-session format, malformed-event hardening, immutability guarantees that `React.memo` relies on
 - `tests/diff.test.ts` — LCS diff correctness, degenerate fallback for huge inputs, context folding
@@ -146,7 +156,12 @@ tests/             # Vitest suites: store state machine, diff engine, runner, wh
 - `tests/projects-analyzer.test.js` — the tool-free Claude CLI invocation: stdin-only prompts, disabled tools/MCP/skills/session persistence, timeout/cancel process-group kill, malformed output rejection
 - `tests/projects-llm-backend.test.js` — consent gating, single-use frozen snapshots, early-cancel race, no silent rules fallback
 - `tests/project-store.test.ts` / `tests/project-model.test.ts` — renderer store gating and workflow DAG layout
+- `tests/agent-model.test.ts` — real CLI event adaptation, root/delegation/file edges, tool results, terminal-state protection, bounded history, and replay without future-data leakage
+- `tests/agent-layout.test.ts` — stable DAG ranks, parallel-versus-serial semantics, collision-free positions, node additions/removals, and upstream/downstream highlighting
+- `tests/e2e-partial.test.ts` — opt-in (`RUN_E2E=1`) real Claude CLI tool-loop verification, including streaming deltas, deduplication, tool output, activity, and duration
 - `tests/project-ui.test.ts` — opt-in (`RUN_PROJECT_UI=1`) real-browser E2E over an isolated history fixture and mocked model
+
+Run the optional real CLI test with `RUN_E2E=1 npx vitest run tests/e2e-partial.test.ts`. It launches the actual Claude CLI and may incur API costs. Additional type/build checks are available as `npm run typecheck` and `npm run build`.
 
 ## Notes
 

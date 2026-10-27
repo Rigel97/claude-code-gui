@@ -9,7 +9,8 @@ import { GitPanel } from './GitPanel';
 import { sessionToMarkdown } from '../utils/exportSession';
 import type { Session } from '../types';
 import { useProjectsStore } from '../projectStore';
-import { FolderKanban } from 'lucide-react';
+import { FolderKanban, Orbit } from 'lucide-react';
+import { useAgentStore } from '../agent/store';
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
@@ -145,6 +146,17 @@ export function Sidebar() {
             <FolderKanban className="w-4 h-4 shrink-0" />
             <span className="text-sm flex-1 text-left">项目管理中心</span>
             <span className="font-mono text-xs">{projectCount}</span>
+          </button>
+        </div>
+
+        <div className="px-3 pt-2">
+          <button
+            onClick={() => { showChat(); useAgentStore.getState().show(); }}
+            className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border border-border text-text-secondary hover:bg-bg-light hover:border-accent-cyan/40 hover:text-accent-cyan transition-colors"
+          >
+            <Orbit className="w-4 h-4 shrink-0" />
+            <span className="text-sm flex-1 text-left">Agent 执行空间</span>
+            <span className="text-[11px] text-text-muted">3D</span>
           </button>
         </div>
 

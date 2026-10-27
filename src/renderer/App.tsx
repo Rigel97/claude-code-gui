@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, lazy, Suspense } from 'react';
 import { useStore, snapshotConversations } from './store';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
@@ -11,9 +11,14 @@ import { SearchPanel } from './components/SearchPanel';
 import { WhalePet } from './components/WhalePet';
 import { ProjectCenter } from './components/ProjectCenter';
 import { useProjectsStore } from './projectStore';
+import { useAgentStore } from './agent/store';
+
+// The 3D renderer is only downloaded / initialized when the execution space is opened.
+const AgentCenter = lazy(() => import('./components/AgentCenter'));
 
 export default function App() {
   const cwd = useStore((s) => s.cwd);
+  const agentOpen = useAgentStore((s) => s.open);
   const projectsOpen = useProjectsStore((s) => s.open);
   useEffect(() => { void useProjectsStore.getState().load(); }, []);
   const handleStream = useStore((s) => s.handleStream);
@@ -22,7 +27,7 @@ export default function App() {
 
   // 启动时恢复持久化状态
   useEffect(() => {
-    (window as any).api.store.get('appState').then((saved: unknown) => {
+    (window as any).api?.store?.get('appState')?.then((saved: unknown) => {
       if (saved && typeof saved === 'object') {
         useStore.getState().hydrate(saved as any);
       }
@@ -69,7 +74,7 @@ export default function App() {
 
     const flush = () => {
       if (!pending) return;
-      (window as any).api.store.set('appState', snapshot(pending));
+      (window as any).api?.store?.set('appState', snapshot(pending));
       pending = null;
       lastWriteAt = Date.now();
     };
@@ -90,7 +95,7 @@ export default function App() {
         timer = null;
       }
       if (pending) {
-        (window as any).api.store.flush(snapshot(pending));
+        (window as any).api?.store?.flush(snapshot(pending));
         pending = null;
       }
     };
@@ -149,16 +154,37 @@ export default function App() {
     void refreshContextUsage(activeConversationId);
   }, [activeConversationId, refreshContextUsage]);
 
+  // Bootstrap existing tool trees once; never rebuild a graph for token deltas.
+  useEffect(() => {
+    let signature = '';
+    const sync = () => {
+      const conversations = useStore.getState().conversations;
+      const next = JSON.stringify(conversations.map(c => [c.id, c.title, c.cwd, c.sessionId]));
+      if (next === signature) return;
+      signature = next;
+      useAgentStore.getState().syncConversations(conversations);
+    };
+    sync();
+    const unsubscribe = useStore.subscribe(sync);
+    // An explicit URL is a convenient browser-only demo entry, never a fake Electron bridge.
+    if (new URLSearchParams(window.location.search).get('agent') === 'demo') useAgentStore.getState().show('demo');
+    return unsubscribe;
+  }, []);
+
   // 监听 claude 流式事件（事件携带 conversationId，路由到对应标签页）
   useEffect(() => {
-    const removeStream = (window as any).api.claude.onStream((data: unknown) => {
+    const api = (window as any).api;
+    if (!api?.claude) return;
+    const removeStream = api.claude.onStream((data: unknown) => {
+      useAgentStore.getState().ingestStream(data);
       handleStream(data as any);
     });
 
-    const removeStatus = (window as any).api.claude.onStatusChange(
+    const removeStatus = api.claude.onStatusChange(
       (payload: { conversationId?: string; status?: string }) => {
         const { conversationId, status } = payload || {};
         if (typeof status !== 'string') return;
+        useAgentStore.getState().ingestStatus(payload);
         setStatus(status as any, conversationId);
 
         const store = useStore.getState();
@@ -201,16 +227,16 @@ export default function App() {
     <div className="flex flex-col h-screen tech-grid-bg bg-bg-deepest">
       <WhalePet />
       {/* 动态视频背景（最底层，可选；失败时静默回落深色背景） */}
-      <VideoBackground />
+      {!agentOpen && <VideoBackground />}
 
       {/* 粒子网络背景 */}
-      <ParticleField />
+      {!agentOpen && <ParticleField />}
 
       {/* 噪点纹理 */}
-      <div className="noise-overlay" />
+      {!agentOpen && <div className="noise-overlay" />}
 
       {/* 扫描线特效 */}
-      <div className="scan-overlay" />
+      {!agentOpen && <div className="scan-overlay" />}
 
       {/* 主内容（位于粒子层之上） */}
       <div className="relative z-10 flex flex-col flex-1 overflow-hidden">
@@ -219,15 +245,19 @@ export default function App() {
 
         {/* 主体 */}
         <div className="flex flex-1 overflow-hidden">
-          <Sidebar />
+          {!agentOpen && <Sidebar />}
           <div className="flex flex-col flex-1 overflow-hidden">
             {/* key 按标签页切换重挂载：滚动位置/草稿各自独立 */}
-            {projectsOpen ? <ProjectCenter /> : cwd ? <ChatArea key={activeConversationId} /> : <WelcomeScreen />}
+            {agentOpen ? (
+              <Suspense fallback={<div className="flex-1 flex items-center justify-center bg-[#03060d] text-text-secondary text-sm">正在初始化三维执行空间…</div>}>
+                <AgentCenter />
+              </Suspense>
+            ) : projectsOpen ? <ProjectCenter /> : cwd ? <ChatArea key={activeConversationId} /> : <WelcomeScreen />}
           </div>
         </div>
 
         {/* 底部状态栏 */}
-        <StatusBar />
+        {!agentOpen && <StatusBar />}
       </div>
 
       {/* 消息搜索面板 */}
