@@ -1,56 +1,103 @@
 # Claude Code GUI
 
-A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/overview) — multi-tab parallel conversations, image input, streaming chat, a cinematic 3D Agent execution observatory, tool-call visualization, line-level diffs, file tree, cross-session search, a token usage dashboard, AI session naming, a Git changes panel, a TodoWrite progress panel, a file previewer, a project management center with LLM-powered project recognition, an optional live video background, and an interactive whale-girl companion.
+[简体中文](README.md) · [English](README.en.md)
+
+一个面向 [Claude Code CLI](https://code.claude.com/docs/en/overview) 的桌面图形界面：多标签并行会话、流式对话、图片输入、3D Agent 执行空间、工具调用可视化、行级 Diff、文件树、跨会话搜索、Token 用量面板、AI 会话命名、Git 变更面板、TodoWrite 进度、文件预览、项目管理中心、可选动态视频背景，以及可互动的鲸鱼娘助手。
 
 ---
 
-## Features
+## 功能特性
 
-- **Multi-tab Parallel Conversations** — Run several sessions side by side in one window; each tab has fully isolated state (messages, queue, context meter, input draft) and its own CLI process. Background tabs keep streaming and auto-continue their message queues
-- **Streaming Chat** — Real-time token-by-token rendering via the CLI's `stream-json` output, with expandable thinking blocks. Immutable state updates + `React.memo` keep long conversations smooth during streaming
-- **Image Input** — Paste screenshots (⌘V) straight into the input; they are saved to a temp dir and attached as `@path` references. Drag-and-drop of files works too
-- **Copy Anything** — All message content (replies, thinking, tool output) is selectable; hover any message for a one-click copy button below its final reply; standard Edit menu roles make ⌘C/⌘A reliable on macOS
-- **Tool Call Visualization** — Bash, Read, Write, Edit and other tool calls rendered as collapsible cards with status indicators; sub-agent (`Task`/`Agent`) output nests under its parent call
-- **3D Agent Execution Observatory** — Open **Agent 执行空间** for a lazy-loaded Three.js command center built around the real execution graph:
-  - **Stable, relationship-driven layout** — a central orchestrator, permanent sub-agent sectors, DAG-ranked tool layers, a lower artifact lane, and a separate task rail. Independent calls stay on the same parallel level instead of being turned into a fake serial chain. Slots are collision-aware and retained across status updates, filters, replay, and node additions/removals
-  - **Live, historical, and clearly labeled demo data** — real CLI stream/status events, tool results, file operations, sub-agent relationships, retries, approvals, failures, and completion states; historical replay follows event order. DEMO is always marked as simulated, LIVE never invents missing nodes or metrics, and unknown values remain `—`
-  - **Readable relationship semantics** — distinct call/delegation/dependency/read/write/retry links, directional particles only on active paths, real upstream/downstream highlighting, and subdued unrelated nodes. Main-agent calls retain their root edge and late events cannot regress a completed run back to running
-  - **Purposeful motion and material detail** — a layered metallic/glass core, independent orbital mechanisms, subtle active pulses, spawn/completion feedback, hover/selection feedback, and smooth camera flights instead of force-directed node jitter
-  - **Complex-task controls** — branch collapse/expand, smart density with an explicit hidden-node count, full-node mode, type/status/agent filters, node search, detail inspector, label collision avoidance, fit/reset/top/zoom controls, automatic quality scaling, and a real event timeline with replay
-- **TodoWrite Progress Panel** — The CLI's `TodoWrite` calls are surfaced as a live checklist under the tab bar: progress bar, per-item status, and the current in-progress task at a glance; the list is rebuilt when reopening an archived session
-- **Line-level Diff View** — `Edit` / `Write` / `MultiEdit` calls show red/green diffs with collapsible context (custom LCS diff engine, degrades gracefully on huge files)
-- **File Tree Sidebar** — Browse the project directory, click a file to insert an `@path` reference into the input; hover a file and hit the 👁 button to preview it
-- **File Previewer** — Modal preview with syntax-highlighted text (512KB cap, binary detection, truncation notice) and inline image preview (png/jpg/gif/webp/bmp/ico)
-- **Git Changes Panel** — A fourth sidebar tab showing the current branch and working-tree changes (`M`/`A`/`D`/`?`/staged badges); files Claude touched in the active session get an ✨AI badge, click an entry to expand its unified diff, and revert single files via a confirmed `git checkout --`
-- **Project Management Center** — A dedicated view that turns your conversation history into trackable long-term projects:
-  - **LLM semantic recognition** (default) — sends bounded excerpts of your local history (GUI sessions + `~/.claude/projects` JSONL) to the model you already use via Claude Code, after an explicit scope/privacy/budget confirmation dialog; the model's output is then **locally verified against real evidence** — every project field and task must cite real source quotes, "completed" requires matching structured Todo/Task records, actual file outputs require successful write tools during that task's execution, and dependencies require recorded `TaskUpdate` edges. Unverifiable claims are downgraded to "pending confirmation" rather than silently trusted
-  - **Local rules mode** (opt-in, zero upload) — conservative regex/structure-based recognition; short Q&A and trivial edits never become projects
-  - **Review gate** — candidates are never auto-created; you select, edit, associate-with-existing, or reject each one before anything is written to disk
-  - **Project overview** — statuses (not started / in progress / completed) with counts, filtering, and search; project status is derived from task states plus your explicit goal acceptance, never from "the session ended"
-  - **Project detail** — background/constraints/decisions/deliverables, related files (preview / reveal in Finder), task list with per-task status editing and full audit trail back to the original conversations
-  - **Workflow view** — a DAG flowchart of tasks with real dependency edges (branch/merge supported), node details with inputs/outputs, zoom/pan, and viewport culling for large projects; node states always match task states
-  - **Persistence** — projects live in `userData/claude-gui-projects.json` (atomic writes, version-checked, refuses to overwrite externally corrupted files); re-recognition associates with existing projects by same-directory + real-source overlap instead of duplicating
-- **Slash Commands** — Type `/` for quick prompts: `/review`, `/fix`, `/test`, `/commit`, `/clear` and more
-- **Message Queue** — Typed messages during a running generation queue up and auto-send when it completes, per tab; failed turns drop their queue so it never bleeds into your next instruction
-- **Cross-session Search** — `⌘F` / `Ctrl+F` searches all open tabs plus archived sessions; jump-to-message routes to the right tab and highlights the hit
-- **Token Usage Dashboard** — Per-day usage chart (last 14 days, local timezone) with input/output breakdown, totals, and top-consuming sessions
-- **Context Water Meter + One-click Compact** — Real context-window usage from the CLI's zero-cost `/context` query, shown as absolute values (`19K/200K`) with free-space and autocompact-buffer details on hover; click the archive icon next to it to compact a session when it runs high
-- **Failed Retry & Session Rename** — A retry button on the latest failed message removes that turn and resends it; rename sessions inline from the sidebar
-- **AI Session Naming** — After a session's first completed turn, a low-cost background CLI call generates a concise title in the conversation's language; manually renamed sessions are never overwritten
-- **Session Pinning** — Pin favorite sessions to the top of the sidebar (📌); pinned entries survive the session-limit trimming
-- **Session Persistence** — Tabs (including input drafts), history and settings survive restarts. Interrupted conversations are archived as drafts and remain resumable via `--resume`
-- **Background Notifications** — System notification with a snippet of your prompt when a task finishes while the window is not focused
-- **Interrupt Anytime** — Stop button or `ESC` aborts the active tab's generation (other tabs keep running); the child process is SIGTERM'd with a SIGKILL fallback (taskkill tree-kill on Windows)
-- **Cyberpunk UI** — Particle network background that speeds up while generating, scan lines, glow effects (Tailwind CSS)
-- **Live Video Background** (opt-in) — Set any local video (mp4/webm/mov/m4v/ogv) as the animated window backdrop from **Settings → Dynamic Video Background**. Played muted, looping, and cover-fitted; a darkening overlay keeps text readable while the particle network keeps floating on top. Served through a custom privileged `bgmedia://` protocol with HTTP Range streaming (seek-friendly, memory-friendly) and a single-path whitelist — the protocol only ever serves the one file you picked, video never leaves your machine. Pauses automatically when the window is hidden, and silently falls back to the default background if the file is moved or deleted
-- **Claude Code Whale Girl** — Replaces the old bunny/cat/bear pet with an interactive, draggable mascot adapted from [dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume). Reacts to this GUI's Claude Code sessions (working, tool type, completion, errors), with original artwork, dialogue, feeding, games, growth, achievements, weather effects, and optional local speech. Settings are available from the GUI's **Settings → 鲸鱼娘** section or the mascot's context menu
+### 对话与执行
 
-## Prerequisites
+- **多标签并行会话** — 同一窗口内同时运行多个会话；每个标签拥有独立的消息、队列、上下文计量、输入草稿和 CLI 进程。后台标签继续流式输出，并按队列自动续发。
+- **流式对话** — 基于 CLI `stream-json` 输出逐字渲染，支持展开思考块；不可变状态更新与 `React.memo` 保证长会话流式输出时的流畅度。
+- **图片输入** — `⌘V` 直接粘贴截图，保存到临时目录后以 `@path` 引用附加；也支持拖拽文件。
+- **完整可复制** — 回复、思考、工具输出均可选中；消息悬停提供复制按钮；macOS 下标准编辑菜单保证 `⌘C` / `⌘A` 可用。
+- **工具调用可视化** — Bash、Read、Write、Edit 等工具调用以可折叠卡片展示，子 Agent（`Task` / `Agent`）输出嵌套在父调用下。
+- **中断与重试** — `ESC` 或停止按钮只中止当前标签；子进程先 `SIGTERM`，超时后 `SIGKILL`（Windows 使用 `taskkill` 进程树）。失败消息可一键移除并重发。
+- **消息队列** — 生成过程中输入的消息进入当前标签队列，本轮完成后自动发送；失败轮次会丢弃队列，避免污染下一条指令。
+- **后台通知** — 窗口未聚焦时任务完成，会发送带提示词摘要的系统通知。
+
+### 3D Agent 执行空间
+
+打开 **Agent 执行空间** 查看懒加载的 Three.js 指挥中心，数据来自真实执行图：
+
+- 稳定的关系驱动布局：中心编排器、固定子 Agent 扇区、DAG 排名的工具层、底部队列和独立任务轨；独立调用保持并行层级，不会被伪造成串行链。
+- 支持实时、历史回放与明确标注的演示数据；未知指标保持 `—`，`LIVE` 不会凭空补节点或指标。
+- 区分调用、委派、依赖、读、写、重试连线；仅活跃路径有方向粒子；支持上下游高亮、分支折叠、节点搜索、详情检查器、时间线回放与事件顺序保护。
+- 相机飞行、材质细节、质量自适应与大规模节点渲染优化。
+
+### 项目管理工作台
+
+项目管理中心把对话历史整理为可追踪的长期项目。识别结果不会自动写入，所有候选都需要人工审核。
+
+- **两种识别模式**
+  - **LLM 语义识别**（默认）：在明确确认范围、隐私与预算后，把有限的历史摘录发送给当前 Claude Code 使用的模型；快照在确认时冻结且单次使用。
+  - **本地规则模式**：完全离线、不上传、不产生模型费用；短问答和微小修改不会成为项目。
+- **扫描可控**
+  - 准备阶段和扫描阶段都可以取消；取消后晚到的结果不会恢复。
+  - 渲染进程刷新或页面重载后，可通过 `activeJob` 重连仍在运行的后台识别，不需要重新发起模型调用。
+  - 大体量历史的进度更新会合流，避免数百次 IPC 更新拖慢界面。
+- **逐字段证据审核**
+  - 背景、约束、决策、交付物分别展示原文引用、模型解释或未知来源。
+  - 非空模型解释、未知字段以及用户新编辑的字段必须逐项勾选“已核对”；清空不可靠内容也算明确处理。
+  - 候选详情提供名称/目标/简述变更预览、来源、任务、工作目录、关联会话与潜在冲突提示。
+  - 关联归档或回收站项目时，必须显式勾选恢复并关联。
+- **审核草稿可恢复**
+  - 可以“稍后审核”或按 `Escape` 关闭审核层，草稿保留在内存并原子写入 `userData/claude-gui-projects-review.json`。
+  - 跨窗口刷新、重启应用后可继续审核，不会再次调用模型产生费用。
+  - 只有明确确认“放弃审核”才会删除草稿；草稿损坏时禁止覆盖，必须显式丢弃。
+- **项目生命周期**
+  - 活跃项目、归档、回收站独立计数与筛选；归档和回收站项目只读，恢复后可编辑。
+  - 合并会把来源项目的来源、文件、任务和待确认信息并入目标项目，来源进入回收站；恢复来源不会撤销已合并内容，可能产生重复。
+  - 彻底清理只允许回收站中的项目，并释放容量。
+- **任务、验收与工作流**
+  - 必要任务与可选任务分开计算；全部取消或只剩可选任务时，进度显示“不适用”，不能用取消任务冒充 100%。
+  - 目标验收必须由用户显式确认；目标、交付标准或必要任务范围变化会自动撤销验收并记录原因。
+  - 任务工作流按真实依赖绘制 DAG，支持分支/汇合、缩放平移和大项目视口裁剪；孤立节点只表示没有已记录连线，不代表已核实无依赖。
+- **工作目录与对话关联**
+  - 项目工作目录必须显式设置，不自动继承全局目录，也不会静默使用第一个历史来源目录。
+  - “继续项目”只创建带项目简报的草稿，不会自动发送；支持按任务新建对话、继续最近对话、关联当前对话。
+  - 关联对话的每次运行会记录状态与摘录，供人工核对；运行结束、对话完成都不会自动完成任务或项目验收。
+- **并发与数据所有权**
+  - 项目写入使用自增 `revision` 和 `expectedRevision` 做乐观并发控制；冲突时保留本地数据和未保存标记，不静默覆盖。
+  - 任务证据（`records`）、来源引用、生命周期、审核证据由服务端独占；普通 patch 不能伪造或清空。
+  - 识别与项目写入拥有独立生命周期：扫描期间仍可保存项目，不会因为识别而锁死全部编辑。
+- **存储、容量与恢复**
+  - 项目存储在 `userData/claude-gui-projects.json`，临时文件 + `fsync` + `rename` 原子替换，并在替换前生成上一份有效快照 `.bak`。
+  - “数据管理”面板显示容量、项目数、回收站数量和备份可用性；达到 85% 时提示检查数据，但不会自动清理。
+  - 支持从磁盘重新加载、显式恢复有效备份；恢复前会把当前损坏文件另存为 `.corrupt`，不会静默覆盖。
+  - 主存储上限 32MB、项目数上限 10000；审核草稿上限 8MB。
+
+### 会话、检索与编辑体验
+
+- **未保存保护** — 项目背景、任务编辑、复盘、新建项目等分别维护脏标记；切换标签、返回总览、切换任务、关闭窗口前都会提示。写入失败时恢复未保存标记，草稿不会因为操作失败而消失。
+- **单会话输入草稿** — 输入框草稿绑定具体 `conversationId`，切换标签、新建对话或打开归档会话都不会互相覆盖；缺少工作目录时阻止发送并保留文本。
+- **Slash 命令** — 输入 `/` 快速调用 `/review`、`/fix`、`/test`、`/commit`、`/clear` 等。
+- **跨会话搜索** — `⌘F` / `Ctrl+F` 搜索所有已打开标签和归档会话；跳转会路由到正确标签并高亮命中。搜索跳转同样受未保存保护约束。
+- **Token 用量面板** — 最近 14 天按本地时区聚合输入/输出用量、总量和高消耗会话。
+- **上下文计量与压缩** — 通过 CLI 零成本 `/context` 查询展示真实上下文占用；点击旁边的归档图标可压缩当前会话。
+- **文件树与文件预览** — 浏览项目目录，点击文件插入 `@path`；支持语法高亮文本预览（512KB 上限、二进制检测、截断提示）与常见图片格式预览。
+- **行级 Diff** — `Edit` / `Write` / `MultiEdit` 展示红绿 Diff，支持上下文折叠；自定义 LCS 引擎，超大文件自动降级。
+- **Git 变更面板** — 显示当前分支和工作区变更；本会话由 Claude 修改的文件带 AI 标记，可展开统一 Diff，并可在确认后回滚单个文件。
+- **TodoWrite 进度** — 把 CLI 的 `TodoWrite` 调用渲染为实时清单，显示进度条、每项状态和当前进行项；重开归档会话时重建。
+- **AI 会话命名** — 首轮完成后用低成本后台调用生成简洁标题；手动重命名不会被覆盖。
+- **会话置顶与持久化** — 置顶会话固定在侧栏顶部；标签页、输入草稿、历史和设置跨重启保留；被中断的会话作为草稿归档，可通过 `--resume` 继续。
+
+### 外观与助手
+
+- **赛博朋克 UI** — 粒子网络背景、扫描线、辉光效果（Tailwind CSS）。
+- **动态视频背景（可选）** — 在 **设置 → 动态视频背景** 选择本地视频（mp4/webm/mov/m4v/ogv）；静音循环、cover 适配，叠加暗化层保证可读性。通过特权 `bgmedia://` 协议提供 HTTP Range 流式读取，仅允许访问用户选中的单个文件；窗口隐藏时暂停，文件移动或删除后回退默认背景。
+- **鲸鱼娘助手** — 可拖拽的互动桌宠，响应本 GUI 内 Claude Code 会话的工作、工具类型、完成和错误状态；包含原创美术、对话、投喂、小游戏、成长、成就、天气效果和可选本地语音。设置位于 **设置 → 鲸鱼娘** 或右键菜单。
+
+## 环境要求
 
 - **Node.js** 18+
-- **Claude Code CLI** installed and available in `PATH` (`claude --version` should work)
+- 已安装 **Claude Code CLI**，且 `claude --version` 在 `PATH` 中可用
+- 打包目标以 macOS 为主要验证平台
 
-## Getting Started
+## 快速开始
 
 ```bash
 git clone https://github.com/Rigel97/claude-code-gui.git
@@ -58,118 +105,148 @@ cd claude-code-gui
 npm install
 ```
 
-**Development mode** (Vite dev server + hot reload):
+**开发模式**（Vite 开发服务器 + 热更新）：
 
 ```bash
 npm run dev
 ```
 
-**Production mode** (build + launch):
+**生产模式**（构建后启动）：
 
 ```bash
 npm start
 ```
 
-**Run tests**:
+**运行测试**：
 
 ```bash
 npm test
 ```
 
-**Package as a distributable** (macOS `.dmg` + `.zip`):
+**打包分发**（macOS `.dmg` + `.zip`）：
 
 ```bash
-npm run dist        # macOS .dmg + .zip installers in release/
-npm run pack        # unpacked app only (faster, for debugging)
+npm run dist        # 在 release/ 生成 .dmg 和 .zip
+npm run pack        # 仅生成未打包的 .app，速度更快，便于调试
 ```
 
-`npm run pack` writes and ad-hoc signs `release/mac-arm64/Claude GUI.app`. Use `npm run dist` when you also need updated DMG/ZIP installers; running `pack` alone does not replace older installer archives.
+`npm run pack` 会写入并临时签名 `release/mac-arm64/Claude GUI.app`；需要新的安装包时使用 `npm run dist`。
 
-## Usage
+## 使用指南
 
-1. Click the project-directory button (on the welcome screen or in the sidebar) to pick a working directory — new conversation tabs snapshot it (already-running tabs are unaffected)
-2. Hit **＋** in the tab bar to open a new conversation tab; tasks in different tabs run in parallel
-3. Type a message and press `Enter`; `Shift+Enter` for newline; paste screenshots with ⌘V; type `/` for slash commands; `ESC` interrupts the active tab only
-4. Messages typed while generating join that tab's queue and auto-send on completion
-5. `⌘F` / `Ctrl+F` searches across all open tabs and archived sessions
-6. Click a session in the sidebar to open it as a tab (already-open sessions just activate); hover for rename / export / delete
-7. Click **TOKENS** (bottom-left) to open the usage dashboard; hover the context meter for details, click the 📦 icon next to it to compact the session
-8. Open the **Git** sidebar tab to review what Claude changed this session (✨AI badge) and revert single files; click 👁 in the file tree to preview a file
-9. Open **项目管理中心** (sidebar) to recognize, review, and track long-term projects from your history. Pick the recognition mode (LLM semantic / local rules), confirm the send scope and budget when prompted, then review candidates before any project is created. Click a project for background, tasks, files, and the dependency workflow view
-10. Open **Agent 执行空间** (sidebar) to inspect the 3D execution graph. **实时** uses real live/history data; **演示** uses the explicitly labeled fixture. Drag to rotate, use the wheel to zoom, click a node for its real upstream/downstream path and output, click a branch to focus or collapse it, and use the timeline to replay events. **Space** pauses/resumes scene animation, **R** resets the camera, **F** focuses the selected node/core, and **Esc** clears dialogs/selection
-11. The whale girl floats inside the app window. Click to interact, drag to reposition, or right-click for feeding, games, and settings. Use **Settings → 鲸鱼娘** to control dialogue, effects, tool poses, weather, and opt-in local speech
-12. Want an animated backdrop? Open **Settings → Dynamic Video Background**, pick a local video file, and toggle it on/off anytime; low-bitrate loopable clips are recommended to keep power draw minimal
+1. 在欢迎页或侧栏选择项目目录；新标签会快照该目录，已在运行的标签不受影响。
+2. 点击标签栏的 **＋** 新建会话标签；不同标签中的任务并行运行。
+3. 输入消息后按 `Enter` 发送，`Shift+Enter` 换行；`⌘V` 粘贴截图；输入 `/` 唤起快捷命令；`ESC` 只中断当前标签。
+4. 生成过程中输入的消息进入当前标签队列，本轮结束后自动发送。
+5. `⌘F` / `Ctrl+F` 搜索所有标签与归档会话。
+6. 点击侧栏会话将其作为标签打开；已打开的会话只会激活。悬停可重命名、导出或删除。
+7. 点击左下角 **TOKENS** 打开用量面板；悬停上下文计量查看详情，点击归档图标压缩会话。
+8. 打开 **Git** 侧栏标签，查看本会话的改动（AI 标记）并回滚单个文件；在文件树中点击眼睛图标预览文件。
+9. 打开 **项目管理中心**：
+   - 选择识别方式与范围，确认发送范围、隐私和预算后开始识别。
+   - 在审核层逐字段核对证据，编辑名称/目标/简述，选择创建、关联或跳过。
+   - 需要中断时使用“稍后审核”；草稿会保留并可跨重启恢复。
+   - 进入项目后维护背景、工作目录、任务、工作流、关联对话和复盘；项目验收必须手动确认。
+10. 打开 **Agent 执行空间** 查看 3D 执行图：`实时` 使用真实事件，`演示` 使用明确标注的模拟数据；拖拽旋转、滚轮缩放、点击节点查看上下游和输出，时间线可回放。`Space` 暂停/恢复场景动画，`R` 重置相机，`F` 聚焦选中节点，`Esc` 清除选择。
+11. 鲸鱼娘漂浮在应用窗口内：点击互动、拖拽移动、右键打开投喂/小游戏/设置。可在 **设置 → 鲸鱼娘** 控制对话、特效、工具姿态、天气和可选本地语音。
+12. 需要动态背景时，在 **设置 → 动态视频背景** 选择本地视频并开启；建议使用低码率、可循环的视频以降低功耗。
 
-### Whale Girl: scope and privacy
+## 项目识别：隐私、费用与证据
 
-The mascot follows Claude Code sessions launched **inside this GUI**, including background tabs; it does not follow Claude Code in another terminal, IDE, or the standalone Claude desktop app. The bridge passes tool names and aggregate activity/status counts to the mascot, not prompt text, tool arguments, or tool output. Optional keyword sensing from the original Harness plugin is disabled in this integration.
+LLM 识别会把对话摘录（用户/助手文本和白名单工具摘要，不包含思考块、文件正文或完整工具输出）发送给 Claude Code CLI 配置的模型服务。发送前会显示数据量、示例摘录和单次预算上限；快照在确认时冻结且单次使用。取消、超时或失败仍可能产生 API 费用。
 
-Mascot interactions, growth, achievements, and preferences are stored locally under `whale-moe:*` in the app's renderer storage; they are separate from the GUI's session history and do not migrate from DeepSeek Harness. Weather makes requests to Open-Meteo only after you enter a city; local speech uses the OS speech engine and is off by default. The original DeepSeek-specific balance proxy and MiMo TTS integration are not available. The mascot lives **within the GUI window**, not in a system-wide transparent overlay. Its original bar/side display modes depend on Harness-specific layout anchors and are not supported here; use the default floating mode. Local speech currently covers mascot interaction lines only.
+模型输出不会被直接信任：任务状态、实际文件产出和依赖关系必须有本地可验证的结构化证据；无法验证的内容会降级为“待确认”。所有非空模型解释和未知字段都需要在审核层逐项核对。纯本地规则模式完全离线，不产生费用。
 
-### Project recognition: privacy, cost, and verification
+## 权限模式
 
-LLM recognition sends conversation excerpts (user/assistant text, whitelisted tool summaries — never thinking blocks, file contents, or full tool output) to the model service configured in your Claude Code CLI. Before anything is sent, a consent dialog shows the data volume, sample excerpts, and a per-run budget cap. The snapshot is frozen at consent time and single-use. Canceled, timed-out, or failed runs may still have incurred API costs. Model explanations are never trusted blindly: task statuses, actual file outputs, and dependencies must be backed by locally verified structured evidence, and everything else is marked "pending confirmation". The local rules mode recognizes projects entirely offline with no upload and no cost.
+非交互（`-p`）模式下 CLI 需要权限模式，可在 **设置** 中配置：
 
-### Permission Modes
+| 模式 | 行为 |
+|------|------|
+| `bypassPermissions`（默认） | 所有工具调用自动批准，仅建议在完全信任的项目中使用 |
+| `acceptEdits` | 文件编辑自动批准；Shell 命令等仍可能被拒绝 |
 
-In non-interactive (`-p`) mode the CLI needs a permission mode, configurable in **Settings**:
+## 自定义模型与端点
 
-| Mode | Behavior |
-|------|----------|
-| `bypassPermissions` (default) | All tool calls auto-approved — use only in projects you fully trust |
-| `acceptEdits` | File edits auto-approved; shell commands etc. may still be rejected |
+模型字段会原样作为 `--model` 传入，因此 GLM、Bedrock 等自定义端点可通过在 **设置** 中填写完整模型 ID 使用；留空则跟随 CLI 默认值。
 
-### Custom Endpoints
+## 数据与恢复
 
-The model field is passed through verbatim as `--model`, so custom endpoints (GLM, Bedrock, etc.) work by entering the full model ID in **Settings**; leave it empty to follow your CLI default.
+- 会话配置：`userData/claude-gui-config.json`
+- 项目档案：`userData/claude-gui-projects.json`，上一份有效快照：`claude-gui-projects.json.bak`
+- 待审核草稿：`userData/claude-gui-projects-review.json`
+- 项目写入使用原子替换；检测到外部修改或版本冲突时拒绝覆盖。
+- 配置文件损坏时进入只读保护：不会写入或清空原文件，内存中的会话和草稿仍受关闭保护；修复后可显式重新读取并与内存内容合并。
+- 恢复项目备份前会保留当前损坏文件为 `.corrupt`；恢复操作需要明确确认，不会自动执行。
+- 除用户显式确认的 LLM 识别外，会话与项目数据不会上传。
 
-## Tech Stack
+## 技术栈
 
-- **Electron** — main process spawns the CLI with `-p --output-format stream-json --verbose`; a per-tab runner pool runs multiple conversations in parallel, every stream/status event tagged with its `conversationId` for routing; `electronFuses` disables `runAsNode` so the packaged app is immune to `ELECTRON_RUN_AS_NODE` env pollution
-  - Security hardening: context isolation, no nodeIntegration in the renderer, navigation/window-open intercepted so markdown links only ever open externally via the system browser
-  - Single-instance lock; a second launch focuses the existing window
-- **React 18 + TypeScript** — renderer UI
-- **Zustand** — state management. Per-conversation isolated state (multi-tab); streaming shards of the same CLI message are merged by `message.id`; events are routed by `conversationId`; different conversations never mix
-- **Persistence** — a small custom JSON store in `userData` with atomic writes (tmp + rename) and content-diffing to skip redundant disk writes; the renderer persists on a 3s throttle with a `beforeunload` flush
-- **Three.js + @react-three/fiber** — lazy-loaded 3D execution scene, instanced node rendering, metallic/glass materials, bounded particles, post-processing, and quality degradation
-- **Tailwind CSS** — dark sci-fi theme
-- **Vite** — renderer build; **Vitest** — unit tests
+- **Electron** — 主进程以 `-p --output-format stream-json --verbose` 启动 CLI；每个标签独立 runner，所有流/状态事件带 `conversationId` 路由；`electronFuses` 禁用 `runAsNode`。
+  - 安全加固：上下文隔离、渲染进程无 Node 集成、拦截导航与新窗口，Markdown 链接只通过系统浏览器打开。
+  - 单实例锁：再次启动会聚焦现有窗口。
+  - 关闭守卫：渲染进程 `beforeunload` + Electron `will-prevent-unload` 原生二次确认。
+- **React 18 + TypeScript** — 渲染层 UI。
+- **Zustand** — 状态管理；按会话隔离状态，同一消息的流式分片按 `message.id` 合并，事件按 `conversationId` 路由。
+- **持久化** — `userData` 下的自定义 JSON 存储，临时文件 + `fsync` + `rename` 原子写入；配置 3 秒节流并带 trailing 写入，关闭前 flush。
+- **Three.js + @react-three/fiber** — 懒加载 3D 执行场景、实例化节点、金属/玻璃材质、有限粒子、后处理和质量降级。
+- **Tailwind CSS** — 深色科幻主题。
+- **Vite** — 渲染层构建；**Vitest** — 单元/集成测试；**Playwright** — 可选真实浏览器回归。
+
+## 目录结构
 
 ```
 src/
-├── main/          # Electron main process (CLI runner pool, IPC, file tree, persistence, projects backend)
-└── renderer/      # React app, whale status bridge, and public/whale/ artwork + scripts
-tests/             # Vitest suites: store state machine, diff engine, runner, whale bridge,
-                   # agent graph/layout, projects backend/LLM validation, analyzer CLI contract, and browser E2E
+├── main/          # Electron 主进程：CLI runner、IPC、文件树、持久化、项目后端
+└── renderer/      # React 应用、鲸鱼娘状态桥、public/whale 资源
+tests/             # Vitest：状态机、Diff、runner、鲸鱼娘桥、Agent 图布局、
+                   # 项目后端/LLM 校验/扫描取消/作业恢复/数据恢复，以及浏览器回归
+scripts/           # 打包与签名辅助脚本
 ```
 
-## Testing
+## 测试
 
-371 tests cover the trickiest logic, all runnable without a display or a real Claude session (the optional end-to-end and browser-UI tests are skipped by default):
+当前共有 **519 个单元/集成测试通过**，另有 17 个需要真实 CLI 或浏览器的可选测试默认跳过。
 
-- `tests/store.test.ts` — message merging by `message.id`, per-tab state isolation & event routing, background queue continuation, close-tab draft archiving, hydrate migration from the legacy single-session format, malformed-event hardening, immutability guarantees that `React.memo` relies on
-- `tests/diff.test.ts` — LCS diff correctness, degenerate fallback for huge inputs, context folding
-- `tests/runner.test.js` — real subprocess lifecycle: normal completion, abort-and-resend isolation, SIGKILL fallback, invalid cwd, and parallel multi-runner generation with per-conversation event tagging
-- `tests/whale.test.ts` — Claude Code-to-mascot status mapping, privacy boundary and completion/abort handling
-- `tests/projects-backend.test.js` — project recognition rules (short-Q&A filtering, dedup, cwd scoping), confirmation gating, atomic persistence, task status/dependency validation, edited-fields protection on re-recognition
-- `tests/projects-llm.test.js` — LLM analysis contract: citation validation (fabricated quotes rejected), status/IO/dependency grounding in real local evidence, cross-batch grouping, cancel/budget handling
-- `tests/projects-analyzer.test.js` — the tool-free Claude CLI invocation: stdin-only prompts, disabled tools/MCP/skills/session persistence, timeout/cancel process-group kill, malformed output rejection
-- `tests/projects-llm-backend.test.js` — consent gating, single-use frozen snapshots, early-cancel race, no silent rules fallback
-- `tests/project-store.test.ts` / `tests/project-model.test.ts` — renderer store gating and workflow DAG layout
-- `tests/agent-model.test.ts` — real CLI event adaptation, root/delegation/file edges, tool results, terminal-state protection, bounded history, and replay without future-data leakage
-- `tests/agent-layout.test.ts` — stable DAG ranks, parallel-versus-serial semantics, collision-free positions, node additions/removals, and upstream/downstream highlighting
-- `tests/e2e-partial.test.ts` — opt-in (`RUN_E2E=1`) real Claude CLI tool-loop verification, including streaming deltas, deduplication, tool output, activity, and duration
-- `tests/project-ui.test.ts` — opt-in (`RUN_PROJECT_UI=1`) real-browser E2E over an isolated history fixture and mocked model
+- `tests/store.test.ts` — 消息按 `message.id` 合并、多标签隔离与事件路由、后台队列续发、关闭标签草稿归档、旧格式迁移、异常事件加固、不可变更新。
+- `tests/diff.test.ts` — LCS Diff 正确性、超大输入降级、上下文折叠。
+- `tests/runner.test.js` — 真实子进程生命周期：正常完成、中断后重发隔离、SIGKILL 兜底、非法工作目录、多 runner 并行与事件标记。
+- `tests/whale.test.ts` — Claude Code 到鲸鱼娘的状态映射、隐私边界、完成/中止处理。
+- `tests/projects-backend.test.js` — 识别规则、确认门禁、原子持久化、任务状态/依赖校验、重识别时保护用户编辑、生命周期与备份恢复。
+- `tests/projects-llm.test.js` — LLM 输出契约：引用校验、状态/输入输出/依赖的真实证据绑定、跨批次分组、取消与预算。
+- `tests/projects-analyzer.test.js` — 无工具 Claude CLI 调用：仅 stdin 提示、禁用工具/MCP/技能/会话持久化、超时与进程组终止、异常输出拒绝。
+- `tests/projects-llm-backend.test.js` — 同意门禁、单次冻结快照、提前取消竞态、禁止静默回退规则。
+- `tests/projects-jobs.test.js` — 作业生命周期、prepare/scan 取消、`activeJob` 恢复、进度合流、审核草稿串行保存与损坏保护。
+- `tests/projects-links.test.js` — 对话关联、运行记录、严格 revision patch、任务证据所有权、生命周期只读、容量与坏盘恢复。
+- `tests/projects-scan-cancel.test.js` — 大文件读取中的即时取消、限额、进度单调性与句柄关闭。
+- `tests/project-store.test.ts` / `tests/project-model.test.ts` — 渲染层门禁、版本冲突、审核草稿恢复、进度/验收推导、工作流 DAG 布局。
+- `tests/agent-model.test.ts` / `tests/agent-layout.test.ts` — 真实 CLI 事件适配、关系边、终止态保护、稳定 DAG 排名与碰撞布局。
+- `tests/config-store.test.js` — 配置原子写入、损坏只读保护、reload 合并与写失败保留。
+- `tests/e2e-partial.test.ts` — 可选（`RUN_E2E=1`）真实 Claude CLI 工具循环验证。
+- `tests/project-ui.test.ts` — 可选（`RUN_PROJECT_UI=1`）真实浏览器端到端：识别审核、生命周期、对话关联、草稿恢复、写入失败保护。
+- `tests/config-ui.test.ts` — 可选（`RUN_CONFIG_UI=1`）配置持久化、标签草稿隔离、关闭守卫与恢复读取。
 
-Run the optional real CLI test with `RUN_E2E=1 npx vitest run tests/e2e-partial.test.ts`. It launches the actual Claude CLI and may incur API costs. Additional type/build checks are available as `npm run typecheck` and `npm run build`.
+运行可选真实 CLI 测试：
 
-## Notes
+```bash
+RUN_E2E=1 npx vitest run tests/e2e-partial.test.ts
+```
 
-- Model selection is passed through as `--model`; leave it empty to use your CLI default
-- Session data is stored locally in `userData/claude-gui-config.json`; project data in `userData/claude-gui-projects.json`; nothing is uploaded anywhere unless you explicitly confirm an LLM recognition run
-- LLM project recognition uses your Claude Code CLI credentials and may incur API costs; the consent dialog enforces a per-run budget cap
-- macOS is the tested packaging target; Linux and Windows are not verified for this whale integration. The existing CLI Windows `.cmd` shim and `taskkill` handling remain in place
+它会启动真实 Claude CLI，可能产生 API 费用。类型检查和构建：
+
+```bash
+npm run typecheck
+npm run build
+```
+
+## 说明与限制
+
+- 模型字段原样传给 `--model`；留空跟随 CLI 默认值。
+- 项目识别使用 Claude Code CLI 的凭据，可能产生 API 费用；确认弹窗提供单次预算上限。
+- 项目主存储上限 32MB、项目数上限 10000；审核草稿上限 8MB。达到容量阈值只会提示，不会自动删除数据。
+- macOS 是主要验证平台；Linux/Windows 未完整验证鲸鱼娘与动态背景。Windows 保留 `.cmd` shim 与 `taskkill` 处理。
+- 鲸鱼娘只跟随本 GUI 内启动的 Claude Code 会话，不读取提示词、工具参数或工具输出；其成长与成就在本地渲染存储的 `whale-moe:*` 下，与会话历史分离。
 
 ## License
 
-The GUI is MIT-licensed. Whale artwork and original mascot scripts are adapted from [Sutera-Diffusus/dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume) (MIT); its original copyright notice and license are preserved in [`src/renderer/public/whale/LICENSE`](src/renderer/public/whale/LICENSE).
+GUI 采用 MIT 协议。鲸鱼娘美术与原始脚本改编自 [Sutera-Diffusus/dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)（MIT），原始版权声明与许可证保留在 [`src/renderer/public/whale/LICENSE`](src/renderer/public/whale/LICENSE)。
