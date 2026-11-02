@@ -1,4 +1,4 @@
-import { useEffect, useCallback, lazy, Suspense } from 'react';
+import { useEffect, useCallback, useState, useRef, lazy, Suspense } from 'react';
 import { useStore, snapshotConversations } from './store';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
@@ -18,6 +18,41 @@ const AgentCenter = lazy(() => import('./components/AgentCenter'));
 
 export default function App() {
   const cwd = useStore((s) => s.cwd);
+  const activeCwd = useStore(state => state.conversations.find(conversation => conversation.id === state.activeConversationId)?.cwd || state.cwd);
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
+  const [configReady, setConfigReady] = useState(false);
+  const configReadyRef = useRef(false);
+  const flushPendingRef = useRef<(() => void) | null>(null);
+  const persistRecoveredRef = useRef(false);
+  const initialStateRef = useRef(useStore.getState());
+  const [recovering, setRecovering] = useState(false);
+
+  const restoreConfig = useCallback((saved: unknown, retry: boolean) => {
+    const current = useStore.getState();
+    const initial = initialStateRef.current;
+    const memoryChanged = JSON.stringify(current) !== JSON.stringify(initial);
+    const keepMemory = current.conversations.length > 0 || memoryChanged;
+    if (keepMemory && !window.confirm('将从磁盘重新读取配置，并合并当前内存中尚未保存的会话与草稿；同名会话以内存版本为准，内存设置保持不变，合并后将恢复自动保存。取消则保留内存并继续禁止覆盖配置。是否继续？')) {
+      setPersistenceError('已取消恢复读取；内存会话与草稿已保留，配置仍禁止覆盖。修复文件后可再次读取并确认合并。');
+      return;
+    }
+    if (saved && typeof saved === 'object') {
+      current.hydrate(saved as Parameters<typeof current.hydrate>[0]);
+      if (keepMemory) {
+        const restored = useStore.getState();
+        useStore.setState({
+          ...current,
+          conversations: [...restored.conversations.filter(item => !current.conversations.some(live => live.id === item.id)), ...current.conversations],
+          sessions: [...restored.sessions.filter(item => !current.sessions.some(live => live.sessionId === item.sessionId)), ...current.sessions],
+          activeConversationId: current.activeConversationId || restored.activeConversationId,
+        });
+      }
+    }
+    persistRecoveredRef.current = retry || keepMemory;
+    configReadyRef.current = true;
+    setConfigReady(true);
+    setPersistenceError(null);
+  }, []);
   const agentOpen = useAgentStore((s) => s.open);
   const projectsOpen = useProjectsStore((s) => s.open);
   useEffect(() => { void useProjectsStore.getState().load(); }, []);
@@ -27,27 +62,35 @@ export default function App() {
 
   // 启动时恢复持久化状态
   useEffect(() => {
-    (window as any).api?.store?.get('appState')?.then((saved: unknown) => {
-      if (saved && typeof saved === 'object') {
-        useStore.getState().hydrate(saved as any);
+    let disposed = false;
+    const load = async () => {
+      try {
+        const saved: unknown = await (window as any).api?.store?.get('appState');
+        if (!disposed) restoreConfig(saved, false);
+      } catch (error) {
+        if (!disposed) setPersistenceError(`会话配置读取失败，原文件已保留且禁止覆盖：${error instanceof Error ? error.message : String(error)}`);
       }
-    });
-  }, []);
+    };
+    void load();
+    return () => { disposed = true; };
+  }, [restoreConfig]);
 
   // 选择项目目录后确保至少有一个对话标签页
   useEffect(() => {
-    if (cwd && useStore.getState().conversations.length === 0) {
+    if (configReady && cwd && useStore.getState().conversations.length === 0) {
       useStore.getState().newConversation();
     }
-  }, [cwd]);
+  }, [cwd, configReady]);
 
   // 状态变更时节流持久化（3s 内最多写一次、带 trailing）：
   // - 节流保证流式期间也周期性落盘，最大丢失窗口收敛到 3s；
   //   窗口关闭/退出前另有 beforeunload fire-and-forget 兜底
   useEffect(() => {
+    if (!configReady) return;
     type StateSnapshot = ReturnType<typeof useStore.getState>;
     const PERSIST_INTERVAL = 3000;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
     let lastWriteAt = 0;
     let pending: StateSnapshot | null = null;
 
@@ -72,11 +115,22 @@ export default function App() {
       videoBg: state.videoBg,
     });
 
-    const flush = () => {
-      if (!pending) return;
-      (window as any).api?.store?.set('appState', snapshot(pending));
-      pending = null;
-      lastWriteAt = Date.now();
+    let writing = false;
+    const flush = async () => {
+      if (disposed || !pending || writing) return;
+      const captured = pending;
+      writing = true;
+      try {
+        await (window as any).api?.store?.set('appState', snapshot(captured));
+        if (pending === captured) pending = null;
+        lastWriteAt = Date.now();
+        if (!disposed) setPersistenceError(null);
+      } catch (error) {
+        if (!disposed) setPersistenceError(`会话配置保存失败，内存内容未丢弃并将重试：${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        writing = false;
+        if (!disposed && pending && !timer) timer = setTimeout(() => { timer = null; void flush(); }, PERSIST_INTERVAL);
+      }
     };
 
     const unsubscribe = useStore.subscribe((state) => {
@@ -85,27 +139,57 @@ export default function App() {
       const wait = Math.max(0, lastWriteAt + PERSIST_INTERVAL - Date.now());
       timer = setTimeout(() => {
         timer = null;
-        flush();
+        void flush();
       }, wait);
     });
 
-    const onBeforeUnload = () => {
+    const flushPending = () => {
       if (timer) {
         clearTimeout(timer);
         timer = null;
       }
       if (pending) {
-        (window as any).api?.store?.flush(snapshot(pending));
-        pending = null;
+        try {
+          const request = (window as any).api?.store?.flush(snapshot(pending));
+          void Promise.resolve(request).catch((error: unknown) => {
+            if (!disposed) setPersistenceError(`关闭前保存失败，内存内容已保留：${error instanceof Error ? error.message : String(error)}`);
+          });
+        } catch (error) {
+          setPersistenceError(`关闭前保存失败，内存内容已保留：${error instanceof Error ? error.message : String(error)}`);
+        }
+        // flush 的 IPC 没有写入确认；保留 pending 供取消关闭后的正常写入重试。
+        if (!disposed && !timer) timer = setTimeout(() => { timer = null; void flush(); }, PERSIST_INTERVAL);
+      }
+    };
+    flushPendingRef.current = flushPending;
+    // 仅恢复读取成功后补存内存合并结果；初次挂载不抢写空历史。
+    if (persistRecoveredRef.current) {
+      persistRecoveredRef.current = false;
+      pending = useStore.getState();
+      void flush();
+    }
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+      if (timer) clearTimeout(timer);
+      if (flushPendingRef.current === flushPending) flushPendingRef.current = null;
+    };
+  }, [configReady]);
+
+  // 关闭守卫不依赖配置读取成功，坏文件期间也保护项目草稿。
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (configReadyRef.current) flushPendingRef.current?.();
+      const projects = useProjectsStore.getState();
+      const pendingProgress = projects.pendingProgress;
+      if (projects.dirty || projects.reviewDirty || projects.writeOperation || pendingProgress > 0 || projects.scanOperation) {
+        event.preventDefault();
+        event.returnValue = '';
       }
     };
     window.addEventListener('beforeunload', onBeforeUnload);
-
-    return () => {
-      unsubscribe();
-      if (timer) clearTimeout(timer);
-      window.removeEventListener('beforeunload', onBeforeUnload);
-    };
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, []);
 
   // 零成本查询指定标签页的上下文占用（/context 本地命令，不调 API）：
@@ -189,6 +273,14 @@ export default function App() {
 
         const store = useStore.getState();
         const conv = store.conversations.find((c) => c.id === (conversationId || store.activeConversationId));
+        if (conv && (status === 'completed' || status === 'error' || status === 'aborted')) {
+          const last = [...conv.messages].reverse().find(item => item.role === 'assistant');
+          void useProjectsStore.getState().recordConversation(conv.id, {
+            status: status === 'error' ? 'failed' : status, recordedAt: Date.now(), ...(last ? { messageId: last.id } : {}),
+            excerpt: last?.blocks.filter(block => block.kind === 'text').map(block => block.text).join('\n').slice(0, 2000) || '',
+            ...(conv.sessionId ? { sessionId: conv.sessionId } : {}),
+          });
+        }
 
         // 任务完成且窗口不在前台时，发系统通知（附该标签页的最后一条用户消息）
         if (status === 'completed' && document.visibilityState !== 'visible') {
@@ -243,6 +335,19 @@ export default function App() {
         {/* 标题栏 */}
         <TitleBar />
 
+        {persistenceError && <div role="alert" className="flex items-center gap-3 px-4 py-2 border-b border-accent-red/30 bg-bg-deep text-xs text-accent-red"><span className="flex-1 break-words">{persistenceError}</span><button disabled={recovering} className="shrink-0 border border-border rounded px-2 py-1" onClick={async () => {
+          const bridge = (window as any).api?.store;
+          if (!bridge?.reload || recovering) return;
+          setRecovering(true);
+          try {
+            const saved: unknown = await bridge.reload();
+            if (!configReadyRef.current) restoreConfig(saved, true);
+            // 已读过配置时只解除磁盘安全 hold；失败的 pending 仍由原订阅重试。
+            else setPersistenceError('已从磁盘重新读取配置；内存未保存内容保持不变，正在重试保存。');
+          } catch (error) {
+            setPersistenceError(`恢复读取失败，内存内容已保留：${error instanceof Error ? error.message : String(error)}`);
+          } finally { setRecovering(false); }
+        }}>{configReady ? '重新读磁盘并重试保存（保留内存）' : '修复后重新读磁盘（确认合并内存）'}</button></div>}
         {/* 主体 */}
         <div className="flex flex-1 overflow-hidden">
           {!agentOpen && <Sidebar />}
@@ -252,7 +357,7 @@ export default function App() {
               <Suspense fallback={<div className="flex-1 flex items-center justify-center bg-[#03060d] text-text-secondary text-sm">正在初始化三维执行空间…</div>}>
                 <AgentCenter />
               </Suspense>
-            ) : projectsOpen ? <ProjectCenter /> : cwd ? <ChatArea key={activeConversationId} /> : <WelcomeScreen />}
+            ) : projectsOpen ? <ProjectCenter /> : activeCwd ? <ChatArea key={activeConversationId} /> : <WelcomeScreen />}
           </div>
         </div>
 

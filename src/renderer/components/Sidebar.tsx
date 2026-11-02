@@ -20,10 +20,11 @@ function formatTokens(n: number): string {
 
 export function Sidebar() {
   const projectsOpen = useProjectsStore((s) => s.open);
-  const projectCount = useProjectsStore((s) => s.projects.length);
+  const projectCount = useProjectsStore((s) => s.projects.reduce((count, project) => count + (!project.archivedAt && !project.deletedAt ? 1 : 0), 0));
   const showProjects = useProjectsStore((s) => s.showProjects);
   const showChat = useProjectsStore((s) => s.showChat);
-  const cwd = useStore((s) => s.cwd);
+  const defaultCwd = useStore((s) => s.cwd);
+  const cwd = useStore(state => state.conversations.find(conversation => conversation.id === state.activeConversationId)?.cwd || state.cwd);
   const setCwd = useStore((s) => s.setCwd);
   const sessions = useStore((s) => s.sessions);
   const openSessionTab = useStore((s) => s.openSessionTab);
@@ -96,9 +97,9 @@ export function Sidebar() {
     if (dir) {
       // 先更新全局 cwd，再基于新目录新开标签页；
       // 已开标签页各自持有创建时的 cwd 快照，运行中的任务不受影响
+      if (!showChat()) return;
       setCwd(dir);
-      newConversation();
-      showChat();
+      newConversation({ cwd: dir });
     }
   };
 
@@ -119,12 +120,12 @@ export function Sidebar() {
         <div className="p-3 border-b border-border/30">
           <button
             onClick={handleOpenDir}
-            title="切换项目目录（只影响新开的对话标签页，运行中的任务不受影响）"
+            title="当前标签页的工作目录；选择其他目录会新建对话，不影响正在运行的任务"
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-light hover:bg-bg-lighter border border-border hover:border-accent-cyan/40 transition-all group"
           >
             <FolderOpen className="w-4 h-4 text-accent-cyan shrink-0" />
             <div className="flex-1 text-left min-w-0">
-              <div className="text-xs text-text-muted font-mono">PROJECT</div>
+              <div className="text-xs text-text-muted font-mono">工作目录</div>
               <div className="text-xs text-text-primary truncate font-mono">
                 {cwd ? cwd.split('/').pop() : '未选择'}
               </div>
@@ -151,7 +152,7 @@ export function Sidebar() {
 
         <div className="px-3 pt-2">
           <button
-            onClick={() => { showChat(); useAgentStore.getState().show(); }}
+            onClick={() => { if (showChat()) useAgentStore.getState().show(); }}
             className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border border-border text-text-secondary hover:bg-bg-light hover:border-accent-cyan/40 hover:text-accent-cyan transition-colors"
           >
             <Orbit className="w-4 h-4 shrink-0" />
@@ -163,7 +164,7 @@ export function Sidebar() {
         {/* 新建会话 */}
         <div className="p-3 pb-2">
           <button
-            onClick={() => { newConversation(); showChat(); }}
+            onClick={() => { if (showChat()) newConversation({ cwd: cwd || defaultCwd }); }}
             disabled={!cwd}
             title={cwd ? '新对话标签页（可与其他标签页并行生成）' : '先选择项目目录'}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r from-accent-cyan/10 to-accent-blue/10 hover:from-accent-cyan/20 hover:to-accent-blue/20 border border-accent-cyan/30 hover:border-accent-cyan/50 transition-all disabled:opacity-40 disabled:cursor-not-allowed group"
@@ -228,8 +229,7 @@ export function Sidebar() {
                         setConfirmDeleteIdx(-1);
                         // 点击归档会话：已开则激活对应标签页，未开则新 tab 载入
                         // （多标签页下切换会话不再受生成中限制，其他标签页照常运行）
-                        openSessionTab(session.sessionId);
-                        showChat();
+                        if (showChat()) openSessionTab(session.sessionId);
                       }}
                       className={`w-full flex items-start gap-2 px-2.5 py-2 rounded-lg transition-all text-left group ${
                         confirming

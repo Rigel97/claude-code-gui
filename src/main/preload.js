@@ -11,6 +11,7 @@ const api = {
   store: {
     get: (key) => ipcRenderer.invoke('store:get', key),
     set: (key, value) => ipcRenderer.invoke('store:set', key, value),
+    reload: () => ipcRenderer.invoke('store:reload'),
     // beforeunload 兜底落盘：fire-and-forget，unload 阶段 invoke 不保证送达
     flush: (value) => ipcRenderer.send('store:flush', value),
   },
@@ -27,7 +28,22 @@ const api = {
     },
     confirm: (scanId, reviews) => ipcRenderer.invoke('projects:confirm', scanId, reviews),
     update: (project) => ipcRenderer.invoke('projects:update', project),
+    create: (input) => ipcRenderer.invoke('projects:create', input),
+    archive: (id, archived) => ipcRenderer.invoke('projects:archive', id, archived),
+    remove: (id, deleted) => ipcRenderer.invoke('projects:remove', id, deleted),
+    merge: (sourceId, targetId) => ipcRenderer.invoke('projects:merge', sourceId, targetId),
     reveal: (filePath) => ipcRenderer.invoke('projects:reveal', filePath),
+    patch: (request) => ipcRenderer.invoke('projects:patch', request),
+    activeJob: () => ipcRenderer.invoke('projects:activeJob'),
+    discardPlan: (planId) => ipcRenderer.invoke('projects:discardPlan', planId),
+    reviewDraft: () => ipcRenderer.invoke('projects:reviewDraft'),
+    saveReviewDraft: (draft) => ipcRenderer.invoke('projects:saveReviewDraft', draft),
+    linkConversation: (id, link) => ipcRenderer.invoke('projects:linkConversation', id, link),
+    recordConversation: (conversationId, result) => ipcRenderer.invoke('projects:recordConversation', conversationId, result),
+    reload: () => ipcRenderer.invoke('projects:reload'),
+    storageInfo: () => ipcRenderer.invoke('projects:storageInfo'),
+    purge: (id) => ipcRenderer.invoke('projects:purge', id),
+    restoreBackup: () => ipcRenderer.invoke('projects:restoreBackup'),
   },
 
   claude: {
@@ -94,6 +110,7 @@ const api = {
   notify: (title, body) => ipcRenderer.invoke('app:notify', { title, body }),
 
   exportMarkdown: (defaultName, content) => ipcRenderer.invoke('export:save-markdown', { defaultName, content }),
+  exportJson: (defaultName, content) => ipcRenderer.invoke('export:save-json', { defaultName, content }),
 
   window: {
     minimize: () => ipcRenderer.invoke('window:minimize'),

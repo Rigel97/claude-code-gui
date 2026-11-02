@@ -13,12 +13,12 @@ interface AppState {
   // 多标签页：每个 tab 一个独立对话
   conversations: Conversation[];
   activeConversationId: string;
-  newConversation: (opts?: { fromSession?: Session }) => string;
+  newConversation: (opts?: { fromSession?: Session; cwd?: string; id?: string; title?: string; draft?: string }) => string;
   closeConversation: (id: string) => void;
   setActiveConversation: (id: string) => void;
   /** 侧栏点击归档会话：已开则激活，未开则新 tab 载入 */
   openSessionTab: (sessionId: string) => void;
-  setDraft: (text: string) => void;
+  setDraft: (text: string, conversationId?: string) => void;
   /** 发送一条消息（写入消息流 + 拉起 CLI），默认作用于活跃标签页 */
   sendPrompt: (prompt: string, conversationId?: string) => void;
   removeLastTurn: () => string | null;
@@ -596,8 +596,15 @@ permissionMode: state.permissionMode,
           todoList: items ? { items, updatedAt: Date.now() } : null,
         });
       } else {
-        conv = makeConversation(state.cwd);
+        conv = makeConversation(opts?.cwd ?? state.cwd);
       }
+      if (opts?.id) conv.id = opts.id;
+      if (opts?.title) conv.title = opts.title;
+      if (opts?.draft !== undefined) conv.draft = opts.draft;
+      // Explicit ids are used to reopen a known conversation; never create a
+      // duplicate tab or overwrite the existing tab's draft.
+      const existing = state.conversations.find(item => item.id === conv.id);
+      if (existing) { set({ activeConversationId: existing.id }); return existing.id; }
       set({
         conversations: [...state.conversations, conv],
         activeConversationId: conv.id,
@@ -651,9 +658,9 @@ permissionMode: state.permissionMode,
       get().newConversation({ fromSession: sess });
     },
 
-    setDraft: (text) => {
+    setDraft: (text, conversationId) => {
       const state = get();
-      const conv = state.conversations.find((c) => c.id === state.activeConversationId);
+      const conv = state.conversations.find((c) => c.id === (conversationId || state.activeConversationId));
       if (!conv || conv.draft === text) return;
       set({ conversations: replaceConv(state.conversations, conv.id, { ...conv, draft: text }) });
     },

@@ -123,6 +123,7 @@ export function SearchPanel() {
   if (!open) return null;
 
   const jumpTo = (hit: SearchHit) => {
+    if (!useProjectsStore.getState().showChat()) return;
     // 先切到目标标签页（多标签页下跳转不受生成中限制）
     if (hit.conversationId) {
       setActiveConversation(hit.conversationId);
@@ -130,7 +131,6 @@ export function SearchPanel() {
       openSessionTab(hit.sessionId);
     }
     setHighlightMessage(hit.message.id);
-    useProjectsStore.getState().showChat();
     setOpen(false);
   };
 

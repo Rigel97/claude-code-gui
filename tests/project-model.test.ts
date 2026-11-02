@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dependencyError, layoutWorkflow, NODE_HEIGHT, NODE_WIDTH, nodeInViewport, patchProject, projectCounts, projectSummary, taskEditChanges } from '../src/renderer/projectModel';
+import { dependencyError, layoutWorkflow, NODE_HEIGHT, NODE_WIDTH, nodeInViewport, patchProject, projectCounts, projectHealth, projectSummary, projectTimeRange, taskEditChanges, unresolvedUncertainties } from '../src/renderer/projectModel';
 import type { ManagedProject, ProjectTask, TaskStatus } from '../src/renderer/projectTypes';
 
 const task = (id: string, dependsOn: string[] = [], status: TaskStatus = 'pending'): ProjectTask => ({
@@ -39,6 +39,72 @@ describe('项目状态与任务状态分离', () => {
     expect(patchProject(accepted, { description: 'Updated context' }).goalConfirmed).toBe(true);
     expect(accepted.goalConfirmed).toBe(true);
     expect(accepted.tasks[0].status).toBe('completed');
+  });
+});
+
+describe('可选与取消任务', () => {
+  it('取消和可选任务不计入必要进度，也不阻止目标验收', () => {
+    const tasks = [task('required', [], 'completed'), { ...task('optional', [], 'pending'), optional: true }, task('cancelled', [], 'cancelled')];
+    const summary = projectSummary(project(tasks));
+    expect(summary).toMatchObject({ requiredTotal: 1, requiredCompleted: 1, allTasksComplete: true, progress: 100 });
+    expect(summary.counts).toMatchObject({ pending: 1, completed: 1, cancelled: 1 });
+    const accepted = patchProject(project(tasks), { goalConfirmed: true });
+    expect(accepted.goalConfirmed).toBe(true);
+    expect(projectSummary(accepted).status).toBe('completed');
+  });
+  it('新增可选任务不使已验收项目失效，重新打开必要任务会使验收失效', () => {
+    const accepted = project([task('a', [], 'completed')], true);
+    expect(patchProject(accepted, { tasks: [...accepted.tasks, { ...task('optional'), optional: true }] }).goalConfirmed).toBe(true);
+    expect(patchProject(accepted, { tasks: [{ ...task('a', [], 'in_progress') }] }).goalConfirmed).toBe(false);
+  });
+  it('全取消或全可选没有必要进度，不能伪装为已经交付', () => {
+    for (const tasks of [[task('a', [], 'cancelled')], [{ ...task('a'), optional: true }]]) {
+      expect(projectSummary(project(tasks))).toMatchObject({ requiredTotal: 0, progress: 0, allTasksComplete: false });
+      expect(patchProject(project(tasks), { goalConfirmed: true }).goalConfirmed).toBe(false);
+    }
+  });
+  it('取消或删除可选任务保留验收，修改交付标准撤销验收', () => {
+    const accepted = project([task('a', [], 'completed'), { ...task('optional'), optional: true }], true);
+    expect(patchProject(accepted, { tasks: [accepted.tasks[0]] }).goalConfirmed).toBe(true);
+    expect(patchProject(accepted, { tasks: [accepted.tasks[0], { ...accepted.tasks[1], status: 'cancelled' }] }).goalConfirmed).toBe(true);
+    expect(patchProject(accepted, { deliverables: '新的交付标准' }).goalConfirmed).toBe(false);
+  });
+  it('手动项目新增任务不会仅因没有历史来源而成为待整理', () => {
+    expect(projectHealth(project([task('a')]), 100).issues).toEqual([]);
+  });
+  it('归档和回收站项目不进入活动项目计数', () => {
+    const active = project([task('a')]);
+    expect(projectCounts([active, { ...active, id: 'archived', archivedAt: 1 }, { ...active, id: 'deleted', deletedAt: 1 }])).toEqual({
+      all: 1, not_started: 1, in_progress: 0, completed: 0,
+    });
+  });
+});
+
+describe('档案健康与时间范围', () => {
+  it('缺少来源/任务、未解决项和长期未更新会进入待整理', () => {
+    const empty = project([]);
+    const emptyIssues = projectHealth(empty, 7 * 86400000 + 10).issues.map(issue => issue.code);
+    expect(emptyIssues).toContain('no-tasks');
+    expect(emptyIssues).not.toContain('no-sources');
+    const scanned = { ...project([]), audit: { mode: 'rules' as const, scannedAt: 1, coverage: { guiSessions: 0, claudeSessions: 0, skipped: 0, warnings: [], roots: [] } } };
+    expect(projectHealth(scanned, 100).issues.map(issue => issue.code)).toContain('no-sources');
+    const populated = { ...project([task('a')]), sources: [{ id: 's1', kind: 'gui' as const, sessionId: 's1', title: '', cwd: '/w', excerpt: '', timestamp: 1000 }], uncertainties: ['待确认 A'] };
+    const health = projectHealth(populated, 1000 + 31 * 86400000);
+    expect(health.needsAttention).toBe(true);
+    expect(health.issues.map(issue => issue.code)).toEqual(expect.arrayContaining(['uncertainties', 'stale']));
+    expect(unresolvedUncertainties({ ...populated, resolvedUncertainties: ['待确认 A'] })).toEqual([]);
+  });
+  it('从来源时间戳计算首次/最后工作、活跃天数和会话数', () => {
+    const sources = [
+      { id: 'a', kind: 'gui' as const, sessionId: 's1', title: '', cwd: '/w', excerpt: '', timestamp: new Date('2026-01-01T10:00:00Z').getTime() },
+      { id: 'b', kind: 'claude' as const, sessionId: 's2', title: '', cwd: '/w', excerpt: '', timestamp: new Date('2026-01-01T18:00:00Z').getTime() },
+      { id: 'c', kind: 'gui' as const, sessionId: 's1', title: '', cwd: '/w', excerpt: '', timestamp: new Date('2026-01-03T10:00:00Z').getTime() },
+    ];
+    const range = projectTimeRange({ ...project([task('a')]), sources });
+    expect(range.activeDays).toBe(2);
+    expect(range.sessions).toBe(2);
+    expect(range.first).toBe(sources[0].timestamp);
+    expect(range.last).toBe(sources[2].timestamp);
   });
 });
 

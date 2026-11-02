@@ -153,10 +153,10 @@ ipcMain.handle('video-bg:clear', () => {
   return true;
 });
 
-for (const method of ['list', 'prepare', 'scan', 'cancelScan', 'confirm', 'update', 'reveal']) {
+for (const method of ['list', 'prepare', 'scan', 'cancelScan', 'confirm', 'update', 'patch', 'create', 'archive', 'remove', 'merge', 'reveal', 'activeJob', 'discardPlan', 'reviewDraft', 'saveReviewDraft', 'linkConversation', 'recordConversation', 'reload', 'storageInfo', 'purge', 'restoreBackup']) {
   ipcMain.handle(`projects:${method}`, async (event, ...args) => {
     if (!projects) throw new Error('Projects 后端尚未初始化，请稍后重试');
-    if (method === 'scan') return projects.scan(args[0], progress => {
+    if (method === 'scan' || method === 'prepare') return projects[method](args[0], progress => {
       if (event.sender && !event.sender.isDestroyed()) event.sender.send('projects:progress', progress);
     });
     return projects[method](...args);
@@ -228,6 +228,16 @@ async function createWindow() {
       event.preventDefault();
       if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     }
+  });
+
+  // Electron does not show the browser's beforeunload prompt automatically.
+  mainWindow.webContents.on('will-prevent-unload', event => {
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'warning', title: '尚有未保存内容',
+      message: '存在未保存的项目内容、对话进展，或后台识别尚未结束。确定离开吗？已发出的模型请求可能产生费用；重载页面可重新连接仍在运行的识别。',
+      buttons: ['继续编辑', '放弃未保存内容并离开'], defaultId: 0, cancelId: 0,
+    });
+    if (choice === 1) event.preventDefault();
   });
 
   // 窗口聚焦时清除 Dock 角标
@@ -327,9 +337,11 @@ ipcMain.handle('dialog:open-directory', async () => {
 // ─── IPC: 持久化存储 ────────────────────────────────────
 ipcMain.handle('store:get', (_e, key) => store.get(key));
 ipcMain.handle('store:set', (_e, key, value) => store.set(key, value));
+ipcMain.handle('store:reload', () => { store.load(); return store.get('appState'); });
 // 渲染层 beforeunload 时的兜底落盘：fire-and-forget（invoke 在 unload 阶段不保证送达）
 ipcMain.on('store:flush', (_e, value) => {
-  if (store) store.set('appState', value);
+  try { if (store) store.set('appState', value); }
+  catch (error) { console.error('Failed to flush configuration:', error); }
 });
 
 // ─── IPC: Claude Code 执行 ──────────────────────────────
@@ -603,6 +615,16 @@ ipcMain.handle('export:save-markdown', async (_e, { defaultName, content }) => {
   const result = await dialog.showSaveDialog(mainWindow, {
     defaultPath: defaultName,
     filters: [{ name: 'Markdown', extensions: ['md'] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+  fs.writeFileSync(result.filePath, content, 'utf8');
+  return result.filePath;
+});
+
+ipcMain.handle('export:save-json', async (_e, { defaultName, content }) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: defaultName,
+    filters: [{ name: 'JSON', extensions: ['json'] }],
   });
   if (result.canceled || !result.filePath) return null;
   fs.writeFileSync(result.filePath, content, 'utf8');

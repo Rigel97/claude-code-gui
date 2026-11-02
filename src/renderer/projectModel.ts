@@ -1,43 +1,102 @@
-import type { ManagedProject, ProjectStatus, ProjectTask, TaskStatus } from './projectTypes';
+import type { FieldProvenance, ManagedProject, ProjectChanges, ProjectStatus, ProjectTask, TaskStatus } from './projectTypes';
 
 export const TASK_LABELS: Record<TaskStatus, string> = {
-  pending: '未开始', in_progress: '进行中', completed: '已完成',
+  pending: '未开始', in_progress: '进行中', completed: '已完成', cancelled: '已取消',
 };
 export const PROJECT_LABELS: Record<ProjectStatus, string> = {
   not_started: '未启动', in_progress: '进行中', completed: '已完成',
 };
-export const TASK_STATUSES: TaskStatus[] = ['pending', 'in_progress', 'completed'];
+export const TASK_STATUSES: TaskStatus[] = ['pending', 'in_progress', 'completed', 'cancelled'];
+export const PROVENANCE_LABELS: Record<FieldProvenance, string> = {
+  quoted: '原文', model: '模型解释', user: '用户编辑', unknown: '未知',
+};
+export const isRecognitionGuidance = (item: string) => /^(?:助手宣称完成不等于项目完成|目标及项目字段仅保留用户显式原文|LLM 语义识别与项目字段待确认；引用仅证明原文存在)/.test(item);
+export const unresolvedUncertainties = (project: Pick<ManagedProject, 'uncertainties' | 'resolvedUncertainties'>) => {
+  const resolved = new Set(project.resolvedUncertainties || []);
+  return [...new Set(project.uncertainties)].filter(item => !isRecognitionGuidance(item) && !resolved.has(item));
+};
+export interface ProjectHealthIssue { code: string; label: string }
+export function projectHealth(project: ManagedProject, now = Date.now()) {
+  const issues: ProjectHealthIssue[] = [];
+  // Newly created manual projects are not "unhealthy" just because they start empty.
+  if (!project.sources.length && project.audit) issues.push({ code: 'no-sources', label: '无历史来源' });
+  if (!project.tasks.length && now - project.createdAt > 7 * 86400000) issues.push({ code: 'no-tasks', label: '没有任务' });
+  const unresolved = unresolvedUncertainties(project).length;
+  if (unresolved) issues.push({ code: 'uncertainties', label: `${unresolved} 个待确认` });
+  if (!project.goalConfirmed && now - project.updatedAt > 30 * 86400000) issues.push({ code: 'stale', label: '超过 30 天未更新' });
+  return { issues, needsAttention: issues.length > 0 };
+}
+export function projectTimeRange(project: ManagedProject) {
+  const times = project.sources.map(source => source.timestamp).filter((time): time is number => Number.isFinite(time) && time! > 0);
+  return {
+    first: times.length ? Math.min(...times) : undefined,
+    last: times.length ? Math.max(...times) : undefined,
+    activeDays: new Set(times.map(time => new Date(time).toISOString().slice(0, 10))).size,
+    sessions: new Set(project.sources.map(source => source.sessionId)).size,
+  };
+}
 
-/** All tracked tasks are necessary. Task completion alone is not goal acceptance. */
+/** Optional and cancelled tasks are tracked but do not block goal acceptance. */
+export const requiredTasks = (tasks: ProjectTask[]) =>
+  tasks.filter(task => task.optional !== true && task.status !== 'cancelled');
+
+/** Required task completion alone is not goal acceptance. */
 export function projectSummary(project: Pick<ManagedProject, 'tasks' | 'goalConfirmed'>) {
-  const counts: Record<TaskStatus, number> = { pending: 0, in_progress: 0, completed: 0 };
+  const counts: Record<TaskStatus, number> = { pending: 0, in_progress: 0, completed: 0, cancelled: 0 };
   project.tasks.forEach(task => counts[task.status]++);
   const total = project.tasks.length;
-  const allTasksComplete = total > 0 && counts.completed === total;
+  const required = requiredTasks(project.tasks);
+  const requiredTotal = required.length;
+  const requiredCompleted = required.filter(task => task.status === 'completed').length;
+  const allTasksComplete = requiredTotal > 0 && requiredCompleted === requiredTotal;
   const status: ProjectStatus = allTasksComplete && project.goalConfirmed ? 'completed'
     : counts.in_progress > 0 || counts.completed > 0 ? 'in_progress' : 'not_started';
-  return { counts, total, allTasksComplete, status, progress: total ? Math.round(counts.completed / total * 100) : 0 };
+  return { counts, total, requiredTotal, requiredCompleted, allTasksComplete, status,
+    optionalTotal: project.tasks.filter(task => task.optional === true && task.status !== 'cancelled').length,
+    progress: requiredTotal ? Math.round(requiredCompleted / requiredTotal * 100) : 0 };
 }
 
 export function projectCounts(projects: ManagedProject[]) {
-  const counts = { all: projects.length, not_started: 0, in_progress: 0, completed: 0 };
-  projects.forEach(project => counts[projectSummary(project).status]++);
+  const active = projects.filter(project => !project.archivedAt && !project.deletedAt);
+  const counts = { all: active.length, not_started: 0, in_progress: 0, completed: 0 };
+  active.forEach(project => counts[projectSummary(project).status]++);
   return counts;
 }
 
-/** Reopening a task/altering the goal invalidates previous project acceptance. */
+/** Acceptance follows the reviewed goal, deliverables and required task scope. */
+export function acceptanceInvalidationReason(project: ManagedProject, next: ManagedProject): string | null {
+  if (next.goal !== project.goal) return '项目目标已修改';
+  if (next.deliverables !== project.deliverables) return '交付标准已修改';
+  const required = requiredTasks(next.tasks);
+  if (!required.length) return '当前没有必要任务，不能以取消或可选任务代替交付';
+  if (required.some(task => task.status !== 'completed')) return '存在未完成的必要任务';
+  if (requiredTasks(project.tasks).some(task => !required.some(item => item.id === task.id))) return '必要任务验收范围已缩减';
+  if (required.some(task => !requiredTasks(project.tasks).some(item => item.id === task.id))) return '必要任务验收范围已变化';
+  return null;
+}
 export function patchProject(project: ManagedProject, changes: Partial<ManagedProject>): ManagedProject {
   const next = { ...project, ...changes };
-  if (next.tasks.length === 0 || next.tasks.some(task => task.status !== 'completed') || next.goal !== project.goal) {
-    next.goalConfirmed = false;
-  }
+  if (acceptanceInvalidationReason(project, next)) next.goalConfirmed = false;
   return next;
+}
+export function progressLabel(summary: ReturnType<typeof projectSummary>) {
+  const progress = summary.requiredTotal ? `${summary.requiredCompleted}/${summary.requiredTotal} 必要任务完成 · ${summary.progress}%` : '无必要任务 · 进度不适用';
+  return `${progress}${summary.optionalTotal ? ` · ${summary.optionalTotal} 可选` : ''}${summary.counts.cancelled ? ` · ${summary.counts.cancelled} 已取消` : ''}`;
+}
+export function projectEditChanges(baseline: ManagedProject, draft: Partial<ManagedProject>, current: ManagedProject): ProjectChanges {
+  const changes: ProjectChanges = {};
+  for (const field of ['name', 'goal', 'description', 'background', 'constraints', 'decisions', 'deliverables', 'tags', 'workingDirectory'] as const) {
+    if (!(field in draft) || JSON.stringify(baseline[field]) === JSON.stringify(draft[field])) continue;
+    if (JSON.stringify(current[field]) !== JSON.stringify(baseline[field]) && JSON.stringify(current[field]) !== JSON.stringify(draft[field])) throw new Error(`项目 ${field} 已更新，请重新核对；草稿未保存。`);
+    Object.assign(changes, { [field]: draft[field] });
+  }
+  return changes;
 }
 
 /** Only dirty fields are saved; a stale editor cannot roll back changes in another view. */
 export function taskEditChanges(baseline: ProjectTask, draft: ProjectTask, current: ProjectTask): Partial<ProjectTask> {
   const changes: Partial<ProjectTask> = {};
-  const fields = ['name', 'description', 'status', 'inputs', 'outputs', 'dependsOn', 'dependencyNote'] as const;
+  const fields = ['name', 'description', 'status', 'inputs', 'outputs', 'dependsOn', 'dependencyNote', 'optional'] as const;
   for (const field of fields) {
     const original = JSON.stringify(baseline[field]);
     const proposed = JSON.stringify(draft[field]);

@@ -62,6 +62,30 @@ function resultText(value) {
   return value && typeof value === 'object' ? JSON.stringify(value) : '';
 }
 const validId = value => (typeof value === 'string' && Boolean(value.trim()) && !value.includes('\0')) || (typeof value === 'number' && Number.isFinite(value));
+const abortError = () => { const error = new Error('项目识别已取消，未保存候选'); error.name = 'AbortError'; return error; };
+const assertActive = signal => { if (signal?.aborted) throw abortError(); };
+const yieldScan = async signal => {
+  assertActive(signal);
+  await new Promise(resolve => setImmediate(resolve));
+  assertActive(signal);
+};
+// Totals describe observed messages only, never a pre-count of all historical data.
+function reportScan(signal, onProgress, events, phase, message) {
+  assertActive(signal);
+  onProgress?.({ phase, completed: events.length, total: events.length,
+    message: `${message}；已扫描 ${events.length} 条范围内消息（仅计已扫描量，历史总量未知）。` });
+  assertActive(signal);
+}
+function inScope(event, scope) {
+  if (!scope) return true;
+  if (scope.cwd) {
+    const cwd = directoryScope(event.cwd);
+    if (!cwd || cwd !== path.resolve(scope.cwd)) return false;
+  }
+  if (Number.isFinite(scope.sinceDays) && scope.sinceDays > 0 && event.timestampKnown && event.timestamp > 0 &&
+    event.timestamp < Date.now() - scope.sinceDays * 86400000) return false;
+  return true;
+}
 function eventMetadata(id, sessionId, cwd, fallbackId, fallbackSession) {
   const invalid = (id !== undefined && !validId(id)) || (sessionId !== undefined && !validId(sessionId)) ||
     (cwd !== undefined && (typeof cwd !== 'string' || cwd.includes('\0')));
@@ -104,13 +128,17 @@ function guiEvent(message, session) {
   };
 }
 
-async function readJsonl(file, fallbackId, events, coverage, limits, budget) {
+async function readJsonl(file, fallbackId, events, coverage, limits, budget, scope, signal, onProgress) {
   let handle;
+  const startIndex = events.length;
   const skippedBefore = coverage.skipped;
   let incomplete = false;
   try {
+    assertActive(signal);
     handle = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    assertActive(signal);
     const stat = await handle.stat();
+    assertActive(signal);
     if (!stat.isFile()) { coverage.skipped++; warn(coverage, limits, `跳过非常规文件 ${file}`); return; }
     if (stat.size > limits.maxFileBytes) { coverage.skipped++; warn(coverage, limits, `文件过大，跳过 ${file}（${stat.size} bytes，上限 ${limits.maxFileBytes}）`); return; }
     coverage.claudeSessions++;
@@ -125,10 +153,14 @@ async function readJsonl(file, fallbackId, events, coverage, limits, budget) {
         if (raw) {
           let parsed;
           try { parsed = JSON.parse(raw); }
-          catch (error) { coverage.skipped++; warn(coverage, limits, `JSONL 坏行 ${file}:${line}: ${error.message}`); }
+          catch (error) {
+            if (error.name === 'AbortError') throw error;
+            assertActive(signal);
+            coverage.skipped++; warn(coverage, limits, `JSONL 坏行 ${file}:${line}: ${error.message}`);
+          }
           if (parsed !== undefined) {
             const event = cliEvent(parsed, file, fallbackId, line);
-            if (event) {
+            if (event && inScope(event, scope)) {
               if (event.metadataWarning) warn(coverage, limits, `${event.metadataWarning} ${file}:${line}`);
               events.push(event);
             }
@@ -143,7 +175,9 @@ async function readJsonl(file, fallbackId, events, coverage, limits, budget) {
       parts = []; lineBytes = 0; oversized = false;
     };
     while (true) {
+      assertActive(signal);
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      assertActive(signal);
       if (!bytesRead) break;
       total += bytesRead;
       budget.bytes += bytesRead;
@@ -163,28 +197,39 @@ async function readJsonl(file, fallbackId, events, coverage, limits, budget) {
       lineBytes += piece.length;
       if (lineBytes > limits.maxLineBytes) { oversized = true; parts = []; }
       if (!oversized && piece.length) parts.push(Buffer.from(piece));
+      reportScan(signal, onProgress, events, 'reading', '正在读取 CLI 历史');
+      await yieldScan(signal);
     }
     if (lineBytes || oversized) consume();
+    reportScan(signal, onProgress, events, 'reading', 'CLI 文件读取结束');
   } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    assertActive(signal);
     coverage.skipped++;
     warn(coverage, limits, `无法读取 CLI 文件 ${file}: ${errorText(error)}`);
   } finally {
     if (incomplete || coverage.skipped > skippedBefore) {
-      for (const event of events) if (event.path === file) event.incomplete = true;
+      for (let i = startIndex; i < events.length; i++) events[i].incomplete = true;
     }
     if (handle) {
       try { await handle.close(); }
-      catch (error) { warn(coverage, limits, `关闭 CLI 文件失败 ${file}: ${errorText(error)}`); }
+      catch (error) {
+        if (error.name === 'AbortError') throw error;
+        warn(coverage, limits, `关闭 CLI 文件失败 ${file}: ${errorText(error)}`);
+      }
     }
   }
 }
 
-async function scanEvents(data, root, limits) {
+async function scanEvents(data, root, limits, signal, onProgress) {
   const coverage = { guiSessions: 0, claudeSessions: 0, skipped: 0, roots: [root], warnings: [
     `只读扫描范围：${root}/*/*.jsonl；仅顶层用户/助手消息，不递归 subagents，不读取其他配置目录。`,
     `限制：最多 ${limits.maxDirectories} 个目录、${limits.maxFiles} 个文件、${limits.maxGuiSessions} 个 GUI 条目、${limits.maxMessages} 条消息；总读取 ${limits.maxScanBytes} bytes，单文件 ${limits.maxFileBytes} bytes，单行 ${limits.maxLineBytes} bytes；最多 ${limits.maxCandidates} 个候选，每目标 ${limits.maxCandidateMessages} 条消息、${limits.maxTasks} 个任务。`,
   ] };
+  assertActive(signal);
+  if (data.scope) warn(coverage, limits, `范围过滤：${data.scope.cwd ? `目录 ${data.scope.cwd}` : ''}${data.scope.sinceDays ? `${data.scope.cwd ? ' · ' : ''}最近 ${data.scope.sinceDays} 天` : ''}；范围外历史不参与识别。`);
   const events = [];
+  reportScan(signal, onProgress, events, 'reading', '开始只读扫描');
   const budget = { bytes: 0 };
   const guiSessions = new Set();
   // When the cap is reached, keep active conversations before older archives.
@@ -199,19 +244,33 @@ async function scanEvents(data, root, limits) {
   const sessions = [...archives.slice(0, Math.max(0, limits.maxGuiSessions - active.length)), ...active];
   if (data.sessions.length + data.conversations.length > limits.maxGuiSessions) warn(coverage, limits, 'GUI 会话数量达到上限，部分会话未扫描');
   for (const session of sessions.slice(0, limits.maxGuiSessions)) {
+    await yieldScan(signal);
     if (!session || typeof session !== 'object' || (typeof session.sessionId !== 'string' && typeof session.id !== 'string') || (!session.sessionId && !session.id) || !Array.isArray(session.messages)) {
       coverage.skipped++; warn(coverage, limits, 'GUI 会话结构无效，已跳过'); continue;
     }
+    if (data.scope?.cwd && session.cwd && directoryScope(session.cwd) !== path.resolve(data.scope.cwd)) continue;
     const sessionId = validId(session.sessionId) ? String(session.sessionId) : `gui:${validId(session.id) ? session.id : 'unknown'}`;
     const skippedBefore = coverage.skipped;
+    const startIndex = events.length;
+    let processed = 0;
     guiSessions.add(sessionId);
     if (session.messages.length > limits.maxMessages) warn(coverage, limits, 'GUI 消息达到数量上限，结果不完整');
     for (const message of [...session.messages.slice(0, limits.maxMessages), ...(session.streamingMessage ? [session.streamingMessage] : [])]) {
+      assertActive(signal);
+      if (processed++ % 128 === 0) {
+        reportScan(signal, onProgress, events, 'reading', '正在读取 GUI 历史');
+        await yieldScan(signal);
+      }
       if (events.length >= limits.maxMessages) { warn(coverage, limits, 'GUI 消息达到数量上限，结果不完整'); break; }
       // Payload is already IPC-cloned; bound extraction size before retaining it.
       let serialized;
       try { serialized = JSON.stringify(message); }
-      catch (error) { coverage.skipped++; warn(coverage, limits, `GUI 消息无效：${error.message}`); continue; }
+      catch (error) {
+        if (error.name === 'AbortError') throw error;
+        assertActive(signal);
+        coverage.skipped++; warn(coverage, limits, `GUI 消息无效：${error.message}`); continue;
+      }
+      assertActive(signal);
       if (!serialized || Buffer.byteLength(serialized) > limits.maxLineBytes) { coverage.skipped++; warn(coverage, limits, `GUI 消息过大或无效 ${sessionId}`); continue; }
       budget.bytes += Buffer.byteLength(serialized);
       if (budget.bytes > limits.maxScanBytes) { warn(coverage, limits, 'GUI 消息总读取量达到上限，结果不完整'); break; }
@@ -220,46 +279,65 @@ async function scanEvents(data, root, limits) {
         coverage.skipped++; warn(coverage, limits, `GUI 消息结构无效 ${sessionId}，已跳过`);
       }
       if (event) {
+        if (!inScope(event, data.scope)) continue;
         if (event.metadataWarning) warn(coverage, limits, `${event.metadataWarning} GUI ${sessionId}`);
         event.order = events.length;
         events.push(event);
       }
     }
-    if (coverage.skipped > skippedBefore) for (const event of events) if (event.kind === 'gui' && event.sessionId === sessionId) event.incomplete = true;
+    if (coverage.skipped > skippedBefore) for (let i = startIndex; i < events.length; i++) events[i].incomplete = true;
+    reportScan(signal, onProgress, events, 'reading', 'GUI 条目读取结束');
     if (budget.bytes > limits.maxScanBytes || events.length >= limits.maxMessages) break;
   }
   if (events.length >= limits.maxMessages) warn(coverage, limits, 'GUI 消息达到数量上限，后续会话未完整扫描');
   coverage.guiSessions = guiSessions.size;
   let files = 0, directories = 0;
   try {
+    assertActive(signal);
     const rootStat = await fs.promises.lstat(root);
+    assertActive(signal);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('扫描根目录必须是真实目录，禁止跟随符号链接');
     const sortedEntries = async directory => {
+      assertActive(signal);
       const entries = await fs.promises.opendir(directory);
       const result = [];
-      for await (const entry of entries) result.push(entry);
+      for await (const entry of entries) {
+        assertActive(signal);
+        result.push(entry);
+        if (result.length % 128 === 0) await yieldScan(signal);
+      }
+      assertActive(signal);
       return result.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     };
     for (const directory of await sortedEntries(root)) {
+      assertActive(signal);
       if (budget.bytes > limits.maxScanBytes || events.length >= limits.maxMessages) break;
       if (!directory.isDirectory()) continue;
       if (++directories > limits.maxDirectories) { warn(coverage, limits, 'CLI 目录数量达到上限，结果不完整'); break; }
       try {
         for (const entry of await sortedEntries(path.join(root, directory.name))) {
+          assertActive(signal);
           if (!entry.name.endsWith('.jsonl')) continue;
           if (!entry.isFile()) { coverage.skipped++; warn(coverage, limits, `跳过链接或非常规 JSONL ${entry.name}`); continue; }
           if (++files > limits.maxFiles || events.length >= limits.maxMessages) { warn(coverage, limits, 'CLI 文件或消息数量达到上限，结果不完整'); break; }
-          await readJsonl(path.join(root, directory.name, entry.name), entry.name.slice(0, -6), events, coverage, limits, budget);
+          await readJsonl(path.join(root, directory.name, entry.name), entry.name.slice(0, -6), events, coverage, limits, budget, data.scope, signal, onProgress);
           if (budget.bytes > limits.maxScanBytes) break;
         }
-      } catch (error) { coverage.skipped++; warn(coverage, limits, `无法扫描 CLI 目录 ${directory.name}: ${errorText(error)}`); }
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        assertActive(signal);
+        coverage.skipped++; warn(coverage, limits, `无法扫描 CLI 目录 ${directory.name}: ${errorText(error)}`);
+      }
       if (files > limits.maxFiles || events.length >= limits.maxMessages || budget.bytes > limits.maxScanBytes) break;
     }
   } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    assertActive(signal);
     if (error.code !== 'ENOENT') coverage.skipped++;
     warn(coverage, limits, `CLI 扫描目录不可用 ${root}: ${errorText(error)}`);
   }
   coverage.claudeSessions = new Set(events.filter(event => event.kind === 'claude').map(event => event.sessionId)).size;
+  reportScan(signal, onProgress, events, 'reading', '扫描读取结束（遵守限额，不代表完整覆盖）');
   return { events, coverage };
 }
 
@@ -337,10 +415,12 @@ function labeledSections(text, labels, project = false) {
   return sections;
 }
 function sourceFor(event) {
+  const timestamp = Number.isFinite(event.timestamp) && event.timestamp > 0 ? event.timestamp : undefined;
   return {
     id: `src:${hash(`${event.kind}:${event.sessionId}:${event.id}:${event.path || ''}:${directoryScope(event.cwd)}`)}`,
     kind: event.kind, sessionId: String(event.sessionId), title: clip(event.title, 300), cwd: event.cwd,
     ...(event.path ? { path: event.path } : {}), messageId: String(event.id || ''),
+    ...(timestamp ? { timestamp } : {}),
     excerpt: clip(event.text || event.tools.map(t => `${t.name}: ${JSON.stringify(t.input)}`).join('\n') || event.results.map(r => resultText(r.content)).join('\n')),
   };
 }
@@ -436,7 +516,8 @@ function candidateFor(goal, events, limits, coverage, scope) {
     events = events.slice(0, limits.maxCandidateMessages);
   }
   const sources = [...new Map(events.map(e => { const s = sourceFor(e); return [s.id, s]; })).values()];
-  const uncertainties = ['目标及项目字段仅保留用户显式原文；未标注的背景、约束、决策和交付验收不自动推断。', '助手宣称完成不等于项目完成；goalConfirmed 需要用户确认。'];
+  const recognitionNotes = ['目标及项目字段仅保留用户显式原文；未标注的背景、约束、决策和交付验收不自动推断。', '助手宣称完成不等于项目完成；goalConfirmed 需要用户确认。'];
+  const uncertainties = [];
   const evidence = [`明确用户目标（原文标题/需求前置或行动目标识别；短问答/临时修改过滤）：${clip(goal)}`];
   if (!directoryScope(scope)) uncertainties.push('工作目录 unknown：未自动合并跨会话目标或关联已有项目，需要人工审核。');
   if (events.some(event => event.followup)) uncertainties.push('跟进反馈或已知 TaskUpdate 保守归属原目标，关联 unknown，待用户审核；未据此推断目标完成。');
@@ -474,6 +555,7 @@ function candidateFor(goal, events, limits, coverage, scope) {
     if (!sessionStatuses.has(call.event.sessionId)) sessionStatuses.set(call.event.sessionId, new Map());
     sessionStatuses.get(call.event.sessionId).set(task.id, status);
     task.status = status;
+    if (Number.isFinite(call.event.timestamp) && call.event.timestamp > 0) task.statusChangedAt = call.event.timestamp;
   };
   let structured = false;
   let multiStep = false;
@@ -661,14 +743,18 @@ function candidateFor(goal, events, limits, coverage, scope) {
   return {
     id: `candidate:${hash(identity(goal, scope))}`, identityKey: identity(goal, scope), name: clip(goal, 100), goal,
     description: '', ...projectFields, goalConfirmed: false,
-    tasks: [...tasks.values()], files: [...files.values()], sources, uncertainties: unique(uncertainties), evidence: unique(evidence), createdAt: now, updatedAt: now,
+    tasks: [...tasks.values()], files: [...files.values()], sources, recognitionNotes, uncertainties: unique(uncertainties), evidence: unique(evidence), createdAt: now, updatedAt: now,
   };
 }
 
-async function scanProjects(data, root, limits) {
-  const { events, coverage } = await scanEvents(data, root, limits);
+async function scanProjects(data, root, limits = DEFAULT_LIMITS, signal, onProgress) {
+  const { events, coverage } = await scanEvents(data, root, { ...DEFAULT_LIMITS, ...limits }, signal, onProgress);
+  limits = { ...DEFAULT_LIMITS, ...limits };
+  assertActive(signal);
   const lanes = new Map();
+  let processed = 0;
   for (const event of events) {
+    if (processed++ % 128 === 0) await yieldScan(signal);
     const lane = `${event.kind}:${event.sessionId}:${event.path || ''}:${directoryScope(event.cwd)}`;
     if (!lanes.has(lane)) lanes.set(lane, new Map());
     // Archived and active GUI messages with the same id are snapshots, not new turns.
@@ -685,11 +771,13 @@ async function scanProjects(data, root, limits) {
   }
   const goals = new Map();
   for (const [laneKey, lane] of lanes) {
+    await yieldScan(signal);
     const laneEvents = [...lane.values()].sort((a, b) => a.kind === 'claude' ? a.order - b.order : a.timestamp - b.timestamp || a.order - b.order);
     const calls = new Map(successfulTools(laneEvents).map(call => [call.id, call]));
     const taskOwners = new Map(), toolOwners = new Map();
     let current = null, following = false;
     for (const event of laneEvents) {
+      if (processed++ % 128 === 0) await yieldScan(signal);
       const goal = event.role === 'user' ? explicitGoal(event.text) : null;
       const scope = directoryScope(event.cwd);
       if (goal) {
@@ -738,6 +826,7 @@ async function scanProjects(data, root, limits) {
   const cliToolGoals = new Map();
   const failedTools = new Set();
   for (const event of events) {
+    if (processed++ % 128 === 0) await yieldScan(signal);
     for (const result of event.results) if (result.error && typeof result.id === 'string') failedTools.add(`${directoryScope(event.cwd)}:${event.sessionId}:${result.id}`);
     for (const tool of event.tools) if (tool.error && typeof tool.id === 'string') failedTools.add(`${directoryScope(event.cwd)}:${event.sessionId}:${tool.id}`);
   }
@@ -746,6 +835,7 @@ async function scanProjects(data, root, limits) {
   }
   const candidates = [];
   for (const [key, { goal, events: group }] of goals) {
+    assertActive(signal);
     if (candidates.length >= limits.maxCandidates) { warn(coverage, limits, `候选数量达到上限 ${limits.maxCandidates}，其余目标未提取`); break; }
     const corrected = group.map(event => ({
       ...event,
@@ -758,7 +848,7 @@ async function scanProjects(data, root, limits) {
       candidates.push(candidate);
     }
     // Yield between completed goal groups, including groups without sufficient task evidence.
-    await new Promise(resolve => setImmediate(resolve));
+    await yieldScan(signal);
   }
   for (let i = 0; i < candidates.length; i++) for (let j = i + 1; j < candidates.length; j++) {
     if (similarGoal(candidates[i], candidates[j])) {
@@ -766,16 +856,20 @@ async function scanProjects(data, root, limits) {
       candidates[j].uncertainties.push(`同工作目录目标主体相似，需人工关联（未合并）：${candidates[i].goal}`);
     }
   }
+  reportScan(signal, onProgress, events, 'finished', '规则识别结束（仅基于已扫描证据）');
   return { candidates, coverage };
 }
 
 // Independent semantic-history entry point: deliberately never calls explicitGoal.
-async function collectProjectHistory(data, root, limits = DEFAULT_LIMITS) {
-  const { events: rawEvents, coverage } = await scanEvents(data, root, { ...DEFAULT_LIMITS, ...limits });
+async function collectProjectHistory(data, root, limits = DEFAULT_LIMITS, signal, onProgress) {
+  const { events: rawEvents, coverage } = await scanEvents(data, root, { ...DEFAULT_LIMITS, ...limits }, signal, onProgress);
+  assertActive(signal);
   const normalizedEvents = rawEvents.map(raw => ({ ...raw,
     id: raw.id || `content:${hash(`${raw.role}:${raw.text}:${JSON.stringify(raw.tools.map(t => [t.id, t.name]))}`)}` }));
   const groups = [], indexes = new Map(), contentGroups = new Map();
+  let processed = 0;
   for (const event of normalizedEvents) {
+    if (processed++ % 128 === 0) await yieldScan(signal);
     const lane = `${directoryScope(event.cwd)}:${event.sessionId}:${event.role}:`;
     const keys = [lane + `id:${event.id}`];
     const contentKey = event.text.trim() ? lane + `text:${hash(event.text)}` : '';
@@ -815,7 +909,9 @@ async function collectProjectHistory(data, root, limits = DEFAULT_LIMITS) {
       tools: originals.flatMap(event => event.tools), results: originals.flatMap(event => event.results),
       incomplete: originals.some(event => event.incomplete), originals };
   }).sort((a, b) => a.timestamp - b.timestamp || `${a.sessionId}:${a.id}`.localeCompare(`${b.sessionId}:${b.id}`, 'en'));
-  return { events, coverage, toolEvidence: successfulTools(normalizedEvents) };
+  const toolEvidence = successfulTools(normalizedEvents);
+  reportScan(signal, onProgress, rawEvents, 'finished', '语义历史准备结束（未调用模型，仅基于已扫描证据）');
+  return { events, coverage, toolEvidence };
 }
 
 module.exports = { scanProjects, collectProjectHistory, sourceFor, successfulTools, normalizeToolInput, taskInputError, createdTaskId,

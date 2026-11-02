@@ -99,6 +99,28 @@ describe('ProjectsBackend 确认与持久化', () => {
   });
 });
 
+describe('ProjectsBackend 验收边界', () => {
+  it('全取消或全可选不能用空必要集合确认交付', async () => {
+    const project = await confirmed();
+    for (const tasks of [project.tasks.map(task => ({ ...task, status: 'cancelled' })), project.tasks.map(task => ({ ...task, optional: true }))]) {
+      await expect(backend.update({ ...project, tasks, goalConfirmed: true })).rejects.toThrow(/必要任务/);
+    }
+  });
+  it('交付标准修改由后端撤销验收，可选任务删除保留验收', async () => {
+    const project = await confirmed();
+    project.tasks.forEach(task => { task.status = 'completed'; });
+    project.tasks.push({ ...structuredClone(project.tasks[0]), id: 'optional', optional: true });
+    project.goalConfirmed = true;
+    await backend.update(project);
+    const accepted = (await backend.list())[0];
+    const withoutOptional = await backend.update({ ...accepted, tasks: accepted.tasks.filter(task => !task.optional) });
+    expect(withoutOptional[0].goalConfirmed).toBe(true);
+    const changed = await backend.update({ ...withoutOptional[0], deliverables: '新的交付标准' });
+    expect(changed[0].goalConfirmed).toBe(false);
+    expect(changed[0].acceptanceInvalidatedReason).toMatch(/交付标准/);
+  });
+});
+
 describe('ProjectsBackend 补充边界', () => {
   it('加载后文件被外部损坏不能覆盖，confirm 写失败仍可重试', async () => {
     const project = await confirmed();
@@ -928,7 +950,7 @@ describe('ProjectsBackend 审查问题回归', () => {
       await expect(backend.update(invalid)).rejects.toThrow(/editedFields/);
     }
     project.tasks.push({ ...structuredClone(project.tasks[0]), id: 'user-created', name: '用户待办', editedFields: [] }); await backend.update(project);
-    expect((await backend.list())[0].tasks[2].editedFields).toHaveLength(7);
+    expect((await backend.list())[0].tasks[2].editedFields).toHaveLength(8);
     const scan = await backend.scan(data());
     await expect(backend.confirm(scan.scanId, [review(scan.candidates[0], { allowDuplicate: 'true' })])).rejects.toThrow(/allowDuplicate/);
   });
@@ -989,7 +1011,12 @@ describe('ProjectsBackend 严格校验', () => {
     const saved = (await backend.list())[0];
     expect(saved.goalConfirmed).toBe(true);
     saved.tasks[0].status = 'pending';
-    await expect(backend.update(saved)).rejects.toThrow(/goalConfirmed/);
+    const reopened = (await backend.update(saved))[0];
+    expect(reopened.tasks[0].status).toBe('pending');
+    expect(reopened.goalConfirmed).toBe(false);
+    expect(reopened.acceptance).toBeUndefined();
+    expect(reopened.acceptanceInvalidatedReason).toMatch(/未完成.*必要任务/);
+    expect(reopened.revision).toBe(saved.revision + 1);
   });
   it('确认批次校验失败不会部分写入，也不允许直接更新未确认候选', async () => {
     const scan = await backend.scan(data([gui(), gui('s2', '请构建一个库存管理系统')]));
@@ -1064,7 +1091,7 @@ describe('Projects IPC 接入', () => {
     expect(await api.projects.reveal('/work/file')).toBe('reveal');
     expect(methods.confirm).toHaveBeenCalledExactlyOnceWith('scan-id', []);
     expect(methods.scan).toHaveBeenCalledExactlyOnceWith(data(), expect.any(Function));
-    expect(methods.prepare).toHaveBeenCalledExactlyOnceWith(data());
+    expect(methods.prepare).toHaveBeenCalledExactlyOnceWith(data(), expect.any(Function));
     expect(methods.cancelScan).toHaveBeenCalledExactlyOnceWith('request-id');
     // 动态视频背景：bgmedia 协议特权声明 + handler 安装 + preload 桥接与路径校验
     expect(electron.protocol.registerSchemesAsPrivileged).toHaveBeenCalledExactlyOnceWith([
@@ -1073,6 +1100,113 @@ describe('Projects IPC 接入', () => {
     expect(electron.protocol.handle).toHaveBeenCalledExactlyOnceWith('bgmedia', expect.any(Function));
     expect(await api.videoBg.clear()).toBe(true);
     expect(await api.videoBg.setPath('not-absolute.mp4')).toBe(false);
+  });
+});
+
+describe('ProjectsBackend 生命周期与审计', () => {
+  it('手动创建、归档、回收站和恢复都原子持久化', async () => {
+    const created = await backend.create({ name: ' 手动项目 ', goal: ' 手动目标 ', description: ' 说明 ' });
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({ name: '手动项目', goal: '手动目标', description: '说明', tasks: [], goalConfirmed: false });
+    expect(created[0].audit).toBeUndefined();
+    const id = created[0].id;
+    const archived = await backend.archive(id, true);
+    expect(archived[0].archivedAt).toBeGreaterThan(0);
+    expect((await backend.archive(id, false))[0].archivedAt).toBeUndefined();
+    const removed = await backend.remove(id, true);
+    expect(removed[0].deletedAt).toBeGreaterThan(0);
+    const restored = await backend.remove(id, false);
+    expect(restored[0].deletedAt).toBeUndefined();
+    const restarted = new ProjectsBackend({ home: dir, userData: path.join(dir, 'userdata'), env: {} });
+    expect((await restarted.list())[0].name).toBe('手动项目');
+  });
+  it('确认时保存识别审计，合并来源项目后来源进入回收站', async () => {
+    const first = await confirmed();
+    expect(first.audit).toMatchObject({ mode: 'rules', scannedAt: expect.any(Number) });
+    expect(first.audit.coverage.guiSessions).toBe(1);
+    const scan = await backend.scan(data([gui('second', '请构建一个库存管理系统')]));
+    await backend.confirm(scan.scanId, [review(scan.candidates[0])]);
+    const second = (await backend.list()).find(project => project.id !== first.id);
+    const merged = await backend.merge(second.id, first.id);
+    const target = merged.find(project => project.id === first.id);
+    const source = merged.find(project => project.id === second.id);
+    expect(target.sources.length).toBeGreaterThan(first.sources.length);
+    expect(source.deletedAt).toBeGreaterThan(0);
+    expect(source.mergedInto).toBe(first.id);
+    expect((await backend.remove(second.id, false)).find(project => project.id === second.id).mergedInto).toBeUndefined();
+  });
+  it('加载旧项目时补全新增字段且不覆盖原文件内容', async () => {
+    const project = await confirmed();
+    for (const key of ['pinned', 'tags', 'auditHistory', 'fieldProvenance', 'resolvedUncertainties']) delete project[key];
+    await fs.promises.writeFile(backend.filePath, JSON.stringify({ version: 1, projects: [project] }));
+    const restarted = new ProjectsBackend({ home: dir, userData: path.join(dir, 'userdata'), env: {} });
+    const loaded = (await restarted.list())[0];
+    expect(loaded.pinned).toBe(false);
+    expect(loaded.tags).toEqual([]);
+    expect(loaded.auditHistory).toEqual([]);
+    expect(loaded.resolvedUncertainties).toEqual([]);
+    expect(loaded.fieldProvenance.goal).toBe('unknown');
+  });
+  it('保存来源时间、任务状态时间、字段来源、复盘、标签与审计历史', async () => {
+    const project = await confirmed();
+    expect(project.sources.some(source => source.timestamp > 0)).toBe(true);
+    expect(project.fieldProvenance.goal).toBe('quoted');
+    expect(project.tasks.every(task => task.statusChangedAt > 0)).toBe(true);
+    const scan = await backend.scan(data());
+    await backend.confirm(scan.scanId, [review(scan.candidates[0], { existingProjectId: project.id })]);
+    const updated = (await backend.list())[0];
+    expect(updated.auditHistory).toHaveLength(1);
+    const edit = {
+      ...updated, pinned: true, tags: ['会员'], goal: '新的客户目标',
+      retrospective: { outcome: '完成', updatedAt: 1 },
+      resolvedUncertainties: updated.uncertainties.slice(0, 1),
+    };
+    await backend.update(edit);
+    const saved = (await backend.list())[0];
+    expect(saved.pinned).toBe(true);
+    expect(saved.tags).toEqual(['会员']);
+    expect(saved.retrospective.outcome).toBe('完成');
+    expect(saved.fieldProvenance.goal).toBe('user');
+    expect(saved.tasks[0].statusChangedAt).toBeGreaterThan(0);
+  });
+  it('可选/取消任务不阻止目标验收，非法生命周期字段被拒绝', async () => {
+    const project = (await backend.create({ name: '验收项目', goal: '验收目标' }))[0];
+    project.tasks = [
+      { id: 'required', name: '必要任务', description: '', status: 'completed', inputs: [], outputs: [], dependsOn: [], dependencyNote: '', sourceIds: [], records: [] },
+      { id: 'optional', name: '可选任务', description: '', status: 'pending', optional: true, inputs: [], outputs: [], dependsOn: [], dependencyNote: '', sourceIds: [], records: [] },
+      { id: 'cancelled', name: '取消任务', description: '', status: 'cancelled', inputs: [], outputs: [], dependsOn: [], dependencyNote: '', sourceIds: [], records: [] },
+    ];
+    project.goalConfirmed = true;
+    const updated = await backend.update(project);
+    expect(updated[0].goalConfirmed).toBe(true);
+    await expect(backend.archive(project.id, 'true')).rejects.toThrow(/布尔/);
+    await expect(backend.remove(project.id, 1)).rejects.toThrow(/布尔/);
+    await expect(backend.merge(project.id, project.id)).rejects.toThrow(/自身/);
+  });
+});
+
+describe('ProjectsBackend 扫描范围与取消', () => {
+  it('目录与时间范围过滤历史，非法范围在入口拒绝', async () => {
+    const other = { ...gui('other', '请构建一个库存管理系统'), cwd: '/other' };
+    const scan = await backend.scan({ ...data([gui(), other]), scope: { cwd: '/work' } });
+    expect(scan.candidates).toHaveLength(1);
+    expect(scan.candidates[0].goal).toBe(goal);
+    const now = Date.now();
+    const recent = { sessionId: 'recent', cwd: '/work', title: goal, messages: [
+      text('u', 'user', goal, now), { id: 'a', role: 'assistant', timestamp: now + 1, blocks: [tool('todo', 'TodoWrite', { todos: todos() })] },
+    ] };
+    const old = { ...recent, sessionId: 'old', messages: recent.messages.map(message => ({ ...message, timestamp: 1 })) };
+    const scoped = await backend.scan({ ...data([recent, old]), scope: { sinceDays: 7 } });
+    expect(scoped.candidates).toHaveLength(1);
+    expect(scoped.coverage.warnings.join(' ')).toMatch(/范围过滤/);
+    await expect(backend.scan({ ...data(), scope: { cwd: 'relative' } })).rejects.toThrow(/绝对路径/);
+    await expect(backend.scan({ ...data(), scope: { sinceDays: 0 } })).rejects.toThrow(/sinceDays/);
+  });
+  it('规则识别也可以被取消，且不会保存候选', async () => {
+    const pending = backend.scan({ ...data([gui()]), mode: 'rules', requestId: 'rules-cancel' });
+    expect(backend.cancelScan('rules-cancel')).toBe(true);
+    await expect(pending).rejects.toThrow(/取消|aborted/i);
+    expect(await backend.list()).toEqual([]);
   });
 });
 

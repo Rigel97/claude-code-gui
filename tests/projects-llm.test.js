@@ -49,6 +49,27 @@ describe('projects-llm snapshot and semantic contract', () => {
     expect(result.candidates).toHaveLength(1); expect(result.candidates[0].goalConfirmed).toBe(false);
     expect(await fs.promises.readdir(dir)).toEqual([]);
   });
+  it('scopes consent and existing context to active projects in selected history directories', async () => {
+    const now = Date.now(), other = path.join(dir, 'other');
+    const input = data([session([message('recent', prose, 'user', now), message('old', 'OLD_CONTEXT', 'user', now - 40 * 86400000)]),
+      session([message('other', 'OTHER_PRIVATE', 'user', now)], 'other', other)]);
+    input.scope = { cwd: dir, sinceDays: 7 };
+    const initial = await prepareAnalysis(input, root);
+    const saved = (await run(initial.payload, analyze({ projects: [project(initial.payload)] }))).candidates[0];
+    const existing = [
+      { ...saved, id: 'active' }, { ...saved, id: 'archived', archivedAt: 0 }, { ...saved, id: 'deleted', deletedAt: now },
+      { ...saved, id: 'other', name: 'OTHER_PRIVATE', sources: saved.sources.map(source => ({ ...source, cwd: other })) },
+      { ...saved, id: 'old', name: 'OLD_CONTEXT', sources: [{ ...saved.sources[0], id: 'old-source', timestamp: now - 40 * 86400000 }] },
+    ];
+    const { plan, payload } = await prepareAnalysis(input, root, {}, existing);
+    expect(plan.scope).toEqual(input.scope);
+    expect(plan.existingProjects).toEqual([{ id: 'active', name: saved.name, cwd: dir }]);
+    expect(payload.existingProjects.map(project => project.id)).toEqual(['active']);
+    expect(payload.matching.map(project => project.id)).toEqual(['active']);
+    expect(payload.batches[0].prompt).not.toMatch(/OTHER_PRIVATE|OLD_CONTEXT|archived|deleted/);
+    const unscoped = await prepareAnalysis(data(), root, {}, existing.slice(0, 4));
+    expect(unscoped.plan.existingProjects.map(project => project.id)).toEqual(['active']);
+  });
   it('ignores thinking and arbitrary private tool contents/results/commands', async () => {
     const secret = 'PRIVATE_BLOB_DO_NOT_SEND';
     const s = session([message('u', prose), { id: 'a', role: 'assistant', timestamp: 2, blocks: [
@@ -98,6 +119,25 @@ describe('projects-llm snapshot and semantic contract', () => {
     raw.evidence = [ref(assistant.sourceId, '客户列表原文\n客户详情原文')];
     expect((await run(payload, analyze({ projects: [raw] }))).candidates).toEqual([]);
   });
+  it('field refs resolve to one original event and reject concatenated aggregate anchors', async () => {
+    await cli([row('user', prose, 'u'), row('assistant', [
+      { type: 'text', text: '客户列表原文' }, { type: 'tool_use', id: 't1', name: 'Bash', input: {} },
+    ], 'cli-a1'), row('assistant', [
+      { type: 'text', text: '客户详情原文' }, { type: 'tool_use', id: 't2', name: 'Bash', input: {} },
+    ], 'cli-a2')]);
+    const { payload } = await prepareAnalysis(data([session([message('u', prose), { id: 'gui-a', role: 'assistant', timestamp: 2,
+      blocks: [tool('t1', 'Bash', {}), tool('t2', 'Bash', {})] }])]), root);
+    const sid = payload.evidence.find(event => event.role === 'assistant').sourceId;
+    const raw = project(payload, { background: '客户列表原文', constraints: '客户列表原文\n客户详情原文', fieldEvidence: {
+      background: { kind: 'quoted', refs: [ref(sid, '客户列表原文')] },
+      constraints: { kind: 'quoted', refs: [ref(sid, '客户列表原文\n客户详情原文')] },
+    } });
+    const candidate = (await run(payload, analyze({ projects: [raw] }))).candidates[0];
+    const known = candidate.fieldEvidence.background.refs[0];
+    expect(candidate.sources.find(source => source.id === known.sourceId).messageId).toBe('cli-a1');
+    expect(candidate.fieldProvenance.background).toBe('quoted');
+    expect(candidate.fieldEvidence.constraints).toEqual({ kind: 'unknown', refs: [] });
+  });
   it('large structured todo lists split into bounded evidence without sending tool result content', async () => {
     const todos = Array.from({ length: 45 }, (_, i) => ({ content: `todo-${i} ` + 'x'.repeat(100), status: 'pending' }));
     const { payload } = await prepareAnalysis(data([session([message('u', prose), { id: 'a', role: 'assistant', timestamp: 2,
@@ -123,6 +163,82 @@ describe('projects-llm snapshot and semantic contract', () => {
 });
 
 describe('projects-llm local validation', () => {
+  it('validates each field citation and retains additional original sources as public refs', async () => {
+    const extra = '背景：信息散落各处；约束：不得上传客户数据。';
+    const { payload } = await prepareAnalysis(data([session([message('u', prose), message('extra', extra)])]), root);
+    const extraId = payload.evidence.find(event => event.text === extra).sourceId;
+    const raw = project(payload, { background: '信息散落各处', constraints: '不得上传客户数据', decisions: '模型推断采用云端', deliverables: '未来报告',
+      fieldEvidence: {
+        background: { kind: 'quoted', refs: [ref(extraId, extra)] },
+        constraints: { kind: 'quoted', refs: [ref(extraId, '不得上传客户数据')] },
+        decisions: { kind: 'quoted', refs: [ref(extraId, extra)] },
+        deliverables: { kind: 'model', refs: [ref('fake', '未来报告')] },
+      } });
+    const result = await run(payload, analyze({ projects: [raw] }));
+    const candidate = result.candidates[0];
+    expect(candidate.fieldProvenance).toEqual({ name: 'model', goal: 'model', description: 'model',
+      background: 'quoted', constraints: 'quoted', decisions: 'model', deliverables: 'unknown' });
+    expect(candidate.fieldEvidence.background).toEqual({ kind: 'quoted', refs: [ref(extraId, extra)] });
+    expect(candidate.fieldEvidence.decisions.kind).toBe('model');
+    expect(candidate.fieldEvidence.deliverables).toEqual({ kind: 'unknown', refs: [] });
+    expect(candidate.sources.map(source => source.id)).toContain(extraId);
+    expect(JSON.stringify(candidate)).not.toContain('fake');
+    expect(candidate.decisions).toBe(raw.decisions); expect(candidate.deliverables).toBe(raw.deliverables);
+    expect(candidate.uncertainties.join('\n')).toMatch(/decisions/);
+    expect(candidate.uncertainties.join('\n')).toMatch(/deliverables/);
+    expect(result.coverage.warnings.join('\n')).toMatch(/decisions.*quoted/);
+    expect(result.coverage.warnings.join('\n')).toMatch(/deliverables.*引用无效/);
+  });
+  it('legacy strings and missing or invalid kinds stay model interpretations with per-field review', async () => {
+    const { payload } = await prepareAnalysis(data(), root);
+    const raw = project(payload, { background: '原文没有的背景', constraints: '私有约束', decisions: '信息散落各处', deliverables: '预期成果',
+      fieldEvidence: { constraints: { refs: [ref(payload.sources[0].id, prose)] },
+        decisions: { kind: 'user', refs: [ref(payload.sources[0].id, prose)] } } });
+    const result = await run(payload, analyze({ projects: [raw] }));
+    const candidate = result.candidates[0];
+    for (const field of ['background', 'constraints', 'decisions', 'deliverables']) {
+      expect(candidate[field]).toBe(raw[field]); expect(candidate.fieldProvenance[field]).toBe('model');
+      expect(candidate.uncertainties.some(note => note.includes(`字段 ${field}`))).toBe(true);
+    }
+    expect(candidate.fieldEvidence.background).toEqual({ kind: 'model', refs: [] });
+    const malformed = project(payload, { background: '需要审核', fieldEvidence: 'invalid' });
+    const second = (await run(payload, analyze({ projects: [malformed] }))).candidates[0];
+    expect(second.fieldProvenance.background).toBe('unknown');
+    expect(second.fieldEvidence.background).toEqual({ kind: 'unknown', refs: [] });
+  });
+  it('merged conflicting field values lose quoted provenance without mixing alternative refs', async () => {
+    const extra = '信息散落各处；必须本地运行';
+    const { payload } = await prepareAnalysis(data([session([message('u', prose), message('extra', extra)])]), root);
+    const sid = payload.evidence.find(event => event.text === extra).sourceId;
+    const a = project(payload, { background: '信息散落各处', fieldEvidence: { background: { kind: 'quoted', refs: [ref(sid, '信息散落各处')] } } });
+    const b = project(payload, { background: '必须本地运行', fieldEvidence: { background: { kind: 'quoted', refs: [ref(sid, '必须本地运行')] } } });
+    const candidate = (await run(payload, analyze({ projects: [a, b] }))).candidates[0];
+    expect(candidate.fieldProvenance.background).toBe('unknown');
+    expect(candidate.fieldEvidence.background).toEqual({ kind: 'unknown', refs: [ref(sid, '信息散落各处')] });
+    expect(candidate.uncertainties.join('\n')).toMatch(/background.*另一来源解释/);
+  });
+  it('merges same-value field refs without upgrading an unevidenced interpretation', async () => {
+    const { payload } = await prepareAnalysis(data(), root);
+    const sid = payload.sources[0].id;
+    const a = project(payload, { background: '信息散落各处' });
+    const b = project(payload, { background: '信息散落各处', fieldEvidence: { background: { kind: 'quoted', refs: [ref(sid, prose)] } } });
+    const candidate = (await run(payload, analyze({ projects: [a, b] }))).candidates[0];
+    expect(candidate.fieldProvenance.background).toBe('model');
+    expect(candidate.fieldEvidence.background).toEqual({ kind: 'model', refs: [ref(sid, prose)] });
+  });
+  it('puts generic recognition guidance in notes while retaining actual uncertainties through merge', async () => {
+    const { payload } = await prepareAnalysis(data(), root);
+    const raw = project(payload, { background: '待核实背景', uncertainties: ['约束存在冲突'] });
+    const renamed = { ...raw, name: '新的模型名称' };
+    const candidate = (await run(payload, analyze({ projects: [raw, renamed] }))).candidates[0];
+    expect(candidate.recognitionNotes.join('\n')).toMatch(/助手宣称完成不等于项目完成/);
+    expect(candidate.recognitionNotes.join('\n')).toMatch(/引用仅证明原文存在/);
+    expect(candidate.uncertainties.join('\n')).not.toMatch(/助手宣称完成不等于项目完成|引用仅证明原文存在/);
+    expect(candidate.uncertainties).toContain('约束存在冲突');
+    expect(candidate.uncertainties).toContain('验收尚未确认');
+    expect(candidate.uncertainties.join('\n')).toMatch(/字段 background/);
+    expect(new Set(candidate.recognitionNotes).size).toBe(candidate.recognitionNotes.length);
+  });
   it('missing citation quote rejects only candidate with warning', async () => {
     const { payload } = await prepareAnalysis(data(), root); const raw = project(payload);
     raw.tasks[0].sourceRefs = [{ sourceId: payload.sources[0].id }];
@@ -345,6 +461,22 @@ describe('projects-llm batching, schema, cancellation and budget', () => {
         { id: 'b', name: '详情', description: '', sourceRefs: [ref(sourceId, '再接通客户详情')] },
       ] };
   };
+  it('field refs to real sources outside the current batch are removed, never persisted', async () => {
+    const payload = await multiple();
+    const fn = vi.fn(async request => {
+      if (request.schema.required[0] === 'groups') return { value: { groups: [] }, costUsd: 0.01 };
+      const raw = fromPrompt(request), supplied = new Set(JSON.parse(request.prompt).messages.map(message => message.sourceId));
+      const outside = payload.evidence.find(event => !supplied.has(event.sourceId));
+      raw.background = '跨批字段'; raw.fieldEvidence = { background: { kind: 'model', refs: [ref(outside.sourceId, prose)] } };
+      return { value: { projects: [raw] }, costUsd: 0.01 };
+    });
+    const result = await run(payload, fn);
+    expect(result.candidates).toHaveLength(2);
+    for (const candidate of result.candidates) {
+      expect(candidate.fieldEvidence.background).toEqual({ kind: 'unknown', refs: [] });
+      expect(candidate.sources).toHaveLength(1);
+    }
+  });
   it('multi-batch groups only validated ids/evidence and shares remaining budget', async () => {
     const payload = await multiple(); expect(payload.batches).toHaveLength(2);
     const fn = vi.fn(async request => {

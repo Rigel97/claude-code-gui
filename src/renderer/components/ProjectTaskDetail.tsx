@@ -1,7 +1,8 @@
-import { useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { CheckCircle2, Circle, CircleDot, ExternalLink, Pencil, X } from 'lucide-react';
+import { Ban, CheckCircle2, Circle, CircleDot, ExternalLink, Pencil, X } from 'lucide-react';
 import { dependencyError, taskEditChanges, TASK_LABELS, TASK_STATUSES } from '../projectModel';
+import { useStore } from '../store';
 import { useProjectsStore } from '../projectStore';
 import type { ManagedProject, ProjectSource, ProjectTask, TaskStatus } from '../projectTypes';
 
@@ -11,20 +12,22 @@ export interface ProjectTaskDetailProps {
   onClose: () => void;
   onSource: (source: ProjectSource) => void;
   onSelectTask?: (id: string) => void;
+  onStartTask?: (taskId: string) => void;
 }
 
 const BUTTON = 'rounded-lg border border-border-light px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan disabled:cursor-not-allowed disabled:opacity-40';
 const INPUT = 'mt-1 w-full rounded-lg border border-border-light bg-bg-deepest px-3 py-2 text-xs leading-relaxed text-text-primary outline-none focus:border-accent-cyan disabled:opacity-50';
 const STATUS_STYLE: Record<TaskStatus, string> = {
-  pending: 'text-accent-orange', in_progress: 'text-accent-cyan', completed: 'text-accent-green',
+  pending: 'text-accent-orange', in_progress: 'text-accent-cyan', completed: 'text-accent-green', cancelled: 'text-text-secondary',
 };
-const STATUS_ICON = { pending: Circle, in_progress: CircleDot, completed: CheckCircle2 };
+const STATUS_ICON = { pending: Circle, in_progress: CircleDot, completed: CheckCircle2, cancelled: Ban };
 const PAGE_SIZE = 10;
 
 interface TaskDraft {
   name: string;
   description: string;
   status: TaskStatus;
+  optional: boolean;
   inputs: string;
   outputs: string;
   dependsOn: string[];
@@ -33,7 +36,7 @@ interface TaskDraft {
 }
 
 function draftOf(task: ProjectTask): TaskDraft {
-  return { name: task.name, description: task.description, status: task.status,
+  return { name: task.name, description: task.description, status: task.status, optional: task.optional === true,
     inputs: task.inputs.join('\n'), outputs: task.outputs.join('\n'),
     dependsOn: [...task.dependsOn], dependencyNote: task.dependencyNote, dependencyConfirmed: false };
 }
@@ -70,9 +73,14 @@ export function ProjectTaskDetail(props: ProjectTaskDetailProps) {
   return <TaskDetailContent key={`${props.project.id}:${props.task.id}`} {...props} />;
 }
 
-function TaskDetailContent({ project, task, onClose, onSource, onSelectTask }: ProjectTaskDetailProps) {
+function TaskDetailContent({ project, task, onClose, onSource, onSelectTask, onStartTask }: ProjectTaskDetailProps) {
   const save = useProjectsStore(state => state.save);
-  const operation = useProjectsStore(state => state.operation);
+  const operation = useProjectsStore(state => state.writeOperation);
+  const startConversation = useProjectsStore(state => state.startConversation);
+  const conversations = useStore(state => state.conversations);
+  const sessions = useStore(state => state.sessions);
+  const readonly = !!(project.archivedAt || project.deletedAt);
+  const taskLinks = (project.conversations || []).filter(link => link.taskId === task.id);
   const loading = useProjectsStore(state => state.loading);
   const storeError = useProjectsStore(state => state.error);
   const [editing, setEditing] = useState(false);
@@ -83,11 +91,18 @@ function TaskDetailContent({ project, task, onClose, onSource, onSelectTask }: P
   const savingRef = useRef(false);
   const [dependencySearch, setDependencySearch] = useState('');
   const [dependencyPage, setDependencyPage] = useState(0);
+  useEffect(() => {
+    const setDirty = useProjectsStore.getState().setDirty;
+    setDirty(editing, 'task');
+    return () => setDirty(false, 'task');
+  }, [editing]);
   const prefix = useId();
   const titleId = `${prefix}-title`;
   const busy = saving || !!operation || loading;
+  const editBusy = busy || readonly;
   const tasksById = useMemo(() => new Map(project.tasks.map(item => [item.id, item])), [project.tasks]);
   const sourcesById = useMemo(() => new Map(project.sources.map(source => [source.id, source])), [project.sources]);
+  const unfinishedDependencies = task.dependsOn.map(id => tasksById.get(id)).filter(item => item && item.status !== 'completed');
   const following = useMemo(() => project.tasks.filter(item => item.dependsOn.includes(task.id)), [project.tasks, task.id]);
   const dependencyResults = useMemo(() => {
     const query = dependencySearch.trim().toLocaleLowerCase();
@@ -97,15 +112,20 @@ function TaskDetailContent({ project, task, onClose, onSource, onSelectTask }: P
   const currentDependencyPage = Math.min(dependencyPage, lastDependencyPage);
   const dependencyChanged = draft.dependencyNote !== baseline.dependencyNote || draft.dependsOn.length !== baseline.dependsOn.length || draft.dependsOn.some(id => !baseline.dependsOn.includes(id));
   const draftTask: ProjectTask = { ...task, name: draft.name.trim(), description: draft.description.trim(),
-    status: draft.status, inputs: lines(draft.inputs), outputs: lines(draft.outputs),
+    status: draft.status, optional: draft.optional, inputs: lines(draft.inputs), outputs: lines(draft.outputs),
     dependsOn: draft.dependsOn, dependencyNote: draft.dependencyNote.trim() };
   const invalidDependency = editing ? dependencyError(project.tasks.map(item => item.id === task.id ? draftTask : item)) : null;
 
   const startEditing = () => {
-    setDraft(draftOf(task)); setBaseline(task); setEditing(true); setLocalError(null);
+    if (editBusy) return;
+    setDraft(draftOf(task)); setBaseline({ ...task, optional: task.optional === true }); setEditing(true); setLocalError(null);
     setDependencySearch(''); setDependencyPage(0);
   };
   const cancelEditing = () => { if (!busy) { setEditing(false); setLocalError(null); } };
+  const requestClose = () => {
+    if (busy || !useProjectsStore.getState().confirmDiscard('关闭任务详情', ['task'])) return;
+    onClose();
+  };
   const setField = <K extends keyof TaskDraft>(key: K, value: TaskDraft[K]) => {
     setDraft(current => ({ ...current, [key]: value,
       ...((key === 'dependsOn' || key === 'dependencyNote') ? { dependencyConfirmed: false } : {}) }));
@@ -114,9 +134,10 @@ function TaskDetailContent({ project, task, onClose, onSource, onSelectTask }: P
 
   const persist = async (changes: Partial<ProjectTask>) => {
     const state = useProjectsStore.getState();
-    if (savingRef.current || state.operation || state.loading) return false;
+    if (readonly || savingRef.current || state.writeOperation || state.loading) return false;
     const latestProject = state.projects.find(item => item.id === project.id);
     const latestTask = latestProject?.tasks.find(item => item.id === task.id);
+    if (latestProject?.archivedAt || latestProject?.deletedAt) { setLocalError('只读，恢复后可编辑。'); return false; }
     if (!latestProject || !latestTask) { setLocalError('项目或任务已不存在，请重新加载。'); return false; }
     const tasks = latestProject.tasks.map(item => item.id === task.id ? { ...latestTask, ...changes } : item);
     const invalid = dependencyError(tasks);
@@ -134,7 +155,7 @@ function TaskDetailContent({ project, task, onClose, onSource, onSelectTask }: P
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (busy) return;
+    if (editBusy) return;
     if (!draftTask.name) { setLocalError('任务名称不能为空。'); return; }
     if (invalidDependency) { setLocalError(invalidDependency); return; }
     if (dependencyChanged && !draft.dependencyConfirmed) { setLocalError('请手动确认依赖关系及说明；未知关系不能自动视为事实。'); return; }
@@ -149,6 +170,15 @@ function TaskDetailContent({ project, task, onClose, onSource, onSelectTask }: P
     if (!Object.keys(changes).length || await persist(changes)) setEditing(false);
   };
 
+  const openConversation = async (conversationId: string) => {
+    if (editBusy || savingRef.current) return;
+    savingRef.current = true; setSaving(true); setLocalError(null);
+    try {
+      if (!await startConversation(project.id, task.id, conversationId)) setLocalError(useProjectsStore.getState().error || '关联对话不可用，未创建替代对话。');
+    } catch (error) { setLocalError(error instanceof Error ? error.message : String(error)); }
+    finally { savingRef.current = false; setSaving(false); }
+  };
+
   const taskLink = (id: string) => {
     const related = tasksById.get(id);
     if (!related) return <span className="text-xs text-accent-orange">缺失任务：{id}（待修正）</span>;
@@ -159,24 +189,32 @@ function TaskDetailContent({ project, task, onClose, onSource, onSelectTask }: P
 
   return (
     <aside aria-labelledby={titleId} aria-busy={busy} className="absolute inset-y-0 right-0 z-20 flex w-[340px] max-w-full min-w-0 shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-bg-deep animate-fade-in shadow-2xl xl:static xl:z-auto xl:shadow-none" onKeyDown={event => {
-      if (event.key === 'Escape') { event.stopPropagation(); if (!busy) { if (editing) cancelEditing(); else onClose(); } }
+      if (event.key === 'Escape') { event.stopPropagation(); requestClose(); }
     }}>
       <div className="flex shrink-0 items-start justify-between gap-2 border-b border-border px-4 py-3">
         <div className="min-w-0"><p className="mb-1 text-[10px] font-mono text-accent-cyan">任务详情</p><h2 id={titleId} className="break-words text-sm font-medium text-text-primary">{task.name || '未命名任务'}</h2></div>
         <div className="flex shrink-0 gap-1">
-          {!editing && <button type="button" className={`${BUTTON} px-2`} aria-label="编辑任务" disabled={busy} onClick={startEditing}><Pencil size={14} /></button>}
-          <button type="button" className={`${BUTTON} px-2`} aria-label="关闭任务详情" disabled={busy} onClick={onClose}><X size={15} /></button>
+          {!editing && <button type="button" className={`${BUTTON} px-2`} aria-label="编辑任务" disabled={editBusy} onClick={startEditing}><Pencil size={14} /></button>}
+          <button type="button" className={`${BUTTON} px-2`} aria-label="关闭任务详情" disabled={busy} onClick={requestClose}><X size={15} /></button>
         </div>
       </div>
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {(localError || storeError) && <p role="alert" className="rounded-lg border border-accent-orange/25 bg-accent-orange/5 p-3 text-xs leading-relaxed text-accent-orange">{localError || storeError}</p>}
+        {readonly && <p role="status" className="rounded-lg border border-border p-2 text-xs text-text-secondary">只读，恢复后可编辑</p>}
+        {onStartTask && <Section title="任务对话"><button type="button" className={`${BUTTON} text-accent-cyan`} disabled={editBusy} onClick={() => onStartTask(task.id)}>为此任务新建对话</button><p className="text-[11px] leading-relaxed text-text-secondary">生成任务草稿，不会自动发送或执行；任务依赖不会自动调度。</p></Section>}
+        {!!taskLinks.length && <Section title={`关联对话与运行记录 · ${taskLinks.length}`}><PagedList items={taskLinks} label="关联运行记录" render={link => {
+          const available = conversations.some(item => item.id === link.conversationId || (!!link.sessionId && item.sessionId === link.sessionId)) || sessions.some(item => !!link.sessionId && item.sessionId === link.sessionId);
+          const source = project.sources.find(item => !!link.sessionId && item.sessionId === link.sessionId && (!link.lastRun?.messageId || item.messageId === link.lastRun.messageId));
+          return <div className="rounded-lg border border-border-light bg-bg-light p-3 space-y-2 text-xs text-text-secondary"><p className="text-text-primary break-words">{link.title || '未命名对话'}</p><p className="font-mono break-all">{link.cwd || '目录未记录'}</p><p>{link.lastRun ? ({ completed: '运行结束', failed: '运行失败', aborted: '运行已中止' }[link.lastRun.status]) : '暂无运行记录'}{link.lastRun && !link.reviewedAt && <span className="ml-2 text-accent-orange">待核对进展</span>}</p>{link.lastRun && <><p className="text-accent-orange">运行摘录（未经核验） · {new Date(link.lastRun.recordedAt).toLocaleString()}</p><p className="whitespace-pre-wrap break-words selectable-text">{link.lastRun.excerpt || '无摘录'}</p></>}{link.reviewedAt && <p className="text-accent-green">进展已核对（非任务验收）</p>}<button type="button" className={BUTTON} disabled={editBusy || !available} onClick={() => void openConversation(link.conversationId)}>打开关联对话</button>{source && <button type="button" className={`${BUTTON} ml-2`} onClick={() => onSource(source)}>查看真实来源</button>}{!available && <p className="text-accent-orange">对话已不可用，保留运行摘录供回溯。</p>}<p className="text-[11px]">运行记录与进展核对不会自动完成任务或项目。</p></div>;
+        }} /></Section>}
         {editing ? (
           <form onSubmit={submit} className="space-y-4">
-            <fieldset disabled={busy} className="space-y-4">
+            <fieldset disabled={editBusy} className="space-y-4">
               <legend className="mb-3 text-xs font-medium text-accent-cyan">编辑任务</legend>
               <label className="block text-xs text-text-secondary" htmlFor={`${prefix}-name`}>名称<input id={`${prefix}-name`} autoFocus required value={draft.name} onChange={event => setField('name', event.target.value)} className={INPUT} /></label>
               <label className="block text-xs text-text-secondary" htmlFor={`${prefix}-description`}>说明<textarea id={`${prefix}-description`} rows={3} value={draft.description} onChange={event => setField('description', event.target.value)} className={INPUT} /></label>
               <label className="block text-xs text-text-secondary" htmlFor={`${prefix}-status`}>任务状态<select id={`${prefix}-status`} value={draft.status} onChange={event => setField('status', event.target.value as TaskStatus)} className={INPUT}>{TASK_STATUSES.map(status => <option key={status} value={status}>{TASK_LABELS[status]}</option>)}</select></label>
+              <label className="flex items-start gap-2 rounded-lg border border-border-light p-3 text-xs leading-relaxed text-text-secondary"><input type="checkbox" checked={draft.optional} onChange={event => setField('optional', event.target.checked)} className="mt-1 accent-accent-cyan" /><span>可选任务<span className="block text-[11px] text-text-dim">可选任务不计入项目进度，也不阻止目标验收。</span></span></label>
               <label className="block text-xs text-text-secondary" htmlFor={`${prefix}-inputs`}>输入（每行一项；空白保留待确认）<textarea id={`${prefix}-inputs`} rows={3} value={draft.inputs} onChange={event => setField('inputs', event.target.value)} className={INPUT} /></label>
               <label className="block text-xs text-text-secondary" htmlFor={`${prefix}-outputs`}>输出（每行一项；空白保留待确认）<textarea id={`${prefix}-outputs`} rows={3} value={draft.outputs} onChange={event => setField('outputs', event.target.value)} className={INPUT} /></label>
               <fieldset className="space-y-2 border-t border-border pt-3">
@@ -193,28 +231,30 @@ function TaskDetailContent({ project, task, onClose, onSource, onSelectTask }: P
               </fieldset>
               <label htmlFor={`${prefix}-dependency-note`} className="block text-xs text-text-secondary">依赖说明（保留未知信息，或填写核实结果）<textarea id={`${prefix}-dependency-note`} rows={3} value={draft.dependencyNote} onChange={event => setField('dependencyNote', event.target.value)} className={INPUT} placeholder="待确认；核实无依赖时请明确说明" /></label>
               <label className="flex items-start gap-2 text-xs leading-relaxed text-text-secondary"><input type="checkbox" checked={draft.dependencyConfirmed} onChange={event => setField('dependencyConfirmed', event.target.checked)} className="mt-1 accent-accent-cyan" /><span>我已核实所选依赖和说明，将上述说明确认为事实。未核实的未知说明请勿勾选。</span></label>
-              <p className="text-[11px] leading-relaxed text-text-secondary">状态改变不会生成执行记录。任务变为未开始或进行中后，项目目标确认将自动失效。</p>
+              <p className="text-[11px] leading-relaxed text-text-secondary">状态改变不会生成执行记录。必要任务未完成或验收范围变化时会撤销目标验收，并显示原因。</p>
             </fieldset>
-            <div className="sticky bottom-0 flex justify-end gap-2 border-t border-border bg-bg-deep py-3"><button type="button" className={BUTTON} disabled={busy} onClick={cancelEditing}>取消</button><button type="submit" className={`${BUTTON} border-accent-cyan/40 text-accent-cyan`} disabled={busy || !!invalidDependency || !draft.name.trim()}>{saving ? '保存中…' : '保存更改'}</button></div>
+            <div className="sticky bottom-0 flex justify-end gap-2 border-t border-border bg-bg-deep py-3"><button type="button" className={BUTTON} disabled={busy} onClick={cancelEditing}>取消</button><button type="submit" className={`${BUTTON} border-accent-cyan/40 text-accent-cyan`} disabled={editBusy || !!invalidDependency || !draft.name.trim()}>{saving ? '保存中…' : '保存更改'}</button></div>
           </form>
         ) : (
           <>
-            <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-text-secondary">{task.description.trim() || '任务说明待确认。'}</p>
+            <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-text-secondary">{task.description.trim() || '任务说明待确认。'}{task.optional && <span className="ml-2 rounded bg-bg-lighter px-1.5 py-0.5 text-[10px] text-text-secondary">可选任务</span>}</p>
+            {task.statusChangedAt && <p className="text-[11px] text-text-dim">状态更新于 {new Date(task.statusChangedAt).toLocaleString()}</p>}
             <Section title="任务状态"><div role="group" aria-label="修改任务状态" className="flex flex-wrap gap-1.5">{TASK_STATUSES.map(status => {
               const Icon = STATUS_ICON[status];
-              return <button key={status} type="button" aria-pressed={task.status === status} disabled={busy} className={`${BUTTON} flex items-center gap-1.5 px-2 ${task.status === status ? `${STATUS_STYLE[status]} border-current bg-white/5` : ''}`} onClick={() => { if (status !== task.status) void persist({ status }); }}><Icon size={12} aria-hidden="true" />{TASK_LABELS[status]}</button>;
+              return <button key={status} type="button" aria-pressed={task.status === status} disabled={editBusy} className={`${BUTTON} flex items-center gap-1.5 px-2 ${task.status === status ? `${STATUS_STYLE[status]} border-current bg-white/5` : ''}`} onClick={() => { if (status !== task.status) void persist({ status }); }}><Icon size={12} aria-hidden="true" />{TASK_LABELS[status]}</button>;
             })}</div><p className="text-[11px] leading-relaxed text-text-secondary">状态为手动记录，不自动证明产出或目标已验收。</p></Section>
             <Section title={task.status === 'completed' ? '已完成任务的输入 / 输出记录' : task.status === 'pending' ? '预期输入 / 输出' : '当前登记的输入 / 预期输出'}>
               <p className="text-[11px] leading-relaxed text-text-secondary">{task.status === 'completed' ? '下列为已登记的输入和产出；实际执行事实请结合执行记录和来源核实，状态本身不是证明。' : '下列为任务预期或当前登记信息，不代表已实际执行或交付。'}</p>
               <h4 className="text-xs text-text-primary">输入</h4><Values items={task.inputs} /><h4 className="pt-1 text-xs text-text-primary">输出</h4><Values items={task.outputs} />
             </Section>
+            {!!unfinishedDependencies.length && <p role="status" className="rounded-lg border border-accent-orange/20 p-2 text-xs text-accent-orange">前置任务尚未完成：{unfinishedDependencies.map(item => item!.name).join('、')}。依赖仅作记录，不自动阻止手动状态修改。</p>}
             <Section title="前置依赖"><PagedList items={task.dependsOn} label="前置依赖" render={id => taskLink(id)} /><p className="whitespace-pre-wrap break-words rounded-lg border border-accent-orange/20 bg-accent-orange/5 p-2 text-xs leading-relaxed text-text-secondary">{task.dependencyNote.trim() || '依赖说明待确认；空列表不自动代表已核实无依赖。'}</p></Section>
             <Section title="关联后续任务"><PagedList items={following} label="后续任务" render={item => taskLink(item.id)} />{!onSelectTask && <p className="text-[11px] text-text-secondary">当前视图未提供任务跳转入口。</p>}</Section>
           </>
         )}
-        <Section title={`执行记录 · ${task.records.length}`}>
-          <p className="text-[11px] leading-relaxed text-text-secondary">仅展示已有实际执行记录；未知信息保持原样，不由完成状态推断。</p>
-          <PagedList items={task.records} label="执行记录" render={(record, index) => <details className="rounded-lg border border-border-light bg-bg-light p-3 text-xs text-text-secondary"><summary className="cursor-pointer break-words focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan">记录 {index + 1} · {record.trim().slice(0, 60) || '内容待确认'}</summary><p className="mt-2 whitespace-pre-wrap break-words leading-relaxed">{record.trim() || '记录内容待确认。'}</p></details>} />
+        <Section title={`任务证据 · ${task.records.length}`}>
+          <p className="text-[11px] leading-relaxed text-text-secondary">包括任务原文、计划、执行及未知说明；条数不是执行次数，状态本身不证明验收。</p>
+          <PagedList items={task.records} label="任务证据" render={(record, index) => <details className="rounded-lg border border-border-light bg-bg-light p-3 text-xs text-text-secondary"><summary className="cursor-pointer break-words focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan">记录 {index + 1} · {record.trim().slice(0, 60) || '内容待确认'}</summary><p className="mt-2 whitespace-pre-wrap break-words leading-relaxed">{record.trim() || '记录内容待确认。'}</p></details>} />
         </Section>
         <Section title={`信息来源 · ${task.sourceIds.length}`}>
           <PagedList items={task.sourceIds} label="信息来源" render={id => {

@@ -28,6 +28,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
 
 export function InputBar({ initialDraft }: { initialDraft: string }) {
   const [input, setInput] = useState(initialDraft);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -42,7 +43,8 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
   const conv = useStore((s): Conversation | undefined =>
     s.conversations.find((c) => c.id === s.activeConversationId)
   );
-  const cwd = useStore((s) => s.cwd);
+  const globalCwd = useStore((s) => s.cwd);
+  const cwd = conv?.cwd || globalCwd;
   const model = useStore((s) => s.model);
   const injectedText = useStore((s) => s.injectedText);
   const injectText = useStore((s) => s.injectText);
@@ -52,6 +54,13 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
   const removeQueuedMessage = useStore((s) => s.removeQueuedMessage);
 
   const conversationId = conv?.id ?? '';
+  const mountedIdRef = useRef(conversationId);
+  const updateInput = useCallback((text: string) => {
+    inputRef.current = text;
+    setInput(text);
+    setSendError(null);
+    if (mountedIdRef.current) useStore.getState().setDraft(text, mountedIdRef.current);
+  }, []);
   const queue = conv?.queue ?? [];
   const sessionId = conv?.sessionId ?? null;
   const displayModel = model || conv?.currentModel || '';
@@ -61,7 +70,7 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
   // 卸载时把草稿写回标签页（组件按 conversationId 重新挂载）
   useEffect(() => {
     return () => {
-      useStore.getState().setDraft(inputRef.current);
+      if (mountedIdRef.current) useStore.getState().setDraft(inputRef.current, mountedIdRef.current);
     };
   }, []);
 
@@ -88,10 +97,10 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
   // 都会随挂载重新执行，把残留的路径一遍遍追加进输入框并抢走焦点
   useEffect(() => {
     if (!injectedText || injectedText.convId !== conversationId) return;
-    setInput((prev) => prev + injectedText.text);
+    updateInput(inputRef.current + injectedText.text);
     useStore.getState().clearInjectedText();
     textareaRef.current?.focus();
-  }, [injectedText, conversationId]);
+  }, [injectedText, conversationId, updateInput]);
 
   /** 粘贴图片（截图等）→ 存临时文件 → 插入 @ 引用，可继续补文字后发送；
    *  纯文本粘贴不受影响，走浏览器默认行为 */
@@ -117,10 +126,16 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
   }, [injectText]);
 
   const handleSend = useCallback(() => {
-    if (!input.trim()) return;
+    if (!input.trim() || !conversationId) return;
+    const current = useStore.getState().conversations.find(item => item.id === conversationId);
+    if (!current) return;
+    if (!current.cwd) {
+      setSendError('当前对话未设置工作目录，请先选择项目目录；输入内容已保留。');
+      return;
+    }
 
     const prompt = input.trim();
-    setInput('');
+    updateInput('');
     setSlashOpen(false);
 
     if (textareaRef.current) {
@@ -135,7 +150,7 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
     }
 
     sendPrompt(prompt, conversationId);
-  }, [input, isStreaming, enqueueMessage, sendPrompt, conversationId]);
+  }, [input, isStreaming, enqueueMessage, sendPrompt, conversationId, updateInput]);
 
   const handleAbort = useCallback(() => {
     if (conversationId) abortConversation(conversationId);
@@ -146,12 +161,11 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
     setSlashOpen(false);
     if (cmd.action === 'clear') {
       // 先保存当前草稿，再新开标签页（当前对话保留在自己的 tab 里）
-      useStore.getState().setDraft(inputRef.current);
-      newConversation();
-      setInput('');
+      if (mountedIdRef.current) useStore.getState().setDraft(inputRef.current, mountedIdRef.current);
+      newConversation({ cwd });
       return;
     }
-    setInput(cmd.prompt || '');
+    updateInput(cmd.prompt || '');
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (el) {
@@ -160,7 +174,7 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
         el.style.height = Math.min(el.scrollHeight, 200) + 'px';
       }
     });
-  }, [newConversation]);
+  }, [newConversation, updateInput]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // 输入法组合中：Enter 是确认候选词上屏，方向键是候选词导航，
@@ -238,7 +252,7 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
   // 自动调整 textarea 高度 + 斜杠面板开关
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
-    setInput(value);
+    updateInput(value);
     setSlashOpen(/^\/\S*$/.test(value));
     setSlashIndex(0);
     const el = e.target;
@@ -366,6 +380,8 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
             )}
           </div>
         </div>
+
+        {sendError && <div role="alert" className="mt-2 px-2 text-xs text-accent-red">{sendError}</div>}
 
         {/* 底部提示 */}
         <div className="flex items-center justify-between mt-2 px-2">

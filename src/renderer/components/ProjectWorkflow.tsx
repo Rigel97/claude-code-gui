@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, Circle, CircleDot, LocateFixed, Minus, Plus, Search } from 'lucide-react';
+import { Ban, CheckCircle2, Circle, CircleDot, LocateFixed, Minus, Plus, Search } from 'lucide-react';
 import { layoutWorkflow, nodeInViewport, NODE_HEIGHT, NODE_WIDTH, TASK_LABELS, TASK_STATUSES } from '../projectModel';
 import type { ManagedProject, TaskStatus } from '../projectTypes';
 
@@ -13,8 +13,9 @@ const STATUS_STYLE: Record<TaskStatus, string> = {
   pending: 'text-accent-orange border-accent-orange/30',
   in_progress: 'text-accent-cyan border-accent-cyan/40',
   completed: 'text-accent-green border-accent-green/30',
+  cancelled: 'text-text-secondary border-border',
 };
-const STATUS_ICON = { pending: Circle, in_progress: CircleDot, completed: CheckCircle2 };
+const STATUS_ICON = { pending: Circle, in_progress: CircleDot, completed: CheckCircle2, cancelled: Ban };
 const CONTROL = 'rounded-lg border border-border-light p-1.5 text-text-secondary hover:bg-white/5 hover:text-accent-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan disabled:opacity-40 disabled:cursor-not-allowed';
 const PAGE_SIZE = 20;
 const MIN_ZOOM = 0.25;
@@ -27,6 +28,7 @@ function summarize(items: string[]) {
 
 export function ProjectWorkflow({ project, onSelectTask, selectedTaskId }: ProjectWorkflowProps) {
   const layout = useMemo(() => layoutWorkflow(project.tasks), [project.tasks]);
+  const connectedIds = useMemo(() => new Set(layout.edges.flatMap(edge => [edge.from, edge.to])), [layout.edges]);
   const tasksById = useMemo(() => new Map(project.tasks.map(task => [task.id, task])), [project.tasks]);
   const nodesById = useMemo(() => new Map(layout.nodes.map(node => [node.taskId, node])), [layout.nodes]);
   const scroller = useRef<HTMLDivElement>(null);
@@ -119,7 +121,7 @@ export function ProjectWorkflow({ project, onSelectTask, selectedTaskId }: Proje
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <h2 className="text-sm font-medium text-text-primary">任务工作流 <span className="ml-2 font-mono text-xs text-text-muted">{project.tasks.length} 项</span></h2>
-          <p id={helpId} className="mt-1 text-[11px] text-text-secondary">连线仅表示已记录的前置依赖；未知关系不连线。滚动查看，Tab 选择可见节点。</p>
+          <p id={helpId} className="mt-1 text-[11px] text-text-secondary">连线仅表示已记录的前置依赖；未知关系不连线。孤立节点仅表示没有已记录的连线，不代表已核实无依赖。仅作查看与定位，不自动执行或调度任务。滚动查看，Tab 选择可见节点。</p>
         </div>
         <div className="flex items-center gap-2" role="group" aria-label="工作流视图控制">
           <button type="button" className={CONTROL} aria-label="缩小工作流" disabled={zoom <= MIN_ZOOM} onClick={() => changeZoom(zoom - 0.15)}><Minus size={15} /></button>
@@ -171,7 +173,7 @@ export function ProjectWorkflow({ project, onSelectTask, selectedTaskId }: Proje
                 const Icon = STATUS_ICON[task.status];
                 return (
                   <button key={node.taskId} type="button" ref={element => { if (element) nodeButtons.current.set(node.taskId, element); else nodeButtons.current.delete(node.taskId); }} onFocus={() => setFocusedTaskId(task.id)} onBlur={() => setFocusedTaskId(null)} onClick={() => onSelectTask(task.id)} aria-pressed={selectedTaskId === task.id} aria-label={`${task.name || '未命名任务'}，${TASK_LABELS[task.status]}，输入：${summarize(task.inputs)}，输出：${summarize(task.outputs)}`} className={`absolute flex flex-col overflow-hidden rounded-xl border bg-bg-light p-4 text-left shadow-lg transition-colors hover:bg-bg-lighter focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${STATUS_STYLE[task.status]} ${selectedTaskId === task.id ? 'ring-2 ring-accent-cyan ring-offset-2 ring-offset-bg-deep' : ''}`} style={{ left: node.x, top: node.y, width: NODE_WIDTH, height: NODE_HEIGHT }}>
-                    <span className="mb-2 flex w-full items-center justify-between gap-2 text-[11px]"><span className="flex items-center gap-1.5"><Icon size={14} aria-hidden="true" />{TASK_LABELS[task.status]}</span><span className="text-text-muted">前置 {task.dependsOn.length}</span></span>
+                    <span className="mb-2 flex w-full items-center justify-between gap-2 text-[11px]"><span className="flex items-center gap-1.5"><Icon size={14} aria-hidden="true" />{TASK_LABELS[task.status]}</span><span className="text-text-muted">{layout.error ? '连线已隐藏，待修正' : !connectedIds.has(task.id) ? '孤立（无已记录连线）' : `前置 ${task.dependsOn.length}`}</span></span>
                     <span className="line-clamp-1 w-full text-sm font-medium text-text-primary" title={task.name}>{task.name || '未命名任务'}</span>
                     <span className="mt-1 line-clamp-2 min-h-[32px] w-full text-[11px] leading-4 text-text-secondary" title={task.description}>{task.description.trim() || '任务说明待确认'}</span>
                     <span className="mt-2 block w-full border-t border-border-light pt-2 text-[11px] text-text-secondary"><span className="block truncate" title={summarize(task.inputs)}>输入 · {summarize(task.inputs)}</span><span className="mt-1 block truncate" title={summarize(task.outputs)}>输出 · {summarize(task.outputs)}</span></span>
