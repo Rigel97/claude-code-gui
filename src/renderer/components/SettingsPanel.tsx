@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import type { ConversationRuntime, PermissionMode } from '../types';
 import { useStore } from '../store';
-import { X, Cpu, Info, Shield, Bell, Archive, Trash2, RotateCcw, Gauge, Boxes, DollarSign, Heart, Film, FolderOpen } from 'lucide-react';
+import { RuntimeSettings, getSettingsAPI } from './RuntimeSettings';
+import { X, Cpu, Info, Shield, Bell, Archive, Trash2, RotateCcw, Gauge, Boxes, DollarSign, Film, FolderOpen } from 'lucide-react';
 
 type EffortLevel = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 type Autocompact = '' | 'auto' | '100k' | '200k' | '400k' | '800k' | '1M';
@@ -20,34 +22,19 @@ const AUTOCOMPACT_OPTIONS: { id: Autocompact; label: string; desc: string }[] = 
   { id: '200k', label: '200k', desc: '更早压缩' },
   { id: '400k', label: '400k', desc: '中等' },
   { id: '800k', label: '800k', desc: '尽量保留' },
-  { id: '1M', label: '1M', desc: '几乎不压缩' },
+  { id: '1M', label: '1M', desc: '压缩阈值，不扩大模型上下文窗口' },
 ];
 
-const PERMISSION_MODES = [
-  {
-    id: 'bypassPermissions' as const,
-    label: '全部放行',
-    desc: '所有工具调用自动通过（适合完全信任的本地项目）',
-  },
-  {
-    id: 'acceptEdits' as const,
-    label: '仅自动接受文件编辑',
-    desc: '文件读写自动通过，命令执行等仍会被拒绝',
-  },
+const PERMISSION_MODES: { id: PermissionMode; label: string; desc: string }[] = [
+  { id: 'default', label: '逐次审批', desc: '默认模式：需要权限的工具调用逐次审批，已有允许规则仍适用。' },
+  { id: 'acceptEdits', label: '仅自动接受文件编辑', desc: '自动接受文件编辑，命令执行等其他工具仍按规则请求审批。' },
+  { id: 'plan', label: '只读规划', desc: '只读分析和规划，不执行修改。' },
+  { id: 'auto', label: '自动审批（依赖 CLI 可用）', desc: '由 CLI 自动判断审批；依赖安装的 CLI 支持，失败会明确提示。' },
+  { id: 'dontAsk', label: '仅规则、不弹问', desc: '只遵循允许规则，不弹出权限询问；未获允许的操作拒绝。' },
+  { id: 'bypassPermissions', label: '全部放行（危险）', desc: '跳过权限检查，可能执行危险命令；必须明确确认，CLI 可能要求重新连接。' },
 ];
 
 const SESSION_LIMIT_OPTIONS = [20, 50, 100, 200];
-const WHALE_SWITCHES = [
-  ['pet', '显示鲸鱼娘'], ['chat', '台词气泡'], ['particles', '粒子特效'],
-  ['game', '小游戏'], ['idle-nudge', '摸鱼提醒'], ['night', '深夜模式'],
-  ['weatherFx', '天气特效'], ['toolPose', '工具细分姿态'],
-  ['dragPhysics', '拖拽惯性'], ['proactive', '主动关怀'], ['a11y', '无障碍模式'],
-] as const;
-const WHALE_OFF_BY_DEFAULT = new Set(['a11y']);
-function whalePref(key: string): boolean {
-  try { const value = localStorage.getItem(`whale-moe:${key}`); return value === null ? !WHALE_OFF_BY_DEFAULT.has(key) : value === '1'; }
-  catch { return !WHALE_OFF_BY_DEFAULT.has(key); }
-}
 function VideoBgSettings() {
   const videoBg = useStore((s) => s.videoBg);
   const setVideoBg = useStore((s) => s.setVideoBg);
@@ -111,36 +98,6 @@ function VideoBgSettings() {
   );
 }
 
-function WhaleSettings() {
-  const [prefs, setPrefs] = useState(() => Object.fromEntries(WHALE_SWITCHES.map(([key]) => [key, whalePref(key)])));
-  const [city, setCity] = useState(() => localStorage.getItem('whale-moe:weatherCity') ?? '');
-  const [title, setTitle] = useState(() => localStorage.getItem('whale-moe:title') ?? '主人');
-  const [selfName, setSelfName] = useState(() => localStorage.getItem('whale-moe:selfName') ?? '鲸鱼娘');
-  const [tts, setTts] = useState(() => localStorage.getItem('claude-whale:tts') === '1');
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
-  useEffect(() => {
-    const update = () => setVoices(window.speechSynthesis?.getVoices() ?? []);
-    update();
-    window.speechSynthesis?.addEventListener('voiceschanged', update);
-    return () => window.speechSynthesis?.removeEventListener('voiceschanged', update);
-  }, []);
-  const save = (key: string, value: string) => {
-    localStorage.setItem(`whale-moe:${key}`, value);
-    window.dispatchEvent(new CustomEvent('whale-moe-prefs-change', { detail: { key, value } }));
-  };
-  return <section className="space-y-2">
-    <div className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider"><Heart className="w-3.5 h-3.5" />鲸鱼娘</div>
-    <div className="grid grid-cols-2 gap-1.5">{WHALE_SWITCHES.map(([key, label]) => <Toggle key={key} on={prefs[key]} color="blue" label={label} onClick={() => {
-      const next = !prefs[key]; save(key, next ? '1' : '0'); setPrefs((current) => ({ ...current, [key]: next }));
-    }} />)}</div>
-    <div className="grid grid-cols-2 gap-2">{([['title', '如何称呼你', title, setTitle], ['selfName', '她的自称', selfName, setSelfName]] as const).map(([key, label, value, setter]) => <label key={key} className="text-xs text-text-muted">{label}<input className="w-full mt-1 px-2 py-1.5 rounded-lg bg-bg-light border border-border text-text-primary" maxLength={key === 'title' ? 8 : 12} value={value} onChange={(e) => { setter(e.target.value); save(key, e.target.value); }} /></label>)}</div>
-    <label className="block text-xs text-text-muted">天气城市（留空不联网）<input className="w-full mt-1 px-2 py-1.5 rounded-lg bg-bg-light border border-border text-text-primary" maxLength={24} value={city} onChange={(e) => { setCity(e.target.value); save('weatherCity', e.target.value); }} placeholder="例如：上海" /></label>
-    {voices.length > 0 && <Toggle on={tts} color="blue" label="本机语音播报（默认关闭）" onClick={() => { const next = !tts; setTts(next); localStorage.setItem('claude-whale:tts', next ? '1' : '0'); if (!next) window.speechSynthesis.cancel(); }} />}
-    <p className="text-[10px] text-text-dim leading-relaxed">设置实时生效。养成、签到、成就与小游戏数据仅保存在本机；余额代理和 DSH TTS 不适用于 Claude Code。播报使用本机语音。</p>
-  </section>;
-}
-
-
 function Toggle({ on, color, label, onClick }: {
   on: boolean;
   color: 'purple' | 'blue';
@@ -167,14 +124,6 @@ function Toggle({ on, color, label, onClick }: {
 }
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
-  useEffect(() => {
-    document.body.setAttribute('data-claude-whale-settings-open', 'true');
-    window.dispatchEvent(new Event('claude-whale-signals-change'));
-    return () => {
-      document.body.removeAttribute('data-claude-whale-settings-open');
-      window.dispatchEvent(new Event('claude-whale-signals-change'));
-    };
-  }, []);
   const model = useStore((s) => s.model);
   const setModel = useStore((s) => s.setModel);
   // 当前实际使用：活跃标签页的 CLI init 回显（各标签页可能不同）
@@ -209,8 +158,26 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [localAutocompact, setLocalAutocompact] = useState<Autocompact>(autocompact);
   const [localBudget, setLocalBudget] = useState(maxBudgetUsd > 0 ? String(maxBudgetUsd) : '');
   const [confirmClear, setConfirmClear] = useState(false);
+  const activeConversationId = useStore(s => s.activeConversationId);
+  const activeConversation = useStore(s => s.conversations.find(c => c.id === s.activeConversationId));
+  const [settingsError, setSettingsError] = useState('');
+  const [settingsNote, setSettingsNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const settingsLock = useRef(false);
+  const bypassConfirmed = useRef(false);
 
-  const handleSave = () => {
+  useEffect(() => {
+    let cancelled = false;
+    const api = getSettingsAPI()?.claude;
+    if (activeConversationId && typeof api?.runtimeState === 'function') {
+      void api.runtimeState(activeConversationId).then(runtime => {
+        if (!cancelled) useStore.getState().setRuntime(activeConversationId, runtime);
+      }).catch(() => { if (!cancelled) setSettingsError('当前对话运行状态读取失败；请重试，不会伪造本地状态。'); });
+    }
+    return () => { cancelled = true; };
+  }, [activeConversationId]);
+
+  const saveGlobal = () => {
     setModel(localModel.trim());
     setPermissionMode(localPermissionMode);
     setShowThinking(localShowThinking);
@@ -220,7 +187,92 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     setAutocompact(localAutocompact);
     const budget = parseFloat(localBudget);
     setMaxBudgetUsd(Number.isFinite(budget) && budget > 0 ? budget : 0);
-    onClose();
+  };
+  const isBusy = (runtime: ConversationRuntime) => runtime.busy || runtime.state !== 'ready'
+    || runtime.pendingApprovals?.length || runtime.pendingUserMessageIds?.length;
+  const cannotReconnect = (runtime: ConversationRuntime) => runtime.busy
+    || !['ready', 'closed'].includes(runtime.state ?? '')
+    || runtime.pendingApprovals?.length || runtime.pendingUserMessageIds?.length;
+  const locallyBusy = (id: string) => {
+    const conv = useStore.getState().conversations.find(c => c.id === id);
+    return !conv || ['starting', 'streaming'].includes(conv.status) || conv.pendingApprovals?.length || conv.queue?.length;
+  };
+  const confirmBypass = () => localPermissionMode !== 'bypassPermissions' || bypassConfirmed.current
+    || (bypassConfirmed.current = window.confirm('危险：全部放行将跳过权限检查，可能执行任意命令。确认启用 bypassPermissions？'));
+
+  const handleSave = async () => {
+    if (settingsLock.current || !confirmBypass()) return;
+    settingsLock.current = true; setSaving(true); setSettingsError('');
+    saveGlobal();
+    setSettingsNote('全局设置已保存；现有 CLI 不随全局设置热更新。模型、思考深度、压缩阈值、预算及运行时配置应用于下次连接；请空闲时显式重新连接当前对话。');
+    try {
+      const state = useStore.getState();
+      const conv = state.conversations.find(c => c.id === state.activeConversationId);
+      if (!conv || !(conv.protocolConnected || conv.runtime)) return;
+      const api = getSettingsAPI()?.claude;
+      if (typeof api?.runtimeState !== 'function') { setSettingsError('全局已保存，但当前对话运行状态 API 不可用；权限模式未确认应用。'); return; }
+      const runtime = await api.runtimeState(conv.id);
+      state.setRuntime(conv.id, runtime);
+      if (runtime.info?.permissionMode === localPermissionMode || runtime.state === 'closed') return;
+      if (isBusy(runtime) || locallyBusy(conv.id)) { setSettingsNote('全局设置已保存；当前对话忙碌，权限模式也仅用于下次连接。不会自动关闭正在运行的任务。'); return; }
+      if (typeof api.mode !== 'function') { setSettingsError('全局已保存，但权限模式 API 不可用；当前对话模式未改变。'); return; }
+      const result = await api.mode({ conversationId: conv.id, mode: localPermissionMode });
+      if (result?.success !== true) { setSettingsError('权限模式更新失败；当前对话模式未确认改变。CLI 可能不支持该模式或要求显式重新连接。'); return; }
+      const fresh = await api.runtimeState(conv.id);
+      useStore.getState().setRuntime(conv.id, fresh);
+      if (fresh.info?.permissionMode !== localPermissionMode) {
+        setSettingsError('权限模式请求已成功，但刷新状态未确认目标模式；保留 CLI 实际回显，请重试。'); return;
+      }
+      setSettingsNote('全局设置已保存，当前权限模式已由 CLI 确认；其余运行配置仍需下次连接或空闲时显式重新连接。');
+    } catch { setSettingsError('保存全局后当前 CLI 操作失败；未伪造权限模式。请重试或显式重新连接。'); }
+    finally { settingsLock.current = false; setSaving(false); }
+  };
+
+  const reconnect = async () => {
+    if (settingsLock.current) return;
+    setSettingsError('');
+    const state = useStore.getState();
+    const conv = state.conversations.find(c => c.id === state.activeConversationId);
+    const api = getSettingsAPI()?.claude;
+    if (!conv) { setSettingsError('没有当前对话可重新连接。'); return; }
+    if (typeof api?.runtimeState !== 'function' || typeof api.close !== 'function' || typeof api.start !== 'function') {
+      setSettingsError('重新连接 API 不可用；不会关闭当前对话。'); return;
+    }
+    settingsLock.current = true; setSaving(true);
+    try {
+      const runtime = await api.runtimeState(conv.id);
+      useStore.getState().setRuntime(conv.id, runtime);
+      if (cannotReconnect(runtime) || locallyBusy(conv.id)) { setSettingsError('当前对话忙碌、等待审批或未就绪；不能重新连接，不会中断任务。'); return; }
+      if (!confirmBypass() || !window.confirm('重新连接当前对话？将关闭空闲 CLI 并按当前设置重新启动；累计进程预算重新计。')) return;
+      if (locallyBusy(conv.id)) { setSettingsError('当前对话已变为忙碌；取消重新连接。'); return; }
+      const checked = await api.runtimeState(conv.id);
+      if (cannotReconnect(checked) || locallyBusy(conv.id)) { setSettingsError('当前对话已变为忙碌；取消重新连接。'); return; }
+      saveGlobal();
+      const saved = useStore.getState();
+      const options = {
+        ...((checked.sessionId || conv.sessionId) ? { sessionId: checked.sessionId || conv.sessionId } : {}),
+        permissionMode: saved.permissionMode,
+        ...(saved.model ? { model: saved.model } : {}),
+        ...(saved.effortLevel ? { effortLevel: saved.effortLevel } : {}),
+        ...(saved.autocompact ? { autocompact: saved.autocompact } : {}),
+        ...(saved.maxBudgetUsd > 0 ? { maxBudgetUsd: saved.maxBudgetUsd } : {}),
+      };
+      if (checked.state !== 'closed') {
+        const closed = await api.close(conv.id);
+        if (closed?.success !== true) { setSettingsError('主进程拒绝关闭当前对话（可能忙碌或所有权冲突）；未启动新 CLI。'); return; }
+        useStore.getState().setRuntime(conv.id, { state: 'closed', busy: false });
+      }
+      const started = await api.start({ conversationId: conv.id, cwd: conv.cwd, options });
+      if (started?.success !== true) { setSettingsError('旧 CLI 已关闭，但重新启动失败；请重试连接，不会显示虚假成功。'); return; }
+      // The returned runtime is authoritative; no locally invented mode/runId.
+      const fresh = await api.runtimeState(conv.id);
+      useStore.getState().setRuntime(conv.id, fresh);
+      if (fresh.state !== 'ready' && fresh.state !== 'busy') {
+        setSettingsError('启动请求已返回成功，但当前运行状态未确认连接；请重新读取状态后重试。'); return;
+      }
+      setSettingsNote('当前对话已按配置快照重新连接；累计预算从新常驻进程重新计。');
+    } catch { setSettingsError('重新连接失败；请检查当前 CLI 状态并重试。不会伪造连接成功。'); }
+    finally { settingsLock.current = false; setSaving(false); }
   };
 
   return (
@@ -236,6 +288,11 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
 
         {/* 内容（滚动区） */}
         <div className="p-5 space-y-5 max-h-[65vh] overflow-y-auto">
+          {settingsError && <div role="alert" className="text-xs text-red-400">{settingsError}<button onClick={() => setSettingsError('')} className="ml-2 underline">清除错误</button></div>}
+          {settingsNote && <p role="status" className="text-xs text-text-secondary">{settingsNote}</p>}
+          <p className="text-xs text-text-muted">当前对话权限：{activeConversation?.runtime?.info?.permissionMode || activeConversation?.permissionMode || '未连接'}。保存不会自动关闭任务；继续发送不保证改变现有 CLI 配置。</p>
+          <button disabled={saving} onClick={reconnect} className="px-3 py-2 rounded-lg text-xs border border-border disabled:opacity-40">重新连接当前对话</button>
+          <RuntimeSettings onChanged={() => setSettingsNote('运行时配置已改变；当前 CLI 不热更新，请空闲时显式重新连接当前对话。')} onOpenNative={onClose} />
           {/* 模型设置 */}
           <div>
             <label className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider mb-2">
@@ -268,7 +325,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             </div>
             <div className="text-[10px] text-text-dim mt-1.5 leading-relaxed">
               填写完整模型 ID，作为 <code className="text-accent-cyan">--model</code> 传给 claude CLI，
-              保存后下一次发送生效；留空则跟随 CLI 默认配置。
+              保存后用于下次连接；当前常驻 CLI 需空闲时显式重新连接。留空则跟随 CLI 默认配置。
             </div>
           </div>
 
@@ -323,8 +380,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               ))}
             </div>
             <div className="text-[10px] text-text-dim mb-2 leading-relaxed">
-              自动压缩窗口（<code className="text-accent-cyan">--autocompact</code>）：上下文达到阈值时
-              CLI 自动把历史总结折叠，越小越省 token、丢的细节越多。
+              自动压缩阈值（<code className="text-accent-cyan">--autocompact</code>）：上下文达到阈值时
+              CLI 自动把历史总结折叠。1M 也只是阈值，不会扩大模型上下文窗口；具体支持依赖 CLI。
             </div>
             <div className="flex items-center gap-1.5">
               <DollarSign className="w-4 h-4 text-accent-green shrink-0" />
@@ -337,10 +394,10 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 placeholder="0 = 不限制"
                 className="flex-1 px-3 py-1.5 rounded-lg bg-bg-light border border-border text-sm text-text-primary placeholder-text-dim font-mono focus:border-accent-cyan/50 transition-colors"
               />
-              <span className="text-xs text-text-dim shrink-0">美元 / 单次任务</span>
+              <span className="text-xs text-text-dim shrink-0">美元 / 常驻进程</span>
             </div>
             <div className="text-[10px] text-text-dim mt-1.5 leading-relaxed">
-              预算上限（<code className="text-accent-cyan">--max-budget-usd</code>）：单次任务花费达到上限后停止。
+              预算上限（<code className="text-accent-cyan">--max-budget-usd</code>）：单个常驻运行进程的累计预算；重连后重新计，不是会话总额。达到上限后停止，不是每轮预算。
             </div>
           </div>
 
@@ -354,7 +411,13 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               {PERMISSION_MODES.map((m) => (
                 <button
                   key={m.id}
-                  onClick={() => setLocalPermissionMode(m.id)}
+                  onClick={() => {
+                    if (m.id === 'bypassPermissions') {
+                      if (!window.confirm('危险：全部放行将跳过权限检查，可能执行任意命令。确认启用 bypassPermissions？')) return;
+                      bypassConfirmed.current = true;
+                    } else bypassConfirmed.current = false;
+                    setLocalPermissionMode(m.id);
+                  }}
                   className={`w-full flex items-start gap-2 px-3 py-2 rounded-lg text-sm transition-all text-left ${
                     localPermissionMode === m.id
                       ? 'bg-accent-orange/10 border border-accent-orange/40 text-accent-orange'
@@ -395,9 +458,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             </div>
           </div>
 
+          <p className="text-[10px] text-text-dim">显示思考过程仅控制界面显示，不影响模型思考、token 预算或计费。</p>
           <VideoBgSettings />
-
-          <WhaleSettings />
 
           {/* 历史会话 */}
           <div>
@@ -478,6 +540,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleSave}
+            disabled={saving}
             className="px-4 py-1.5 rounded-lg text-sm bg-accent-cyan/20 hover:bg-accent-cyan/30 border border-accent-cyan/40 text-accent-cyan transition-all"
           >
             保存

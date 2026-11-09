@@ -4,6 +4,8 @@ import { InputBar } from './InputBar';
 import { TabBar } from './TabBar';
 import { ActivityStrip } from './ActivityStrip';
 import { TodoPanel } from './TodoPanel';
+import { NamedApprovalPanel } from './ApprovalPanel';
+import { SessionActions } from './SessionActions';
 import { useRef, useEffect } from 'react';
 import type { Conversation } from '../types';
 
@@ -65,6 +67,7 @@ export function ChatArea() {
     <div className="flex flex-col flex-1 overflow-hidden">
       {/* 对话标签栏：多会话并行 */}
       <TabBar />
+      {conv && <SessionActions conv={conv} />}
 
       {/* 任务清单进度面板（会话内有 TodoWrite 调用时显示） */}
       {conv && conv.todoList && conv.todoList.items.length > 0 && <TodoPanel conv={conv} />}
@@ -113,6 +116,8 @@ export function ChatArea() {
         {conv?.status === 'streaming' && thinkingTokens > 0 && !streamingMessage && (
           <ThinkingIndicator tokens={thinkingTokens} />
         )}
+        {/* A waiting request must remain reachable even with a long transcript. */}
+        {conv && <NamedApprovalPanel conv={conv} />}
       </div>
 
       {/* 活动反馈条：阶段指示 + 计时 + 思考实时预览（生成中显示） */}

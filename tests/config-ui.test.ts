@@ -70,6 +70,7 @@ describe.skipIf(process.env.RUN_CONFIG_UI !== '1')('配置与输入框独立浏�
       };
     });
     page = await context.newPage();
+    page.setDefaultNavigationTimeout(30_000);
     page.on('pageerror', error => errors.push(error.message));
   });
 

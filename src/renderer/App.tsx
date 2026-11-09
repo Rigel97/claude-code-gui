@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef, lazy, Suspense } from 'react';
+import { useEffect, useCallback, useState, useRef } from 'react';
 import { useStore, snapshotConversations } from './store';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
@@ -8,13 +8,11 @@ import { WelcomeScreen } from './components/WelcomeScreen';
 import { ParticleField } from './components/ParticleField';
 import { VideoBackground } from './components/VideoBackground';
 import { SearchPanel } from './components/SearchPanel';
-import { WhalePet } from './components/WhalePet';
 import { ProjectCenter } from './components/ProjectCenter';
 import { useProjectsStore } from './projectStore';
-import { useAgentStore } from './agent/store';
-
-// The 3D renderer is only downloaded / initialized when the execution space is opened.
-const AgentCenter = lazy(() => import('./components/AgentCenter'));
+import { NativeTerminalHost } from './components/NativeTerminal';
+import { useTerminalStore } from './terminalStore';
+import type { ConversationRuntime, RunStatus } from './types';
 
 export default function App() {
   const cwd = useStore((s) => s.cwd);
@@ -53,7 +51,6 @@ export default function App() {
     setConfigReady(true);
     setPersistenceError(null);
   }, []);
-  const agentOpen = useAgentStore((s) => s.open);
   const projectsOpen = useProjectsStore((s) => s.open);
   useEffect(() => { void useProjectsStore.getState().load(); }, []);
   const handleStream = useStore((s) => s.handleStream);
@@ -183,7 +180,11 @@ export default function App() {
       if (configReadyRef.current) flushPendingRef.current?.();
       const projects = useProjectsStore.getState();
       const pendingProgress = projects.pendingProgress;
-      if (projects.dirty || projects.reviewDirty || projects.writeOperation || pendingProgress > 0 || projects.scanOperation) {
+      const conversations = useStore.getState().conversations;
+      const chatBusy = conversations.some(conv => conv.status === 'starting' || conv.status === 'streaming'
+        || conv.runtime?.busy || conv.pendingApprovals?.length || conv.queue.length);
+      const terminalBusy = useTerminalStore.getState().terminals.some(term => term.status !== 'exited');
+      if (projects.dirty || projects.reviewDirty || projects.writeOperation || pendingProgress > 0 || projects.scanOperation || chatBusy || terminalBusy) {
         event.preventDefault();
         event.returnValue = '';
       }
@@ -201,10 +202,12 @@ export default function App() {
     const store = useStore.getState();
     const convId = conversationId || store.activeConversationId;
     const conv = store.conversations.find((c) => c.id === convId);
-    if (!conv || !conv.cwd || !conv.sessionId) return;
-    const { cwd, sessionId } = conv;
+    // Passive refresh must not bootstrap another CLI or race a running turn.
+    if (!conv || !conv.cwd || !conv.sessionId || !conv.protocolConnected || conv.runtime?.busy
+      || conv.status === 'starting' || conv.status === 'streaming') return;
+    const { cwd, sessionId, runId } = conv;
     try {
-      const r = await api.claude.getContext(cwd, sessionId);
+      const r = await api.claude.getContext(cwd, sessionId, convId);
       // 竞态防护：查询期间（约 1~3s）标签页可能被关闭或已换会话
       const cur = useStore
         .getState()
@@ -215,7 +218,7 @@ export default function App() {
         typeof r.limit === 'number' &&
         r.limit > 0 &&
         cur &&
-        cur.sessionId === sessionId
+        cur.sessionId === sessionId && cur.runId === runId && !cur.runtime?.busy
       ) {
         useStore.getState().setContextUsage(
           {
@@ -238,38 +241,22 @@ export default function App() {
     void refreshContextUsage(activeConversationId);
   }, [activeConversationId, refreshContextUsage]);
 
-  // Bootstrap existing tool trees once; never rebuild a graph for token deltas.
-  useEffect(() => {
-    let signature = '';
-    const sync = () => {
-      const conversations = useStore.getState().conversations;
-      const next = JSON.stringify(conversations.map(c => [c.id, c.title, c.cwd, c.sessionId]));
-      if (next === signature) return;
-      signature = next;
-      useAgentStore.getState().syncConversations(conversations);
-    };
-    sync();
-    const unsubscribe = useStore.subscribe(sync);
-    // An explicit URL is a convenient browser-only demo entry, never a fake Electron bridge.
-    if (new URLSearchParams(window.location.search).get('agent') === 'demo') useAgentStore.getState().show('demo');
-    return unsubscribe;
-  }, []);
-
   // 监听 claude 流式事件（事件携带 conversationId，路由到对应标签页）
   useEffect(() => {
     const api = (window as any).api;
     if (!api?.claude) return;
     const removeStream = api.claude.onStream((data: unknown) => {
-      useAgentStore.getState().ingestStream(data);
       handleStream(data as any);
     });
 
     const removeStatus = api.claude.onStatusChange(
-      (payload: { conversationId?: string; status?: string }) => {
-        const { conversationId, status } = payload || {};
-        if (typeof status !== 'string') return;
-        useAgentStore.getState().ingestStatus(payload);
-        setStatus(status as any, conversationId);
+      (payload: { conversationId?: string; status?: string; runId?: string }) => {
+        const { conversationId, status, runId } = payload || {};
+        const valid: RunStatus[] = ['idle', 'starting', 'streaming', 'completed', 'aborted', 'error'];
+        if (!valid.includes(status as RunStatus)) return;
+        const target = useStore.getState().conversations.find(conv => conv.id === (conversationId || useStore.getState().activeConversationId));
+        if (!target || (runId && target.runId && runId !== target.runId)) return;
+        setStatus(status as RunStatus, conversationId, runId);
 
         const store = useStore.getState();
         const conv = store.conversations.find((c) => c.id === (conversationId || store.activeConversationId));
@@ -284,14 +271,15 @@ export default function App() {
 
         // 任务完成且窗口不在前台时，发系统通知（附该标签页的最后一条用户消息）
         if (status === 'completed' && document.visibilityState !== 'visible') {
-          if (!store.notifyOnComplete) return;
-          const lastUserMsg = [...(conv?.messages ?? [])].reverse().find((m) => m.role === 'user');
-          const snippet = lastUserMsg?.blocks.find((b) => b.kind === 'text')?.text?.slice(0, 60) || '';
-          (window as any).api.notify('Claude 任务完成', snippet);
+          if (store.notifyOnComplete) {
+            const lastUserMsg = [...(conv?.messages ?? [])].reverse().find((m) => m.role === 'user');
+            const snippet = lastUserMsg?.blocks.find((b) => b.kind === 'text')?.text?.slice(0, 60) || '';
+            void Promise.resolve((window as any).api.notify?.('Claude 任务完成', snippet)).catch(() => {});
+          }
         }
 
         // 轮末（含中断，部分输出已入上下文）刷新该标签页的上下文占用
-        if (status === 'completed' || status === 'aborted') {
+        if (status === 'completed' || status === 'aborted' || status === 'error') {
           void refreshContextUsage(conversationId);
         }
       }
@@ -302,6 +290,24 @@ export default function App() {
       removeStatus();
     };
   }, [handleStream, setStatus, refreshContextUsage]);
+
+  // Reattach metadata after a renderer reload without starting a CLI or sending a prompt.
+  useEffect(() => {
+    if (!configReady) return;
+    const api = (window as any).api?.claude;
+    if (typeof api?.states !== 'function') return;
+    let disposed = false;
+    void Promise.resolve(api.states()).then((states: ConversationRuntime[]) => {
+      if (disposed || !Array.isArray(states)) return;
+      for (const runtime of states) {
+        if (!runtime?.conversationId) continue;
+        const current = useStore.getState().conversations.find(conv => conv.id === runtime.conversationId);
+        if (!current || (runtime.sessionId && current.sessionId && runtime.sessionId !== current.sessionId)) continue;
+        useStore.getState().setRuntime(current.id, runtime);
+      }
+    }).catch(() => {});
+    return () => { disposed = true; };
+  }, [configReady]);
 
   // Cmd/Ctrl+F 打开搜索面板
   useEffect(() => {
@@ -317,18 +323,17 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen tech-grid-bg bg-bg-deepest">
-      <WhalePet />
       {/* 动态视频背景（最底层，可选；失败时静默回落深色背景） */}
-      {!agentOpen && <VideoBackground />}
+      <VideoBackground />
 
       {/* 粒子网络背景 */}
-      {!agentOpen && <ParticleField />}
+      <ParticleField />
 
       {/* 噪点纹理 */}
-      {!agentOpen && <div className="noise-overlay" />}
+      <div className="noise-overlay" />
 
       {/* 扫描线特效 */}
-      {!agentOpen && <div className="scan-overlay" />}
+      <div className="scan-overlay" />
 
       {/* 主内容（位于粒子层之上） */}
       <div className="relative z-10 flex flex-col flex-1 overflow-hidden">
@@ -350,19 +355,21 @@ export default function App() {
         }}>{configReady ? '重新读磁盘并重试保存（保留内存）' : '修复后重新读磁盘（确认合并内存）'}</button></div>}
         {/* 主体 */}
         <div className="flex flex-1 overflow-hidden">
-          {!agentOpen && <Sidebar />}
+          <Sidebar />
           <div className="flex flex-col flex-1 overflow-hidden">
             {/* key 按标签页切换重挂载：滚动位置/草稿各自独立 */}
-            {agentOpen ? (
-              <Suspense fallback={<div className="flex-1 flex items-center justify-center bg-[#03060d] text-text-secondary text-sm">正在初始化三维执行空间…</div>}>
-                <AgentCenter />
-              </Suspense>
-            ) : projectsOpen ? <ProjectCenter /> : activeCwd ? <ChatArea key={activeConversationId} /> : <WelcomeScreen />}
+            <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+              {projectsOpen ? <ProjectCenter /> : activeCwd ? <ChatArea key={activeConversationId} /> : <WelcomeScreen />}
+            </div>
+            {/* Stable sibling: switching chat/project views never destroys a PTY or xterm. */}
+            <div className="shrink-0">
+              <NativeTerminalHost />
+            </div>
           </div>
         </div>
 
         {/* 底部状态栏 */}
-        {!agentOpen && <StatusBar />}
+        <StatusBar />
       </div>
 
       {/* 消息搜索面板 */}

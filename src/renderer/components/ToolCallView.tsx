@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useSyncExternalStore } from 'react';
+import { useStore } from '../store';
+import { ThinkingView } from './ThinkingView';
 import type { UIBlock } from '../types';
 import { DiffView } from './DiffView';
 import {
@@ -61,7 +63,17 @@ const TOOL_COLORS: Record<string, string> = {
 
 export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { kind: 'tool_use' }>; depth?: number }) {
   // Edit/Write 类工具与含子调用的 Task 默认展开，一眼看到改动/子代理活动
-  const [expanded, setExpanded] = useState(() => isEditTool(block.toolName));
+  const [expanded, setExpanded] = useState(() => isEditTool(block.toolName) || !!block.children?.length);
+  const showThinking = useSyncExternalStore(
+    useStore.subscribe,
+    () => useStore.getState().showThinking,
+    () => useStore.getState().showThinking,
+  );
+  // 保持现有类型不变；后续 store 的结构化结果（包括附件）以 unknown 安全读取。
+  const extra: unknown = (block as unknown as Record<string, unknown>).resultContent;
+  const structuredResult = extra == null ? undefined : typeof extra === 'string' ? extra : JSON.stringify(extra, null, 2);
+  const result = [block.result, structuredResult].filter((value): value is string => typeof value === 'string').join('\n\n');
+  const hasResult = typeof block.result === 'string' || structuredResult !== undefined;
 
   const icon = TOOL_ICONS[block.toolName] || <Wrench className="w-4 h-4" />;
   const colorClass = TOOL_COLORS[block.toolName] || 'text-text-secondary border-border bg-bg-light';
@@ -102,6 +114,8 @@ export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { k
         <ToolElapsed startedAt={block.startedAt} finishedAt={block.finishedAt} />
       </button>
 
+      {hasResult && <div className="px-3 pb-2"><CopyText text={result} label="复制完整结果" /></div>}
+
       {/* 展开内容 */}
       {expanded && (
         <div className="border-t border-border/30 px-3 py-2 space-y-2 bg-bg-deepest/50">
@@ -128,10 +142,10 @@ export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { k
           )}
 
           {/* 结果 */}
-          {block.result && (
+          {hasResult && (
             <div>
               <div className="text-[10px] text-text-dim font-mono uppercase mb-1">RESULT</div>
-              <ToolResult result={block.result} toolName={block.toolName} isError={block.status === 'error'} />
+              <ToolResult result={result} isError={block.status === 'error'} />
             </div>
           )}
 
@@ -144,9 +158,14 @@ export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { k
                   child.kind === 'tool_use' ? (
                     <ToolCallView key={i} block={child} depth={depth + 1} />
                   ) : child.kind === 'text' ? (
-                    <div key={i} className="text-xs text-text-muted font-mono whitespace-pre-wrap leading-relaxed px-1 py-0.5 selectable-text">
-                      {child.text.length > 300 ? child.text.slice(0, 300) + '…' : child.text}
+                    <div key={i}>
+                      <CopyText text={child.text} label="复制完整文本" />
+                      <div className="text-xs text-text-muted font-mono whitespace-pre-wrap leading-relaxed px-1 py-0.5 selectable-text max-h-64 overflow-y-auto">
+                        {child.text}
+                      </div>
                     </div>
+                  ) : child.kind === 'thinking' && showThinking ? (
+                    <ThinkingView key={i} text={child.text} />
                   ) : null
                 )}
               </div>
@@ -158,44 +177,35 @@ export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { k
   );
 }
 
-function ToolResult({ result, toolName, isError }: { result: string; toolName: string; isError: boolean }) {
-  // 编辑类工具成功时给绿色确认样式：按 status 判断，不嗅探 'File updated' 文案
-  // （CLI 文案一改嗅探即失效）
-  if (!isError && (toolName === 'Edit' || toolName === 'Write' || toolName === 'MultiEdit' || toolName === 'NotebookEdit')) {
-    return (
-      <div className="text-xs font-mono text-accent-green/80">
-        ✓ {result}
-      </div>
-    );
-  }
-
-  // Bash 输出
-  if (toolName === 'Bash') {
-    return (
-      <div className={`rounded-lg p-2 bg-bg-deep border border-border/50 ${isError ? 'border-accent-red/30' : ''}`}>
-        <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto selectable-text ${isError ? 'text-accent-red/80' : 'text-text-secondary'}`}>
-          {result}
-        </pre>
-      </div>
-    );
-  }
-
-  // Read 输出
-  if (toolName === 'Read') {
-    return (
-      <div className="rounded-lg p-2 bg-bg-deep border border-border/50 max-h-64 overflow-y-auto">
-        <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap selectable-text">
-          {result}
-        </pre>
-      </div>
-    );
-  }
-
-  // 默认
+function CopyText({ text, label }: { text: string; label: string }) {
+  const [feedback, setFeedback] = useState('');
   return (
-    <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto selectable-text ${isError ? 'text-accent-red/80' : 'text-text-secondary'}`}>
-      {result}
-    </pre>
+    <button
+      type="button"
+      aria-label={label}
+      className="text-[10px] font-mono text-text-secondary hover:text-text-primary"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setFeedback('已复制');
+        } catch {
+          setFeedback('复制失败，请展开后选择文本复制');
+        }
+      }}
+    >
+      {label}{feedback ? ` · ${feedback}` : ''}
+    </button>
+  );
+}
+
+function ToolResult({ result, isError }: { result: string; isError: boolean }) {
+  // 大结果只使用原文 pre，不送入语法高亮；滚动限制高度而非截断数据。
+  return (
+    <div className="rounded-lg p-2 bg-bg-deep border border-border/50 max-h-64 overflow-y-auto">
+      <pre className={`text-xs font-mono whitespace-pre-wrap overflow-x-auto selectable-text ${isError ? 'text-accent-red/80' : 'text-text-secondary'}`}>
+        {result}
+      </pre>
+    </div>
   );
 }
 

@@ -1,6 +1,40 @@
+export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions' | 'auto' | 'dontAsk';
+export interface PendingApproval {
+  requestId: string;
+  kind: 'tool' | 'question' | 'plan' | 'elicitation' | 'dialog';
+  status: string;
+  input?: unknown;
+  toolName?: string;
+  alwaysAllowAvailable?: boolean;
+  validationError?: string;
+  [key: string]: unknown;
+}
+export type ProtocolCapabilities = string[] | Record<string, unknown>;
+export interface ConversationRuntime {
+  conversationId?: string;
+  sessionId?: string | null;
+  runId?: string | null;
+  state?: 'starting' | 'ready' | 'busy' | 'closing' | 'closed';
+  busy?: boolean;
+  info?: { permissionMode?: PermissionMode; model?: string; capabilities?: ProtocolCapabilities; commands?: unknown[]; [key: string]: unknown } | null;
+  commands?: unknown[];
+  capabilities?: ProtocolCapabilities;
+  pendingUserMessageIds?: string[];
+  pendingApprovals?: PendingApproval[];
+}
+export interface ProtocolMetadata {
+  message?: unknown;
+  runId?: string;
+  conversationId?: string;
+  uuid?: string;
+}
+
 // ─── Claude Code stream-json 消息类型 ───────────────────
 
 export interface SystemInitMessage {
+  commands?: unknown[];
+  slash_commands?: unknown[];
+  capabilities?: ProtocolCapabilities;
   type: 'system';
   subtype: 'init';
   cwd: string;
@@ -31,6 +65,7 @@ export interface StreamEventMessage {
   type: 'stream_event';
   event: {
     type: string;
+    index?: number;
     message?: { id?: string };
     content_block?: { type?: string; id?: string; name?: string };
     delta?: { type?: string; text?: string; thinking?: string; partial_json?: string };
@@ -58,10 +93,11 @@ export interface AssistantMessage {
 }
 
 export interface UserMessage {
+  tool_use_result?: unknown;
   type: 'user';
   message: {
     role: 'user';
-    content: ContentBlock[];
+    content: ContentBlock[] | string;
   };
   session_id: string;
   uuid: string;
@@ -70,7 +106,12 @@ export interface UserMessage {
 
 export interface ResultMessage {
   type: 'result';
-  subtype: 'success' | 'error';
+  subtype: string;
+  errors?: string[];
+  cumulativeUsage?: Record<string, unknown>;
+  cumulativeCostUsd?: number;
+  [key: string]: unknown;
+  hasPending?: boolean;
   is_error: boolean;
   duration_ms: number;
   duration_api_ms: number;
@@ -97,7 +138,7 @@ export interface ResultMessage {
   ttft_ms: number;
 }
 
-export type StreamMessage =
+export type StreamMessage = ProtocolMetadata & (
   | SystemInitMessage
   | ThinkingTokensMessage
   | StatusMessage
@@ -106,7 +147,15 @@ export type StreamMessage =
   | UserMessage
   | ResultMessage
   | { type: 'stderr'; text: string; timestamp: number }
-  | { type: 'raw'; text: string; timestamp: number };
+  | { type: 'raw'; text: string; timestamp: number }
+  | { type: 'system'; subtype: string; [key: string]: any }
+  | { type: 'approval_request'; requestId: string; kind: PendingApproval['kind']; status: string; [key: string]: unknown }
+  | { type: 'approval_resolved'; requestId: string; [key: string]: unknown }
+  | { type: 'approval_validation_error'; requestId: string; kind: PendingApproval['kind']; error: string; [key: string]: unknown }
+  | { type: 'runner_error'; operation: string; error: string; [key: string]: unknown }
+  | { type: 'permission_mode_changed'; permissionMode: PermissionMode }
+  | { type: 'command_lifecycle'; command_uuid: string; state: 'queued' | 'started' | 'completed' | 'cancelled' | 'discarded' }
+  | { type: 'session_changed'; sessionId: string });
 
 // ─── 内容块 ─────────────────────────────────────────────
 
@@ -141,6 +190,9 @@ export type ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock | ToolResult
 
 export interface ChatMessage {
   id: string;
+  cliUuid?: string;
+  endUuid?: string;
+  metadata?: unknown;
   role: 'user' | 'assistant' | 'system';
   blocks: UIBlock[];
   timestamp: number;
@@ -180,12 +232,20 @@ export interface Conversation {
   activity: ActivityState | null;
   /** 当前任务清单（最新一次 TodoWrite；随会话持久化） */
   todoList?: TodoListState | null;
+  runtime?: ConversationRuntime;
+  runId?: string;
+  permissionMode?: PermissionMode;
+  commands?: unknown[];
+  capabilities?: ProtocolCapabilities;
+  pendingApprovals?: PendingApproval[];
+  protocolConnected?: boolean;
 }
 
 export type UIBlock =
-| { kind: 'text'; text: string; msgId?: string }
-| { kind: 'thinking'; text: string; msgId?: string }
-  | { kind: 'tool_use'; toolName: string; toolId: string; input: Record<string, unknown>; status: 'running' | 'done' | 'error'; result?: string; children?: UIBlock[]; startedAt?: number; finishedAt?: number }
+| { kind: 'text'; text: string; msgId?: string; blockIndex?: number; metadata?: unknown }
+| { kind: 'thinking'; text: string; msgId?: string; blockIndex?: number; metadata?: unknown }
+  | { kind: 'tool_use'; toolName: string; toolId: string; input: Record<string, unknown>; status: 'running' | 'done' | 'error'; result?: string; resultContent?: unknown; structuredResult?: unknown; metadata?: unknown; children?: UIBlock[]; startedAt?: number; finishedAt?: number }
+  | { kind: 'notice'; text: string; raw: unknown }
   | { kind: 'stderr'; text: string }
   | { kind: 'stats'; data: ResultMessage };
 
@@ -213,6 +273,7 @@ export interface SessionEvent {
 }
 
 export interface Session {
+  origin?: 'cli';
   sessionId: string;
   cwd: string;
   title: string;
@@ -238,6 +299,8 @@ export type RunStatus = 'idle' | 'starting' | 'streaming' | 'completed' | 'abort
 // ─── 任务清单（TodoWrite 工具）──────────────────────
 
 export interface TodoItem {
+  id?: string;
+  blockedBy?: string[];
   content: string;
   status: 'pending' | 'in_progress' | 'completed';
   activeForm?: string;

@@ -13,7 +13,11 @@ interface SkillInfo {
 }
 
 export function SkillList() {
-  const cwd = useStore((s) => s.cwd);
+  const cwd = useStore((s) => {
+    const conv = s.conversations.find(c => c.id === s.activeConversationId);
+    return conv ? conv.cwd : s.cwd;
+  });
+  const [listError, setListError] = useState('');
   const [skills, setSkills] = useState<SkillInfo[] | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [filter, setFilter] = useState('');
@@ -23,9 +27,24 @@ export function SkillList() {
   useEffect(() => {
     let cancelled = false;
     setSkills(null);
-    (window as any).api.skills.list(cwd || null).then((result: SkillInfo[]) => {
-      if (!cancelled) setSkills(result);
-    });
+    setListError('');
+    void (async () => {
+      try {
+        const api = (window as any).api?.skills;
+        if (typeof api?.list !== 'function') throw new Error('技能列表 IPC 不可用');
+        const result: unknown = await api.list(cwd || null);
+        if (!Array.isArray(result)) throw new Error('技能列表返回格式无效');
+        const valid = result.filter((item): item is SkillInfo => !!item && typeof item === 'object'
+          && typeof item.name === 'string' && typeof item.description === 'string'
+          && typeof item.path === 'string' && ['project', 'global'].includes(item.scope));
+        if (!cancelled) setSkills(valid);
+      } catch (error) {
+        if (!cancelled) {
+          setSkills([]);
+          setListError(error instanceof Error ? error.message : String(error));
+        }
+      }
+    })();
     return () => { cancelled = true; };
   }, [cwd, refreshKey]);
 
@@ -78,8 +97,9 @@ export function SkillList() {
       </div>
 
       {/* 新建表单 */}
-      {adding && <AddSkillForm cwd={cwd} onDone={refresh} />}
+      {adding && <AddSkillForm key={cwd} cwd={cwd} onDone={refresh} />}
 
+      {listError && <div role="alert" className="px-3 py-2 text-xs text-red-400">{listError}</div>}
       {/* 列表 */}
       {skills === null ? (
         <div className="flex items-center justify-center py-6 text-text-dim">
@@ -164,12 +184,22 @@ function SkillItem({ skill, confirming, setConfirming, onRefresh }: {
   onRefresh: () => void;
 }) {
   const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState('');
+  const hasConversation = useStore(s => s.conversations.some(c => c.id === s.activeConversationId));
+  const validName = /^[\p{L}\p{N}_-]+(?:[:/][\p{L}\p{N}_-]+)*$/u.test(skill.name);
 
   const handleDelete = async () => {
     setDeleting(true);
-    const ok = await (window as any).api.skills.delete(skill.path);
-    setDeleting(false);
-    if (ok) onRefresh();
+    setError('');
+    try {
+      const ok = await (window as any).api.skills.delete(skill.path);
+      if (ok) onRefresh();
+      else setError('删除技能失败');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
@@ -194,6 +224,16 @@ function SkillItem({ skill, confirming, setConfirming, onRefresh }: {
           ) : (
             <>
               <div className="text-xs text-text-primary truncate font-mono">{skill.name}</div>
+              <div className="text-[10px] text-text-dim break-all" title={skill.path}>{skill.path}</div>
+              <button
+                type="button"
+                disabled={!validName || !hasConversation}
+                title={validName ? '只插入原生命令，不发送；同名技能由 CLI 解析' : '名称不是有效 CLI 命令，请按路径查看技能'}
+                onClick={() => {
+                  if (validName) useStore.getState().injectText(`/${skill.name} `);
+                }}
+                className="mt-1 text-[10px] text-accent-cyan disabled:opacity-40 disabled:cursor-not-allowed"
+              >插入 /{skill.name}</button>
               {skill.description && (
                 <div className="text-[10px] text-text-dim leading-snug mt-0.5 line-clamp-2" title={skill.description}>
                   {skill.description}
@@ -223,7 +263,12 @@ function SkillItem({ skill, confirming, setConfirming, onRefresh }: {
         ) : (
           <div className="flex items-center gap-1 shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
             <button
-              onClick={() => (window as any).api.skills.reveal(skill.path)}
+              onClick={() => {
+                void (async () => {
+                  try { await (window as any).api.skills.reveal(skill.path); }
+                  catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+                })();
+              }}
               className="text-text-dim hover:text-accent-cyan transition-colors"
               title="在访达中打开"
             >
@@ -239,6 +284,7 @@ function SkillItem({ skill, confirming, setConfirming, onRefresh }: {
           </div>
         )}
       </div>
+      {error && <div role="alert" className="text-[10px] text-red-400">{error}</div>}
     </div>
   );
 }
@@ -254,17 +300,19 @@ function AddSkillForm({ cwd, onDone }: { cwd: string; onDone: () => void }) {
     if (creating) return;
     setCreating(true);
     setError('');
-    const result = await (window as any).api.skills.create({
-      name: name.trim().toLowerCase(),
-      description: description.trim(),
-      scope,
-      cwd: cwd || null,
-    });
-    setCreating(false);
-    if (result?.ok) {
-      onDone();
-    } else {
-      setError(result?.error || '创建失败');
+    try {
+      const result = await (window as any).api.skills.create({
+        name: name.trim().toLowerCase(),
+        description: description.trim(),
+        scope,
+        cwd: cwd || null,
+      });
+      if (result?.ok) onDone();
+      else setError(result?.error || '创建失败');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCreating(false);
     }
   };
 

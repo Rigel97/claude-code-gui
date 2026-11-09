@@ -2,45 +2,46 @@ import type { ResultMessage } from '../types';
 import { Clock, Cpu, Zap, TrendingUp, Layers } from 'lucide-react';
 
 export function StatsView({ data }: { data: ResultMessage }) {
+  // CLI 版本间字段可缺省：局部放宽读取，不改变 ResultMessage 契约。
+  const metrics: Partial<Omit<ResultMessage, 'usage'>> & { usage?: Partial<ResultMessage['usage']> | null } = data;
+  const usage = metrics.usage;
+  const tokens = [usage?.input_tokens, usage?.output_tokens, usage?.cache_creation_input_tokens, usage?.cache_read_input_tokens];
+  const total = tokens.every(validMetric) ? tokens.reduce((sum, value) => sum + value, 0) : undefined;
   const stats = [
     {
       icon: <Layers className="w-3.5 h-3.5" />,
       label: 'Total',
-      value: `${formatTokens(
-        (data.usage.input_tokens || 0) +
-        (data.usage.output_tokens || 0) +
-        (data.usage.cache_read_input_tokens || 0)
-      )}`,
+      value: formatTokens(total),
       color: 'text-accent-green',
     },
     {
       icon: <Cpu className="w-3.5 h-3.5" />,
       label: 'Input',
-      value: `${formatTokens(data.usage.input_tokens)}`,
+      value: formatTokens(usage?.input_tokens),
       color: 'text-accent-blue',
     },
     {
       icon: <Zap className="w-3.5 h-3.5" />,
       label: 'Output',
-      value: `${formatTokens(data.usage.output_tokens)}`,
+      value: formatTokens(usage?.output_tokens),
       color: 'text-accent-cyan',
     },
     {
       icon: <Clock className="w-3.5 h-3.5" />,
       label: 'Duration',
-      value: `${(data.duration_ms / 1000).toFixed(1)}s`,
+      value: validMetric(metrics.duration_ms) ? `${(metrics.duration_ms / 1000).toFixed(1)}s` : '—',
       color: 'text-accent-orange',
     },
     {
       icon: <TrendingUp className="w-3.5 h-3.5" />,
       label: 'Turns',
-      value: `${data.num_turns}`,
+      value: validMetric(metrics.num_turns) ? String(metrics.num_turns) : '—',
       color: 'text-accent-purple',
     },
     {
       icon: <Zap className="w-3.5 h-3.5" />,
       label: 'TTFT',
-      value: `${data.ttft_ms ?? 0}ms`,
+      value: validMetric(metrics.ttft_ms) ? `${metrics.ttft_ms}ms` : '—',
       color: 'text-accent-yellow',
     },
   ];
@@ -62,7 +63,12 @@ export function StatsView({ data }: { data: ResultMessage }) {
   );
 }
 
-function formatTokens(n: number): string {
+function validMetric(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function formatTokens(n: unknown): string {
+  if (!validMetric(n)) return '—';
   if (n >= 1000000) return `${+(n / 1000000).toFixed(1)}M`;
   if (n >= 1000) return `${+(n / 1000).toFixed(1)}K`;
   return String(n);

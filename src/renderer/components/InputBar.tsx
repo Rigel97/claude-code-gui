@@ -4,33 +4,46 @@ import { Send, Square, Sparkles, X, ListOrdered } from 'lucide-react';
 import { abortConversation } from '../utils/deliver';
 import type { Conversation } from '../types';
 
-// ─── 斜杠命令定义 ──────────────────────────────────────
 interface SlashCommand {
-  cmd: string;
-  desc: string;
-  /** 内置动作（本地执行，不发送给 Claude） */
-  action?: 'clear';
-  /** 提示词模板（填入输入框，用户可补充后再发送） */
-  prompt?: string;
+  name: string;
+  description: string;
+  argumentHint: string;
 }
 
-const SLASH_COMMANDS: SlashCommand[] = [
-  { cmd: '/clear', desc: '新开一个对话标签页', action: 'clear' },
-  { cmd: '/commit', desc: '查看 git 改动并生成 commit message', prompt: '请查看当前的 git 改动（git status 和 git diff），然后为我生成一条规范的 commit message。' },
-  { cmd: '/review', desc: '审查代码，指出问题与改进建议', prompt: '请审查以下代码，指出潜在问题、代码异味和改进建议：\n\n' },
-  { cmd: '/explain', desc: '解释代码的工作原理', prompt: '请详细解释以下代码的工作原理：\n\n' },
-  { cmd: '/fix', desc: '修复代码中的 bug', prompt: '请帮我修复以下代码中的问题：\n\n' },
-  { cmd: '/test', desc: '为代码生成单元测试', prompt: '请为以下代码编写完善的单元测试：\n\n' },
-  { cmd: '/doc', desc: '为代码生成文档注释', prompt: '请为以下代码生成清晰的文档注释：\n\n' },
-  { cmd: '/refactor', desc: '重构代码，提升可读性', prompt: '请重构以下代码，提升可读性与可维护性，保持行为不变：\n\n' },
-  { cmd: '/optimize', desc: '分析并优化性能', prompt: '请分析以下代码的性能瓶颈并给出优化方案：\n\n' },
-];
+// Accept literal CLI heads, including multilingual and plugin/namespaced commands.
+// Metadata is not a prompt template and must never become message text.
+function cliCommands(values: unknown[]): SlashCommand[] {
+  const commands = new Map<string, SlashCommand>();
+  for (const value of values) {
+    const item = typeof value === 'string' ? { name: value } : value;
+    if (!item || typeof item !== 'object' || !('name' in item) || typeof item.name !== 'string') continue;
+    const name = item.name.replace(/^\//, '');
+    if (!/^[\p{L}\p{N}_-]+(?:[:/][\p{L}\p{N}_-]+)*$/u.test(name) || commands.has(name)) continue;
+    commands.set(name, {
+      name,
+      description: 'description' in item && typeof item.description === 'string' ? item.description : '',
+      argumentHint: 'argumentHint' in item && typeof item.argumentHint === 'string' ? item.argumentHint : '',
+    });
+  }
+  return [...commands.values()];
+}
+
+type SendMode = 'queue' | 'insert' | 'interrupt';
 
 export function InputBar({ initialDraft }: { initialDraft: string }) {
   const [input, setInput] = useState(initialDraft);
   const [sendError, setSendError] = useState<string | null>(null);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
+  const [argumentHint, setArgumentHint] = useState('');
+  const [commandsError, setCommandsError] = useState<string | null>(null);
+  const [readingCommands, setReadingCommands] = useState(false);
+  const commandRequestRef = useRef(false);
+  const [discovered, setDiscovered] = useState<{ id: string; cwd: string; commands: unknown[] } | null>(null);
+  const [sendMode, setSendMode] = useState<SendMode>('queue');
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+  const mountedRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 文件拖入高亮态（从访达/文件管理器拖文件到输入框上时置真）
   const [dragOver, setDragOver] = useState(false);
@@ -44,11 +57,10 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
     s.conversations.find((c) => c.id === s.activeConversationId)
   );
   const globalCwd = useStore((s) => s.cwd);
-  const cwd = conv?.cwd || globalCwd;
+  const cwd = conv ? conv.cwd : globalCwd;
   const model = useStore((s) => s.model);
   const injectedText = useStore((s) => s.injectedText);
   const injectText = useStore((s) => s.injectText);
-  const newConversation = useStore((s) => s.newConversation);
   const sendPrompt = useStore((s) => s.sendPrompt);
   const enqueueMessage = useStore((s) => s.enqueueMessage);
   const removeQueuedMessage = useStore((s) => s.removeQueuedMessage);
@@ -63,16 +75,75 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
   }, []);
   const queue = conv?.queue ?? [];
   const sessionId = conv?.sessionId ?? null;
-  const displayModel = model || conv?.currentModel || '';
+  const displayModel = conv?.currentModel || conv?.runtime?.info?.model || '';
+  const pendingModel = model && model !== displayModel ? model : '';
 
-  const isStreaming = conv?.status === 'streaming' || conv?.status === 'starting';
+  const isStreaming = conv?.status === 'streaming' || conv?.status === 'starting' || conv?.runtime?.busy === true;
+
+  // No mount/typing probe: even SDK discovery may run project configuration hooks.
+  const readCommands = async () => {
+    if (commandRequestRef.current || !conversationId) return;
+    const state = useStore.getState();
+    const target = state.conversations.find(item => item.id === conversationId);
+    if (!target?.cwd) {
+      setCommandsError('当前对话未设置工作目录，无法读取 CLI 命令。');
+      return;
+    }
+    commandRequestRef.current = true;
+    setReadingCommands(true);
+    setCommandsError(null);
+    try {
+      const claude = (window as any).api?.claude;
+      if (typeof claude?.commands !== 'function') throw new Error('CLI 命令读取 IPC 不可用');
+      const commands: unknown = await claude.commands({
+        conversationId: target.id,
+        cwd: target.cwd,
+        ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+        options: {
+          ...(state.model ? { model: state.model } : {}),
+          permissionMode: target.permissionMode ?? state.permissionMode,
+          ...(state.effortLevel ? { effortLevel: state.effortLevel } : {}),
+          ...(state.autocompact ? { autocompact: state.autocompact } : {}),
+          ...(state.maxBudgetUsd > 0 ? { maxBudgetUsd: state.maxBudgetUsd } : {}),
+        },
+      });
+      if (!Array.isArray(commands)) throw new Error('CLI 返回的命令列表无效');
+      const current = useStore.getState().conversations.find(item => item.id === target.id);
+      if (!current || current.cwd !== target.cwd) return;
+      // Bind actual bootstrap state, never claim connection from commands alone.
+      if (typeof claude.runtimeState === 'function') {
+        const runtime = await claude.runtimeState({ conversationId: target.id });
+        const fresh = useStore.getState().conversations.find(item => item.id === target.id);
+        if (runtime && fresh?.cwd === target.cwd) useStore.getState().setRuntime(target.id, { ...runtime, commands });
+      }
+      if (mountedRef.current) setDiscovered({ id: target.id, cwd: target.cwd, commands });
+    } catch (error) {
+      if (mountedRef.current) setCommandsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      commandRequestRef.current = false;
+      if (mountedRef.current) setReadingCommands(false);
+    }
+  };
 
   // 卸载时把草稿写回标签页（组件按 conversationId 重新挂载）
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       if (mountedIdRef.current) useStore.getState().setDraft(inputRef.current, mountedIdRef.current);
     };
   }, []);
+
+  // Accept store-side draft restoration without overwriting a newer local edit.
+  const previousDraftRef = useRef(initialDraft);
+  useEffect(() => {
+    const draft = conv?.draft ?? '';
+    if (draft !== inputRef.current && (inputRef.current === previousDraftRef.current || inputRef.current === '')) {
+      inputRef.current = draft;
+      setInput(draft);
+    }
+    previousDraftRef.current = draft;
+  }, [conv?.draft]);
 
   // 初始草稿高度适配（切 tab 恢复长草稿时撑开输入框）
   useEffect(() => {
@@ -86,10 +157,15 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
 
   // 斜杠命令过滤（输入以 / 开头且单行时触发）
   const slashMatch = /^\/(\S*)$/.exec(input);
+  const commands = cliCommands([
+    ...(conv?.commands?.length ? conv.commands
+      : discovered?.id === conversationId && discovered.cwd === cwd && conv?.runtime?.state !== 'closed' && conv?.runtime?.state !== 'closing'
+        ? discovered.commands : []),
+  ]);
   const filteredCommands = slashMatch
-    ? SLASH_COMMANDS.filter((c) => c.cmd.startsWith(`/${slashMatch[1]}`))
+    ? commands.filter((c) => c.name.startsWith(slashMatch[1]))
     : [];
-  const showSlash = slashOpen && filteredCommands.length > 0;
+  const showSlash = slashOpen && !!slashMatch;
 
   // 消费外部注入的文本（文件树 @引用 / 粘贴图片路径）。
   // 只消费目标为当前标签页的注入，且消费后立即清除：
@@ -120,37 +196,67 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
       });
       const saved = await (window as any).api.fs.saveImage(dataUrl);
       if (saved) injectText(`@${saved} `);
-    } catch {
-      /* 读取/保存失败静默：保留剪贴板文本路径不受影响 */
+      else setSendError('粘贴图片保存失败，输入内容已保留。');
+    } catch (error) {
+      setSendError(`粘贴图片失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }, [injectText]);
 
-  const handleSend = useCallback(() => {
-    if (!input.trim() || !conversationId) return;
+  const handleSend = useCallback(async (mode: SendMode = 'queue') => {
+    const draft = inputRef.current;
+    if (!draft.trim() || !conversationId || sendingRef.current) return;
     const current = useStore.getState().conversations.find(item => item.id === conversationId);
     if (!current) return;
     if (!current.cwd) {
       setSendError('当前对话未设置工作目录，请先选择项目目录；输入内容已保留。');
       return;
     }
-
-    const prompt = input.trim();
-    updateInput('');
-    setSlashOpen(false);
-
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
-
-    // 当前标签页生成中：进入其队列，本轮结束后自动续发
-    // （后台标签页的队列续发由 store 在 result 事件时处理）
-    if (isStreaming) {
-      enqueueMessage(prompt);
+    const busy = current.status === 'streaming' || current.status === 'starting' || current.runtime?.busy === true;
+    if (busy && mode === 'queue') {
+      enqueueMessage(draft.trim());
+      updateInput('');
+      setSlashOpen(false);
       return;
     }
-
-    sendPrompt(prompt, conversationId);
-  }, [input, isStreaming, enqueueMessage, sendPrompt, conversationId, updateInput]);
+    if (typeof (window as any).api?.claude?.send !== 'function') {
+      setSendError('发送 IPC 不可用，输入内容已保留。');
+      return;
+    }
+    const oldMessages = new Set(current.messages.map(message => message.id));
+    sendingRef.current = true;
+    setSending(true);
+    setSendError(null);
+    try {
+      await Promise.resolve(sendPrompt(draft.trim(), conversationId, { interrupt: mode === 'interrupt' }));
+      const target = useStore.getState().conversations.find(item => item.id === conversationId);
+      const errorMessage = target?.messages.find(message => !oldMessages.has(message.id) && message.status === 'error');
+      // Promise<void> exposes no transport receipt. Only explicit store failure
+      // states count here; streaming stderr may be a CLI warning on an accepted send.
+      const errorBlock = errorMessage?.blocks.find(b => b.kind === 'stderr');
+      if (errorMessage || target?.status === 'error') {
+        throw new Error(errorBlock?.kind === 'stderr' ? errorBlock.text : '发送失败，输入内容已保留。');
+      }
+      // Preserve typing while IPC is pending, also after switching away.
+      if (target && inputRef.current === draft && (!target.draft || target.draft === draft)) {
+        inputRef.current = '';
+        useStore.getState().setDraft('', conversationId);
+        if (mountedRef.current) {
+          setInput('');
+          setSlashOpen(false);
+          setArgumentHint('');
+          if (textareaRef.current) textareaRef.current.style.height = 'auto';
+        }
+      }
+    } catch (error) {
+      if (mountedRef.current) {
+        useStore.getState().setDraft(inputRef.current, conversationId);
+        setSendError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      sendingRef.current = false;
+      if (mountedRef.current) setSending(false);
+    }
+  }, [enqueueMessage, sendPrompt, conversationId, updateInput]);
 
   const handleAbort = useCallback(() => {
     if (conversationId) abortConversation(conversationId);
@@ -159,13 +265,8 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
   // 选中斜杠命令
   const selectCommand = useCallback((cmd: SlashCommand) => {
     setSlashOpen(false);
-    if (cmd.action === 'clear') {
-      // 先保存当前草稿，再新开标签页（当前对话保留在自己的 tab 里）
-      if (mountedIdRef.current) useStore.getState().setDraft(inputRef.current, mountedIdRef.current);
-      newConversation({ cwd });
-      return;
-    }
-    updateInput(cmd.prompt || '');
+    updateInput(`/${cmd.name} `);
+    setArgumentHint(cmd.argumentHint);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (el) {
@@ -174,17 +275,17 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
         el.style.height = Math.min(el.scrollHeight, 200) + 'px';
       }
     });
-  }, [newConversation, updateInput]);
+  }, [updateInput]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // 输入法组合中：Enter 是确认候选词上屏，方向键是候选词导航，
     // 均不触发发送/中断/斜杠面板（否则中文输入法打英文按回车会误发消息）
-    if (isComposingRef.current || e.nativeEvent.isComposing) {
+    if (isComposingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) {
       return;
     }
 
     // 斜杠面板打开时，优先响应面板导航
-    if (showSlash) {
+    if (showSlash && filteredCommands.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         setSlashIndex((i) => (i + 1) % filteredCommands.length);
@@ -195,9 +296,9 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
         setSlashIndex((i) => (i - 1 + filteredCommands.length) % filteredCommands.length);
         return;
       }
-      if (e.key === 'Enter' || e.key === 'Tab') {
+      if ((e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) || e.key === 'Tab') {
         e.preventDefault();
-        selectCommand(filteredCommands[slashIndex]);
+        selectCommand(filteredCommands[Math.min(slashIndex, filteredCommands.length - 1)]);
         return;
       }
       if (e.key === 'Escape') {
@@ -205,6 +306,12 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
         setSlashOpen(false);
         return;
       }
+    }
+
+    if (e.key === 'Escape' && showSlash) {
+      e.preventDefault();
+      setSlashOpen(false);
+      return;
     }
 
     // ESC 中断当前标签页的生成（其他标签页不受影响）
@@ -216,7 +323,7 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      void handleSend(e.ctrlKey ? 'insert' : 'queue');
     }
   };
 
@@ -253,6 +360,7 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     updateInput(value);
+    setArgumentHint('');
     setSlashOpen(/^\/\S*$/.test(value));
     setSlashIndex(0);
     const el = e.target;
@@ -296,10 +404,16 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
               <Sparkles className="w-3 h-3 text-accent-cyan" />
               <span className="text-[10px] text-text-dim font-mono uppercase tracking-wider">快捷命令</span>
             </div>
+            <div className="px-3 py-2 text-xs text-text-muted">
+              <button type="button" onClick={() => void readCommands()} disabled={readingCommands} className="text-accent-cyan disabled:opacity-40">
+                {readingCommands ? '读取中…' : '读取CLI命令（加载项目配置，不发送提示词）'}
+              </button>
+              {filteredCommands.length === 0 && <div>无已知匹配命令；未知 /命令可按原样发送。</div>}
+            </div>
             <div className="max-h-64 overflow-y-auto py-1">
               {filteredCommands.map((cmd, i) => (
                 <button
-                  key={cmd.cmd}
+                  key={cmd.name}
                   onClick={() => selectCommand(cmd)}
                   onMouseEnter={() => setSlashIndex(i)}
                   className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors ${
@@ -309,9 +423,9 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
                   <span className={`text-xs font-mono font-semibold shrink-0 ${
                     i === slashIndex ? 'text-accent-cyan' : 'text-text-secondary'
                   }`}>
-                    {cmd.cmd}
+                    /{cmd.name}
                   </span>
-                  <span className="text-xs text-text-muted truncate">{cmd.desc}</span>
+                  <span className="text-xs text-text-muted truncate">{cmd.description} {cmd.argumentHint}</span>
                 </button>
               ))}
             </div>
@@ -345,7 +459,8 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
             onPaste={handlePaste}
             onCompositionStart={() => { isComposingRef.current = true; }}
             onCompositionEnd={() => { isComposingRef.current = false; }}
-            placeholder={isStreaming ? '生成中仍可输入，Enter 加入队列… (ESC 中断)' : '输入指令，/ 唤起快捷命令，Enter 发送'}
+            aria-label="消息输入"
+            placeholder={argumentHint || (isStreaming ? '生成中仍可输入，Enter 加入队列… (ESC 中断)' : '输入指令，/ 唤起快捷命令，Enter 发送')}
             rows={1}
             className="w-full bg-transparent text-sm text-text-primary placeholder-text-dim resize-none px-4 py-3 pr-28 max-h-48 overflow-y-auto font-sans"
             style={{ minHeight: '44px' }}
@@ -360,7 +475,7 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
               </span>
             )}
 
-            {isStreaming ? (
+            {isStreaming && (
               <button
                 onClick={handleAbort}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent-red/20 hover:bg-accent-red/30 border border-accent-red/40 text-accent-red transition-all"
@@ -368,19 +483,31 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
                 <Square className="w-3.5 h-3.5" fill="currentColor" />
                 <span className="text-xs font-medium">停止</span>
               </button>
-            ) : (
+            )}
               <button
-                onClick={handleSend}
-                disabled={!input.trim()}
+                onClick={() => void handleSend(isStreaming ? sendMode : 'insert')}
+                disabled={!input.trim() || sending}
                 className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-gradient-to-r from-accent-cyan/20 to-accent-blue/20 hover:from-accent-cyan/30 hover:to-accent-blue/30 border border-accent-cyan/40 hover:border-accent-cyan/60 text-accent-cyan transition-all disabled:opacity-30 disabled:cursor-not-allowed group send-btn-glow"
               >
                 <Send className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-                <span className="text-xs font-medium">发送</span>
+                <span className="text-xs font-medium">{sending ? '发送中…' : isStreaming ? ({ queue: '排队发送', insert: '立即插话', interrupt: '停止并发送' }[sendMode]) : '发送'}</span>
               </button>
-            )}
           </div>
         </div>
 
+        <div className="mt-2 px-2 text-[10px] text-text-dim space-y-1">
+          {!showSlash && <button type="button" onClick={() => void readCommands()} disabled={readingCommands} className="text-accent-cyan disabled:opacity-40">
+            {readingCommands ? '读取中…' : '读取CLI命令（加载项目配置，不发送提示词）'}
+          </button>}
+          <div>仅 SDK 握手读取；可能执行项目配置 hooks，副作用及费用未知，不自动发送模型探测请求。</div>
+          {isStreaming && <label>发送方式 <select aria-label="发送方式" value={sendMode} onChange={e => setSendMode(e.target.value as SendMode)} className="bg-bg-deep">
+            <option value="queue">轮后排队</option><option value="insert">立即插话</option><option value="interrupt">停止并发送</option>
+          </select> · Ctrl+Enter 立即插话（不停止）</label>}
+          {argumentHint && <div>参数：{argumentHint}</div>}
+          {pendingModel && <div>待下次启动模型：{pendingModel}（非当前运行模型）</div>}
+          {/^\/clear(?:\s|$)/.test(input) && <div>/clear 将原样交给 CLI，不会新建 GUI 标签页；若 SDK 不支持，请在原生终端显式执行。</div>}
+        </div>
+        {commandsError && <div role="alert" className="mt-2 px-2 text-xs text-accent-red">{commandsError}</div>}
         {sendError && <div role="alert" className="mt-2 px-2 text-xs text-accent-red">{sendError}</div>}
 
         {/* 底部提示 */}

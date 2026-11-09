@@ -7,6 +7,7 @@ import { User, Copy, Check, RotateCcw } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useStore } from '../store';
 import { copyText } from '../utils/clipboard';
+import { SessionMessageActions } from './SessionActions';
 
 /** 提取消息纯文本正文（不含 thinking / 工具调用 / stats）*/
 function messageText(message: ChatMessage): string {
@@ -47,26 +48,37 @@ function MessageCopyButton({ getText }: { getText: () => string }) {
   );
 }
 
-/** 失败重试：移除最后一轮（含失败的回复）并重发原文，相当于「这轮重来」。
- *  仅挂在活跃标签页末尾的 error 消息上，避免对历史旧错误误操作 */
-function RetryButton() {
-  const removeLastTurn = useStore((s) => s.removeLastTurn);
-
-  const handleRetry = () => {
-    const text = removeLastTurn();
-    if (text) useStore.getState().sendPrompt(text);
+/** 保留失败历史重发，不隐式撤销文件或外部操作。 */
+function RetryButton({ conversationId }: { conversationId: string }) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+  const unavailable = useStore(s => {
+    const conv = s.conversations.find(c => c.id === conversationId);
+    return !conv || conv.status === 'starting' || conv.status === 'streaming' || !!conv.streamingMessage
+      || !!conv.queue?.length || !!conv.pendingApprovals?.length || !!conv.runtime?.busy
+      || !!conv.runtime?.pendingApprovals?.length || !!conv.runtime?.pendingUserMessageIds?.length
+      || ['starting', 'busy', 'closing'].includes(conv.runtime?.state || '');
+  });
+  const handleRetry = async () => {
+    if (pending || unavailable) return;
+    setPending(true); setError('');
+    try { await useStore.getState().retryLastTurn(conversationId); }
+    catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+    finally { setPending(false); }
   };
 
   return (
     <div>
       <button
         onClick={handleRetry}
-        title="移除本轮失败对话并重新发送"
+        disabled={pending || unavailable}
+        title="保留失败历史再次发送，不自动撤销文件/外部操作"
         className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono text-accent-red/80 hover:text-accent-red border border-accent-red/20 hover:border-accent-red/40 transition-colors"
       >
         <RotateCcw className="w-3 h-3" />
-        <span>重试</span>
+        <span>{pending ? '重试中…' : '重试'}</span>
       </button>
+      {error && <p role="alert" className="text-xs text-accent-red">{error}</p>}
     </div>
   );
 }
@@ -77,6 +89,10 @@ function RetryButton() {
  */
 export const ChatMessageView = memo(function ChatMessageView({ message }: { message: ChatMessage }) {
   const showThinking = useStore((s) => s.showThinking);
+  const conversationId = useStore(s => {
+    const active = s.conversations.find(c => c.id === s.activeConversationId);
+    return active?.messages.includes(message) ? active.id : undefined;
+  });
   // 是否为活跃标签页消息列表末尾（重试按钮只对最新的 error 消息显示）
   const isLatest = useStore((s) => {
     const conv = s.conversations.find((c) => c.id === s.activeConversationId);
@@ -95,6 +111,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message }: { mess
           <div className="glass-panel rounded-xl px-4 py-3">
             <MarkdownRenderer content={text} />
           </div>
+          {conversationId && <SessionMessageActions message={message} conversationId={conversationId} />}
           {/* 复制按钮：正文下方，hover 消息时显现 */}
           {text && (
             <div className="mt-1">
@@ -104,6 +121,12 @@ export const ChatMessageView = memo(function ChatMessageView({ message }: { mess
         </div>
       </div>
     );
+  }
+
+  if (message.role === 'system') {
+    return <div id={`msg-${message.id}`} className="mb-3 space-y-2 text-xs text-text-muted" role="status">
+      {message.blocks.map((block, index) => <BlockRenderer key={index} block={block} showThinking={showThinking} isStreaming={false} />)}
+    </div>;
   }
 
   // assistant
@@ -138,7 +161,8 @@ export const ChatMessageView = memo(function ChatMessageView({ message }: { mess
         ))}
 
         {/* 操作条：失败时提供重试（仅最新错误消息）；完成后提供复制 */}
-        {message.status === 'error' && isLatest && <RetryButton />}
+        {message.status === 'error' && isLatest && conversationId && <RetryButton conversationId={conversationId} />}
+        {conversationId && <SessionMessageActions message={message} conversationId={conversationId} />}
         {text && message.status !== 'streaming' && <MessageCopyButton getText={() => text} />}
       </div>
     </div>
@@ -159,6 +183,12 @@ const BlockRenderer = memo(function BlockRenderer({ block, showThinking, isStrea
 
     case 'tool_use':
       return <ToolCallView block={block} />;
+
+    case 'notice':
+      return <details className="rounded-lg border border-border/40 px-3 py-2 bg-bg-deep/50">
+        <summary className="cursor-pointer whitespace-pre-wrap break-words">{block.text || 'CLI 事件'}</summary>
+        <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words selectable-text">{JSON.stringify(block.raw, null, 2)}</pre>
+      </details>;
 
     case 'stderr':
       return (

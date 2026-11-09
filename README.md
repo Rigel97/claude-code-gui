@@ -2,7 +2,7 @@
 
 [简体中文](README.md) · [English](README.en.md)
 
-一个面向 [Claude Code CLI](https://code.claude.com/docs/en/overview) 的桌面图形界面：多标签并行会话、流式对话、图片输入、3D Agent 执行空间、工具调用可视化、行级 Diff、文件树、跨会话搜索、Token 用量面板、AI 会话命名、Git 变更面板、TodoWrite 进度、文件预览、项目管理中心、可选动态视频背景，以及可互动的鲸鱼娘助手。
+一个面向 [Claude Code CLI](https://code.claude.com/docs/en/overview) 的桌面图形界面：多标签并行会话、流式对话、图片输入、工具调用可视化、行级 Diff、文件树、跨会话搜索、Token 用量面板、AI 会话命名、TodoWrite 进度、文件预览、项目管理中心与可选动态视频背景。
 
 ---
 
@@ -15,18 +15,11 @@
 - **图片输入** — `⌘V` 直接粘贴截图，保存到临时目录后以 `@path` 引用附加；也支持拖拽文件。
 - **完整可复制** — 回复、思考、工具输出均可选中；消息悬停提供复制按钮；macOS 下标准编辑菜单保证 `⌘C` / `⌘A` 可用。
 - **工具调用可视化** — Bash、Read、Write、Edit 等工具调用以可折叠卡片展示，子 Agent（`Task` / `Agent`）输出嵌套在父调用下。
-- **中断与重试** — `ESC` 或停止按钮只中止当前标签；子进程先 `SIGTERM`，超时后 `SIGKILL`（Windows 使用 `taskkill` 进程树）。失败消息可一键移除并重发。
+- **交互审批与追问** — 默认逐次审批工具调用；支持批准、拒绝、编辑参数、当前会话始终允许，以及 `AskUserQuestion` 单选/多选/自由回答和 `ExitPlanMode` 计划审批。
+- **原生交互终端** — 内嵌 xterm + PTY，支持交互 CLI、Shell、MCP/Plugins/Agents、登录、Doctor、Remote/Cloud 与 Teams 模式；同一会话与主聊天互斥移交，避免并发写冲突。
+- **中断与重试** — `ESC` 或停止按钮只中止当前标签；子进程先 `SIGTERM`，超时后 `SIGKILL`（Windows 使用 `taskkill` 进程树）。失败轮次重试会保留 CLI 历史再次发送；需要干净重跑时使用消息分叉或文件检查点回退。
 - **消息队列** — 生成过程中输入的消息进入当前标签队列，本轮完成后自动发送；失败轮次会丢弃队列，避免污染下一条指令。
 - **后台通知** — 窗口未聚焦时任务完成，会发送带提示词摘要的系统通知。
-
-### 3D Agent 执行空间
-
-打开 **Agent 执行空间** 查看懒加载的 Three.js 指挥中心，数据来自真实执行图：
-
-- 稳定的关系驱动布局：中心编排器、固定子 Agent 扇区、DAG 排名的工具层、底部队列和独立任务轨；独立调用保持并行层级，不会被伪造成串行链。
-- 支持实时、历史回放与明确标注的演示数据；未知指标保持 `—`，`LIVE` 不会凭空补节点或指标。
-- 区分调用、委派、依赖、读、写、重试连线；仅活跃路径有方向粒子；支持上下游高亮、分支折叠、节点搜索、详情检查器、时间线回放与事件顺序保护。
-- 相机飞行、材质细节、质量自适应与大规模节点渲染优化。
 
 ### 项目管理工作台
 
@@ -74,23 +67,22 @@
 
 - **未保存保护** — 项目背景、任务编辑、复盘、新建项目等分别维护脏标记；切换标签、返回总览、切换任务、关闭窗口前都会提示。写入失败时恢复未保存标记，草稿不会因为操作失败而消失。
 - **单会话输入草稿** — 输入框草稿绑定具体 `conversationId`，切换标签、新建对话或打开归档会话都不会互相覆盖；缺少工作目录时阻止发送并保留文本。
-- **Slash 命令** — 输入 `/` 快速调用 `/review`、`/fix`、`/test`、`/commit`、`/clear` 等。
+- **Slash 命令** — 从 CLI 动态发现可用命令（含 Skills 和插件命令），选择后原样发送；未识别的命令不会被 GUI 模板替换。
 - **跨会话搜索** — `⌘F` / `Ctrl+F` 搜索所有已打开标签和归档会话；跳转会路由到正确标签并高亮命中。搜索跳转同样受未保存保护约束。
 - **Token 用量面板** — 最近 14 天按本地时区聚合输入/输出用量、总量和高消耗会话。
 - **上下文计量与压缩** — 通过 CLI 零成本 `/context` 查询展示真实上下文占用；点击旁边的归档图标可压缩当前会话。
 - **文件树与文件预览** — 浏览项目目录，点击文件插入 `@path`；支持语法高亮文本预览（512KB 上限、二进制检测、截断提示）与常见图片格式预览。
 - **行级 Diff** — `Edit` / `Write` / `MultiEdit` 展示红绿 Diff，支持上下文折叠；自定义 LCS 引擎，超大文件自动降级。
-- **Git 变更面板** — 显示当前分支和工作区变更；本会话由 Claude 修改的文件带 AI 标记，可展开统一 Diff，并可在确认后回滚单个文件。
 - **TodoWrite 进度** — 把 CLI 的 `TodoWrite` 调用渲染为实时清单，显示进度条、每项状态和当前进行项；重开归档会话时重建。
 - **AI 会话命名** — 首轮完成后用低成本后台调用生成简洁标题；手动重命名不会被覆盖。
+- **CLI 历史、分叉与文件回退** — 浏览并分页导入原生 CLI JSONL；支持整段/指定消息分叉、编辑并分叉预填草稿、按用户消息回退文件检查点；不会删除对话历史或撤销外部操作。
+- **运行环境诊断** — 显示实际 CLI 版本、模型、权限和配置来源；支持白名单环境变量与加密凭据，诊断输出和日志中的敏感值会脱敏。
 - **会话置顶与持久化** — 置顶会话固定在侧栏顶部；标签页、输入草稿、历史和设置跨重启保留；被中断的会话作为草稿归档，可通过 `--resume` 继续。
 
-### 外观与助手
+### 外观
 
 - **赛博朋克 UI** — 粒子网络背景、扫描线、辉光效果（Tailwind CSS）。
 - **动态视频背景（可选）** — 在 **设置 → 动态视频背景** 选择本地视频（mp4/webm/mov/m4v/ogv）；静音循环、cover 适配，叠加暗化层保证可读性。通过特权 `bgmedia://` 协议提供 HTTP Range 流式读取，仅允许访问用户选中的单个文件；窗口隐藏时暂停，文件移动或删除后回退默认背景。
-- **鲸鱼娘助手** — 可拖拽的互动桌宠，响应本 GUI 内 Claude Code 会话的工作、工具类型、完成和错误状态；包含原创美术、对话、投喂、小游戏、成长、成就、天气效果和可选本地语音。设置位于 **设置 → 鲸鱼娘** 或右键菜单。
-
 ## 环境要求
 
 - **Node.js** 18+
@@ -141,15 +133,16 @@ npm run pack        # 仅生成未打包的 .app，速度更快，便于调试
 5. `⌘F` / `Ctrl+F` 搜索所有标签与归档会话。
 6. 点击侧栏会话将其作为标签打开；已打开的会话只会激活。悬停可重命名、导出或删除。
 7. 点击左下角 **TOKENS** 打开用量面板；悬停上下文计量查看详情，点击归档图标压缩会话。
-8. 打开 **Git** 侧栏标签，查看本会话的改动（AI 标记）并回滚单个文件；在文件树中点击眼睛图标预览文件。
+8. 在文件树中点击眼睛图标预览文件。
 9. 打开 **项目管理中心**：
    - 选择识别方式与范围，确认发送范围、隐私和预算后开始识别。
    - 在审核层逐字段核对证据，编辑名称/目标/简述，选择创建、关联或跳过。
    - 需要中断时使用“稍后审核”；草稿会保留并可跨重启恢复。
    - 进入项目后维护背景、工作目录、任务、工作流、关联对话和复盘；项目验收必须手动确认。
-10. 打开 **Agent 执行空间** 查看 3D 执行图：`实时` 使用真实事件，`演示` 使用明确标注的模拟数据；拖拽旋转、滚轮缩放、点击节点查看上下游和输出，时间线可回放。`Space` 暂停/恢复场景动画，`R` 重置相机，`F` 聚焦选中节点，`Esc` 清除选择。
-11. 鲸鱼娘漂浮在应用窗口内：点击互动、拖拽移动、右键打开投喂/小游戏/设置。可在 **设置 → 鲸鱼娘** 控制对话、特效、工具姿态、天气和可选本地语音。
-12. 需要动态背景时，在 **设置 → 动态视频背景** 选择本地视频并开启；建议使用低码率、可循环的视频以降低功耗。
+10. 需要动态背景时，在 **设置 → 动态视频背景** 选择本地视频并开启；建议使用低码率、可循环的视频以降低功耗。
+11. 默认权限为逐次审批：工具调用会显示审批卡片，可批准、拒绝、编辑参数或仅对当前会话放行；计划模式和结构化追问也在同一区域处理。
+12. 需要原生 TUI、MCP/Plugins 管理或登录时，打开 **原生终端**；终端会接管空闲会话，关闭后主聊天可继续。
+13. 在 **CLI 历史** 中浏览和导入原生会话；消息上的 **编辑并分叉** 会把原文预填为草稿，不会自动发送。
 
 ## 项目识别：隐私、费用与证据
 
@@ -159,12 +152,16 @@ LLM 识别会把对话摘录（用户/助手文本和白名单工具摘要，不
 
 ## 权限模式
 
-非交互（`-p`）模式下 CLI 需要权限模式，可在 **设置** 中配置：
+GUI 使用持久化 SDK 会话，每个标签独立运行。权限模式可在 **设置** 中配置：
 
 | 模式 | 行为 |
 |------|------|
-| `bypassPermissions`（默认） | 所有工具调用自动批准，仅建议在完全信任的项目中使用 |
-| `acceptEdits` | 文件编辑自动批准；Shell 命令等仍可能被拒绝 |
+| `default`（默认） | 需要权限的工具调用逐次审批，已有允许规则仍适用 |
+| `acceptEdits` | 文件编辑自动批准；Shell 命令等其他工具仍可能请求审批 |
+| `plan` | 只读分析和规划，不执行修改 |
+| `auto` | 由 CLI 自动判断审批，依赖安装的 CLI 支持 |
+| `dontAsk` | 仅遵循允许规则，不弹出权限询问；未获允许的操作拒绝 |
+| `bypassPermissions` | 跳过权限检查，可能执行危险命令；需明确确认 |
 
 ## 自定义模型与端点
 
@@ -182,14 +179,14 @@ LLM 识别会把对话摘录（用户/助手文本和白名单工具摘要，不
 
 ## 技术栈
 
-- **Electron** — 主进程以 `-p --output-format stream-json --verbose` 启动 CLI；每个标签独立 runner，所有流/状态事件带 `conversationId` 路由；`electronFuses` 禁用 `runAsNode`。
+- **Electron + Claude Agent SDK** — 主进程通过持久化 Query 会话与 Claude Code 通信；每个标签独立 runner，流/状态事件带 `conversationId` 路由；原生终端使用 `node-pty` + `xterm`；`electronFuses` 禁用 `runAsNode`。
   - 安全加固：上下文隔离、渲染进程无 Node 集成、拦截导航与新窗口，Markdown 链接只通过系统浏览器打开。
   - 单实例锁：再次启动会聚焦现有窗口。
   - 关闭守卫：渲染进程 `beforeunload` + Electron `will-prevent-unload` 原生二次确认。
 - **React 18 + TypeScript** — 渲染层 UI。
 - **Zustand** — 状态管理；按会话隔离状态，同一消息的流式分片按 `message.id` 合并，事件按 `conversationId` 路由。
+- **会话隔离** — `SessionOwnership` 按 `sessionId` 互斥主聊天、原生终端和辅助任务；历史分叉/重命名在独立 worker 中执行；CLI 凭据经 `safeStorage` 加密保存，运行时环境仅导入白名单变量。
 - **持久化** — `userData` 下的自定义 JSON 存储，临时文件 + `fsync` + `rename` 原子写入；配置 3 秒节流并带 trailing 写入，关闭前 flush。
-- **Three.js + @react-three/fiber** — 懒加载 3D 执行场景、实例化节点、金属/玻璃材质、有限粒子、后处理和质量降级。
 - **Tailwind CSS** — 深色科幻主题。
 - **Vite** — 渲染层构建；**Vitest** — 单元/集成测试；**Playwright** — 可选真实浏览器回归。
 
@@ -198,20 +195,19 @@ LLM 识别会把对话摘录（用户/助手文本和白名单工具摘要，不
 ```
 src/
 ├── main/          # Electron 主进程：CLI runner、IPC、文件树、持久化、项目后端
-└── renderer/      # React 应用、鲸鱼娘状态桥、public/whale 资源
-tests/             # Vitest：状态机、Diff、runner、鲸鱼娘桥、Agent 图布局、
+└── renderer/      # React 应用与样式
+tests/             # Vitest：状态机、Diff、runner、
                    # 项目后端/LLM 校验/扫描取消/作业恢复/数据恢复，以及浏览器回归
 scripts/           # 打包与签名辅助脚本
 ```
 
 ## 测试
 
-当前共有 **519 个单元/集成测试通过**，另有 17 个需要真实 CLI 或浏览器的可选测试默认跳过。
+默认套件共有 **858 个单元/集成测试通过**，另有 **29 个**需要真实 CLI、Electron 或浏览器的条件测试默认跳过。
 
 - `tests/store.test.ts` — 消息按 `message.id` 合并、多标签隔离与事件路由、后台队列续发、关闭标签草稿归档、旧格式迁移、异常事件加固、不可变更新。
 - `tests/diff.test.ts` — LCS Diff 正确性、超大输入降级、上下文折叠。
 - `tests/runner.test.js` — 真实子进程生命周期：正常完成、中断后重发隔离、SIGKILL 兜底、非法工作目录、多 runner 并行与事件标记。
-- `tests/whale.test.ts` — Claude Code 到鲸鱼娘的状态映射、隐私边界、完成/中止处理。
 - `tests/projects-backend.test.js` — 识别规则、确认门禁、原子持久化、任务状态/依赖校验、重识别时保护用户编辑、生命周期与备份恢复。
 - `tests/projects-llm.test.js` — LLM 输出契约：引用校验、状态/输入输出/依赖的真实证据绑定、跨批次分组、取消与预算。
 - `tests/projects-analyzer.test.js` — 无工具 Claude CLI 调用：仅 stdin 提示、禁用工具/MCP/技能/会话持久化、超时与进程组终止、异常输出拒绝。
@@ -220,9 +216,17 @@ scripts/           # 打包与签名辅助脚本
 - `tests/projects-links.test.js` — 对话关联、运行记录、严格 revision patch、任务证据所有权、生命周期只读、容量与坏盘恢复。
 - `tests/projects-scan-cancel.test.js` — 大文件读取中的即时取消、限额、进度单调性与句柄关闭。
 - `tests/project-store.test.ts` / `tests/project-model.test.ts` — 渲染层门禁、版本冲突、审核草稿恢复、进度/验收推导、工作流 DAG 布局。
-- `tests/agent-model.test.ts` / `tests/agent-layout.test.ts` — 真实 CLI 事件适配、关系边、终止态保护、稳定 DAG 排名与碰撞布局。
 - `tests/config-store.test.js` — 配置原子写入、损坏只读保护、reload 合并与写失败保留。
-- `tests/e2e-partial.test.ts` — 可选（`RUN_E2E=1`）真实 Claude CLI 工具循环验证。
+- `tests/conversation-protocol.test.ts` — 队列轮次边界、事件去重、工具结果回填、终止态与运行快照。
+- `tests/approval-ui.test.ts` — 工具审批、结构化追问、计划审批、elicitation 与失败重试。
+- `tests/session-history.test.js` — CLI 历史读取、分页、符号链接防护、worker 分叉与重命名。
+- `tests/session-ownership.test.js` — 同一会话的主聊天/终端/辅助任务互斥。
+- `tests/claude-runtime.test.js` — CLI 解析、环境白名单、凭据加密与敏感值脱敏。
+- `tests/file-browser.test.js` / `tests/file-browser-ui.test.ts` — 大目录分页、UTF-8 边界、文件变化与预览错误处理。
+- `tests/native-terminal.test.js` / `tests/native-terminal-ui.test.ts` — PTY 生命周期、进程组终止、xterm 挂载与会话移交。
+- `tests/runtime-settings-ui.test.ts` — 权限、模型、环境与连接状态保存。
+- `tests/desktop-integration.test.ts` — 可选（`RUN_DESKTOP_INTEGRATION=1`）真实 Electron + CLI + PTY 端到端回归。
+- `tests/e2e-partial.test.ts` — 可选（`RUN_E2E=1`）真实 Claude CLI 工具循环验证，可能产生 API 费用。
 - `tests/project-ui.test.ts` — 可选（`RUN_PROJECT_UI=1`）真实浏览器端到端：识别审核、生命周期、对话关联、草稿恢复、写入失败保护。
 - `tests/config-ui.test.ts` — 可选（`RUN_CONFIG_UI=1`）配置持久化、标签草稿隔离、关闭守卫与恢复读取。
 
@@ -244,9 +248,8 @@ npm run build
 - 模型字段原样传给 `--model`；留空跟随 CLI 默认值。
 - 项目识别使用 Claude Code CLI 的凭据，可能产生 API 费用；确认弹窗提供单次预算上限。
 - 项目主存储上限 32MB、项目数上限 10000；审核草稿上限 8MB。达到容量阈值只会提示，不会自动删除数据。
-- macOS 是主要验证平台；Linux/Windows 未完整验证鲸鱼娘与动态背景。Windows 保留 `.cmd` shim 与 `taskkill` 处理。
-- 鲸鱼娘只跟随本 GUI 内启动的 Claude Code 会话，不读取提示词、工具参数或工具输出；其成长与成就在本地渲染存储的 `whale-moe:*` 下，与会话历史分离。
+- macOS 是主要验证平台；Linux/Windows 未完整验证动态背景。Windows 保留 `.cmd` shim 与 `taskkill` 处理。
 
 ## License
 
-GUI 采用 MIT 协议。鲸鱼娘美术与原始脚本改编自 [Sutera-Diffusus/dsh-whale-musume](https://github.com/Sutera-Diffusus/dsh-whale-musume)（MIT），原始版权声明与许可证保留在 [`src/renderer/public/whale/LICENSE`](src/renderer/public/whale/LICENSE)。
+GUI 采用 MIT 协议。

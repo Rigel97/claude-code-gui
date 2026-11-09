@@ -545,11 +545,11 @@ describe('removeLastTurn（失败重试）', () => {
       ),
     }));
 
-  it('移除最后一条 user 消息及其后全部，返回 trim 后的 user 文本', () => {
+  it('兼容重试读取最后用户文本，但保留真实失败历史', () => {
     seedTurns();
     const text = s().removeLastTurn();
     expect(text).toBe('问题二');
-    expect(conv().messages.map((m) => m.id)).toEqual(['u1', 'a1']);
+    expect(conv().messages.map((m) => m.id)).toEqual(['u1', 'a1', 'u2', 'a2']);
   });
 
   it('无 user 消息时返回 null 且不动 messages', () => {
@@ -708,7 +708,7 @@ describe('stream_event 逐 token 流式（--include-partial-messages）', () => 
     expect(typeof (blocks[0] as { finishedAt?: number }).finishedAt).toBe('number');
   });
 
-  it('子代理 stream_event（parent 非空）被忽略，内容走完整事件', async () => {
+  it('子代理 stream_event 显示增量，完整同消息事件不重复', async () => {
     s().sendPrompt('q');
     s().handleStream(assistant('msg_P0', [{ type: 'tool_use', id: 'parentT', name: 'Task', input: {} }]));
     // 子代理的 delta（带 parent）：忽略
@@ -716,13 +716,13 @@ describe('stream_event 逐 token 流式（--include-partial-messages）', () => 
     s().handleStream(streamEvent({ type: 'content_block_delta', delta: { type: 'text_delta', text: '子代理delta' } }, 'parentT'));
     await sleep(60);
     const parent = conv().streamingMessage!.blocks[0] as { children?: unknown[] };
-    expect(parent.children ?? []).toHaveLength(0); // delta 未写入
+    expect(parent.children ?? []).toHaveLength(1); // nested partial is visible
 
     // 完整子代理事件正常追加（不受 deltaMsgIds 干扰）
-    s().handleStream(assistant('msg_P1', [{ type: 'text', text: '子代理输出' }], 'parentT'));
+    s().handleStream(assistant('sub_msg', [{ type: 'text', text: '子代理delta' }], 'parentT'));
     const parent2 = conv().streamingMessage!.blocks[0] as { children?: { text?: string }[] };
     expect(parent2.children).toHaveLength(1);
-    expect(parent2.children![0].text).toBe('子代理输出');
+    expect(parent2.children![0].text).toBe('子代理delta');
   });
 
   it('无 message_start（降级/无 partial）时完整事件照常应用（回归保障）', () => {

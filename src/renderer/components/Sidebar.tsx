@@ -1,16 +1,16 @@
 import { useStore } from '../store';
-import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3, Download, Trash2, Check, X, Zap, Pencil, Pin, GitBranch } from 'lucide-react';
+import { FolderOpen, Plus, MessageSquare, Settings, Activity, Files, BarChart3, Download, Trash2, Check, X, Zap, Pencil, Pin } from 'lucide-react';
 import { useState, useCallback, useRef } from 'react';
 import { SettingsPanel } from './SettingsPanel';
 import { FileTree } from './FileTree';
 import { SkillList } from './SkillList';
 import { CostDashboard } from './CostDashboard';
-import { GitPanel } from './GitPanel';
-import { sessionToMarkdown } from '../utils/exportSession';
+import { sessionToJson, sessionToMarkdown } from '../utils/exportSession';
+import { useTerminalStore } from '../terminalStore';
+import { SessionHistoryPanel } from './SessionActions';
 import type { Session } from '../types';
 import { useProjectsStore } from '../projectStore';
-import { FolderKanban, Orbit } from 'lucide-react';
-import { useAgentStore } from '../agent/store';
+import { FolderKanban } from 'lucide-react';
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
@@ -50,7 +50,9 @@ export function Sidebar() {
 
   const [showSettings, setShowSettings] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
-  const [tab, setTab] = useState<'sessions' | 'files' | 'git' | 'skills'>('sessions');
+  const [historyCwd, setHistoryCwd] = useState<string | null>(null);
+  const [exportError, setExportError] = useState('');
+  const [tab, setTab] = useState<'sessions' | 'files' | 'skills'>('sessions');
   // 正在确认删除的会话索引（-1 表示无）
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState(-1);
   // 正在重命名的会话索引（-1 表示无）与其编辑框内容
@@ -150,16 +152,11 @@ export function Sidebar() {
           </button>
         </div>
 
-        <div className="px-3 pt-2">
-          <button
-            onClick={() => { if (showChat()) useAgentStore.getState().show(); }}
-            className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border border-border text-text-secondary hover:bg-bg-light hover:border-accent-cyan/40 hover:text-accent-cyan transition-colors"
-          >
-            <Orbit className="w-4 h-4 shrink-0" />
-            <span className="text-sm flex-1 text-left">Agent 执行空间</span>
-            <span className="text-[11px] text-text-muted">3D</span>
-          </button>
+        <div className="px-3 pt-2 flex gap-2">
+          <button className="flex-1 px-2 py-2 text-xs rounded-lg border border-border text-text-secondary hover:text-accent-cyan" onClick={() => { if (showChat()) useTerminalStore.getState().show(); }}>原生终端</button>
+          <button className="flex-1 px-2 py-2 text-xs rounded-lg border border-border text-text-secondary hover:text-accent-cyan disabled:opacity-40" disabled={!cwd} onClick={() => setHistoryCwd(cwd)}>CLI 历史</button>
         </div>
+        {exportError && <p role="alert" className="px-3 text-xs text-accent-red">{exportError}</p>}
 
         {/* 新建会话 */}
         <div className="p-3 pb-2">
@@ -187,13 +184,6 @@ export function Sidebar() {
             onClick={() => setTab('files')}
             icon={<Files className="w-3 h-3" />}
             label="文件"
-            disabled={!cwd}
-          />
-          <TabButton
-            active={tab === 'git'}
-            onClick={() => setTab('git')}
-            icon={<GitBranch className="w-3 h-3" />}
-            label="Git"
             disabled={!cwd}
           />
           <TabButton
@@ -349,6 +339,18 @@ export function Sidebar() {
                               <Download className="w-3.5 h-3.5" />
                             </button>
                             <button
+                              title="导出完整 GUI JSON"
+                              className="text-[10px] text-text-dim hover:text-accent-cyan"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                setExportError('');
+                                try {
+                                  const name = session.title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 40) || 'session';
+                                  await (window as any).api.exportJson(`${name}.json`, sessionToJson(session));
+                                } catch (error) { setExportError(error instanceof Error ? error.message : String(error)); }
+                              }}
+                            >JSON</button>
+                            <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 if (!isStreamingRow(session.sessionId)) setConfirmDeleteIdx(i);
@@ -370,8 +372,6 @@ export function Sidebar() {
             </>
           ) : tab === 'skills' ? (
             <SkillList />
-          ) : tab === 'git' ? (
-            cwd && <GitPanel cwd={cwd} />
           ) : (
             cwd && <FileTree root={cwd} />
           )}
@@ -397,7 +397,6 @@ export function Sidebar() {
           {/* 设置按钮 */}
           <button
             onClick={() => setShowSettings(true)}
-            data-claude-whale-settings="true"
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-bg-light text-text-muted hover:text-text-primary transition-colors"
           >
             <Settings className="w-4 h-4" />
@@ -416,6 +415,7 @@ export function Sidebar() {
         />
       </aside>
 
+      {historyCwd !== null && <SessionHistoryPanel key={historyCwd} cwd={historyCwd} onClose={() => setHistoryCwd(null)} />}
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
       {showDashboard && <CostDashboard onClose={() => setShowDashboard(false)} />}
     </>

@@ -181,6 +181,7 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
       };
     });
     page = await context.newPage();
+    page.setDefaultNavigationTimeout(30_000);
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(baseURL);
     await page.getByRole('button', { name: '项目管理中心', exact: false }).click();
@@ -385,12 +386,6 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     const background = page.getByRole('textbox', { name: '需求背景', exact: true });
     await background.fill('未保存的背景草稿');
     await page.getByRole('button', { name: /^项目管理中心/ }).click();
-    expect(await background.inputValue()).toBe('未保存的背景草稿');
-    page.once('dialog', dialog => void dialog.dismiss());
-    await page.getByRole('button', { name: /^Agent 执行空间/ }).click();
-    expect(await background.inputValue()).toBe('未保存的背景草稿');
-    page.once('dialog', dialog => void dialog.dismiss());
-    await clickButton('返回对话');
     expect(await background.inputValue()).toBe('未保存的背景草稿');
     await clickButton('取消编辑');
     await clickButton('任务列表');

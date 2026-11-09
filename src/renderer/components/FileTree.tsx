@@ -1,17 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useStore } from '../store';
-import {
-  Folder, FolderOpen, File, ChevronRight, ChevronDown, RefreshCw, Loader2, Eye,
-} from 'lucide-react';
+import { Folder, FolderOpen, File, ChevronRight, ChevronDown, RefreshCw, Loader2, Eye } from 'lucide-react';
 import { FilePreview } from './FilePreview';
 
-interface FsItem {
-  name: string;
-  path: string;
-  isDir: boolean;
-}
-
-/** 文件图标颜色（按扩展名） */
+interface FsItem { name: string; path: string; isDir: boolean; isSymlink?: boolean }
+interface Filters { showHidden: boolean; showIgnored: boolean }
+interface DirectoryPage { items: FsItem[]; total: number; offset: number; nextOffset: number | null; error?: string }
 function fileIconColor(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase() || '';
   const map: Record<string, string> = {
@@ -24,125 +18,103 @@ function fileIconColor(name: string): string {
 }
 
 export function FileTree({ root }: { root: string }) {
-  const [items, setItems] = useState<FsItem[] | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    setItems(null);
-    (window as any).api.fs.readDir(root).then((result: FsItem[]) => {
-      if (!cancelled) setItems(result);
-    });
-    return () => { cancelled = true; };
-  }, [root, refreshKey]);
-
+  const [showHidden, setShowHidden] = useState(false);
+  const [showIgnored, setShowIgnored] = useState(false);
+  const filters = { showHidden, showIgnored };
   return (
     <div className="px-2 pb-2">
-      {/* 标题栏 + 刷新 */}
       <div className="flex items-center justify-between px-2 py-1.5">
         <span className="text-[10px] text-text-dim font-mono uppercase tracking-wider">项目文件</span>
-        <button
-          onClick={() => setRefreshKey((k) => k + 1)}
-          className="text-text-dim hover:text-accent-cyan transition-colors"
-          title="刷新文件树"
-        >
-          <RefreshCw className="w-3 h-3" />
-        </button>
+        <button onClick={() => setRefreshKey(k => k + 1)} className="text-text-dim hover:text-accent-cyan" title="刷新文件树"><RefreshCw className="w-3 h-3" /></button>
       </div>
-
-      {items === null ? (
-        <div className="flex items-center justify-center py-6 text-text-dim">
-          <Loader2 className="w-4 h-4 animate-spin" />
-        </div>
-      ) : items.length === 0 ? (
-        <div className="text-xs text-text-dim px-3 py-4 text-center">空目录</div>
-      ) : (
-        <div className="space-y-px">
-          {items.map((item) => (
-            <TreeNode key={item.path} item={item} root={root} depth={0} />
-          ))}
-        </div>
-      )}
-
-      <div className="text-[10px] text-text-dim/60 font-mono px-2 pt-2 leading-relaxed">
-        点击文件插入 @引用 · 悬停出现 👁 可预览
+      <div className="flex flex-wrap gap-2 px-2 pb-2 text-[10px] text-text-muted">
+        <label><input type="checkbox" checked={showHidden} onChange={e => setShowHidden(e.target.checked)} /> 显示隐藏文件</label>
+        <label><input type="checkbox" checked={showIgnored} onChange={e => setShowIgnored(e.target.checked)} /> 显示忽略目录</label>
       </div>
+      <DirectoryList key={`${root}:${showHidden}:${showIgnored}`} dirPath={root} root={root} depth={0} filters={filters} refreshKey={refreshKey} />
+      <div className="text-[10px] text-text-dim/60 font-mono px-2 pt-2 leading-relaxed">点击文件插入 @引用 · 预览按钮仅打开预览，不发送模型</div>
     </div>
   );
 }
 
-function TreeNode({ item, root, depth }: { item: FsItem; root: string; depth: number }) {
-  const [expanded, setExpanded] = useState(false);
-  const [children, setChildren] = useState<FsItem[] | null>(null);
-  // 文件预览弹层（仅本行使用，同一时刻最多一个）
-  const [preview, setPreview] = useState<string | null>(null);
-  const injectText = useStore((s) => s.injectText);
+function DirectoryList({ dirPath, root, depth, filters, refreshKey }: { dirPath: string; root: string; depth: number; filters: Filters; refreshKey: number }) {
+  const [items, setItems] = useState<FsItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [legacy, setLegacy] = useState(false);
+  const retryOffset = useRef(0);
+  const generation = useRef(0);
+  const busy = useRef(false);
+  const { showHidden, showIgnored } = filters;
+  const load = useCallback(async (offset: number) => {
+    if (busy.current) return;
+    busy.current = true;
+    const token = generation.current;
+    retryOffset.current = offset;
+    setLoading(true);
+    setError('');
+    try {
+      const result: DirectoryPage | FsItem[] = await (window as any).api.fs.readDir(dirPath, { showHidden, showIgnored, offset, limit: 200 });
+      if (token !== generation.current) return;
+      const oldBridge = Array.isArray(result);
+      const page: DirectoryPage = oldBridge ? { items: result, total: result.length, offset: 0, nextOffset: null } : result;
+      if (!page || page.error) throw new Error(page?.error || '目录返回数据无效');
+      if (!Array.isArray(page.items) || page.offset !== offset || (page.nextOffset !== null && (!Number.isSafeInteger(page.nextOffset) || page.nextOffset <= offset))) throw new Error('目录分页偏移无效，请刷新');
+      setItems(previous => offset === 0 ? page.items : [...new Map([...previous, ...page.items].map(item => [item.path, item])).values()]);
+      setTotal(page.total);
+      setNextOffset(page.nextOffset);
+      setLegacy(oldBridge);
+    } catch (reason) {
+      if (token === generation.current) setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      if (token === generation.current) { busy.current = false; setLoading(false); }
+    }
+  }, [dirPath, showHidden, showIgnored]);
+  useEffect(() => {
+    generation.current++;
+    busy.current = false;
+    void load(0);
+    return () => { generation.current++; busy.current = false; };
+  }, [load, refreshKey]);
+  return (
+    <div className="space-y-px" aria-busy={loading}>
+      {items.map(item => <TreeNode key={item.path} item={item} root={root} depth={depth} filters={filters} refreshKey={refreshKey} />)}
+      {loading && <div role="status" className="flex justify-center py-3"><Loader2 className="w-4 h-4 animate-spin" /><span className="sr-only">加载目录</span></div>}
+      {error && <div role="alert" className="text-xs text-accent-orange px-2 py-2">{error} <button disabled={loading} onClick={() => void load(retryOffset.current)} className="underline">重试</button></div>}
+      {!loading && !error && items.length === 0 && <div className="text-xs text-text-dim px-3 py-3">空目录</div>}
+      {nextOffset !== null && !error && <button disabled={loading} onClick={() => void load(nextOffset)} className="text-xs text-accent-cyan px-3 py-2">加载更多（{items.length}/{total}）</button>}
+      {legacy && <div className="text-[10px] text-text-dim px-2">当前连接不支持筛选和分页，结果可能不完整</div>}
+    </div>
+  );
+}
 
-  const toggle = useCallback(async () => {
-    if (!item.isDir) {
-      // 点击文件 → 插入 @相对路径 到输入框
+function TreeNode({ item, root, depth, filters, refreshKey }: { item: FsItem; root: string; depth: number; filters: Filters; refreshKey: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const [visited, setVisited] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+  const injectText = useStore(s => s.injectText);
+  const isDir = item.isDir && !item.isSymlink;
+  const toggle = () => {
+    if (isDir) { setVisited(true); setExpanded(value => !value); }
+    else {
       const rel = item.path.startsWith(root + '/') ? item.path.slice(root.length + 1) : item.path;
       injectText(`@${rel} `);
-      return;
     }
-    if (!expanded && children === null) {
-      const result = await (window as any).api.fs.readDir(item.path);
-      setChildren(result);
-    }
-    setExpanded(!expanded);
-  }, [item, expanded, children, root, injectText]);
-
+  };
   return (
-    <div className="relative group/row">
-      <button
-        onClick={toggle}
-        className="w-full flex items-center gap-1 px-1.5 py-1 rounded hover:bg-bg-light transition-colors group pr-6"
-        style={{ paddingLeft: `${depth * 12 + 6}px` }}
-      >
-        {item.isDir ? (
-          <>
-            {expanded
-              ? <ChevronDown className="w-3 h-3 text-text-dim shrink-0" />
-              : <ChevronRight className="w-3 h-3 text-text-dim shrink-0" />}
-            {expanded
-              ? <FolderOpen className="w-3.5 h-3.5 text-accent-cyan shrink-0" />
-              : <Folder className="w-3.5 h-3.5 text-accent-cyan/70 shrink-0" />}
-          </>
-        ) : (
-          <>
-            <span className="w-3 shrink-0" />
-            <File className={`w-3.5 h-3.5 shrink-0 ${fileIconColor(item.name)}`} />
-          </>
-        )}
-        <span className={`text-xs truncate font-mono ${
-          item.isDir ? 'text-text-secondary' : 'text-text-muted group-hover:text-text-primary'
-        }`}>
-          {item.name}
-        </span>
-      </button>
-
-      {/* 预览按钮（hover 显示；不阻断点击行插入 @引用） */}
-      {!item.isDir && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setPreview(item.path);
-          }}
-          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-text-dim hover:text-accent-cyan opacity-0 group-hover/row:opacity-100 focus:opacity-100 transition-all"
-          title="预览文件"
-        >
-          <Eye className="w-3 h-3" />
+    <div>
+      <div className="relative group/row">
+        <button onClick={toggle} aria-expanded={isDir ? expanded : undefined} className="w-full flex items-center gap-1 px-1.5 py-1 rounded hover:bg-bg-light group pr-6" style={{ paddingLeft: `${depth * 12 + 6}px` }}>
+          {isDir ? <>{expanded ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}{expanded ? <FolderOpen className="w-3.5 h-3.5 text-accent-cyan shrink-0" /> : <Folder className="w-3.5 h-3.5 text-accent-cyan shrink-0" />}</> : <><span className="w-3 shrink-0" /><File className={`w-3.5 h-3.5 shrink-0 ${fileIconColor(item.name)}`} /></>}
+          <span className="text-xs truncate font-mono text-text-muted">{item.name}</span>
+          {item.isSymlink && <span className="text-[10px] text-text-dim">（符号链接）</span>}
         </button>
-      )}
-
-      {item.isDir && expanded && children && (
-        <div>
-          {children.map((child) => (
-            <TreeNode key={child.path} item={child} root={root} depth={depth + 1} />
-          ))}
-        </div>
-      )}
-
+        {!isDir && <button onClick={() => setPreview(item.path)} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-text-dim hover:text-accent-cyan opacity-0 group-hover/row:opacity-100 focus:opacity-100" title="预览文件"><Eye className="w-3 h-3" /></button>}
+      </div>
+      {isDir && visited && <div hidden={!expanded}><DirectoryList dirPath={item.path} root={root} depth={depth + 1} filters={filters} refreshKey={refreshKey} /></div>}
       {preview && <FilePreview path={preview} onClose={() => setPreview(null)} />}
     </div>
   );

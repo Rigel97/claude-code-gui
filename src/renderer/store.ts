@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import type { ActivityState, ChatMessage, ContextUsage, Conversation, Session, SessionEvent, RunStatus, StreamMessage, UIBlock, TodoItem } from './types';
-import { deliverPrompt, abortConversation } from './utils/deliver';
+import type { ActivityState, ChatMessage, ContextUsage, Conversation, Session, SessionEvent, RunStatus, StreamMessage, UIBlock, TodoItem, PermissionMode, ConversationRuntime } from './types';
+import { deliverPrompt, closeRuntime, generateUserMessageId, registerStopHandler } from './utils/deliver';
 
 interface AppState {
   // 全局：工作目录（新会话的默认 cwd；已开会话各自快照，互不影响）
@@ -20,7 +20,11 @@ interface AppState {
   openSessionTab: (sessionId: string) => void;
   setDraft: (text: string, conversationId?: string) => void;
   /** 发送一条消息（写入消息流 + 拉起 CLI），默认作用于活跃标签页 */
-  sendPrompt: (prompt: string, conversationId?: string) => void;
+  sendPrompt: (prompt: string, conversationId?: string, opts?: { interrupt?: boolean }) => Promise<void>;
+  retryLastTurn: (conversationId?: string) => Promise<void>;
+  setRuntime: (conversationId: string, runtime: ConversationRuntime | null | undefined) => void;
+  setSessionMessages: (conversationId: string, messages: unknown[] | { messages: unknown[]; raw?: unknown }) => void;
+  importSession: (session: { sessionId: string; cwd: string; title?: string; messages: unknown[] | { messages: unknown[]; raw?: unknown } }) => string;
   removeLastTurn: () => string | null;
   // 用户发送新消息时的强制滚底信号（nonce）
   forceScrollNonce: number;
@@ -33,8 +37,8 @@ interface AppState {
   // 设置
   model: string;
   setModel: (model: string) => void;
-  permissionMode: 'bypassPermissions' | 'acceptEdits';
-  setPermissionMode: (mode: 'bypassPermissions' | 'acceptEdits') => void;
+  permissionMode: PermissionMode;
+  setPermissionMode: (mode: PermissionMode) => void;
   showThinking: boolean;
   setShowThinking: (show: boolean) => void;
   sidebarWidth: number;
@@ -81,7 +85,7 @@ setVideoBg: (patch: { enabled?: boolean; path?: string | null }) => void;
 
   // 流事件路由（按事件携带的 conversationId 分发到对应标签页）
   handleStream: (msg: StreamMessage & { conversationId?: string }) => void;
-  setStatus: (status: RunStatus, conversationId?: string) => void;
+  setStatus: (status: RunStatus, conversationId?: string, runId?: string) => boolean;
   setContextUsage: (usage: ContextUsage | null, conversationId?: string) => void;
 
   hydrate: (data: {
@@ -93,7 +97,7 @@ setVideoBg: (patch: { enabled?: boolean; path?: string | null }) => void;
     totalInputTokens?: number;
     totalOutputTokens?: number;
     model?: string;
-    permissionMode?: 'bypassPermissions' | 'acceptEdits';
+    permissionMode?: PermissionMode;
     showThinking?: boolean;
     notifyOnComplete?: boolean;
 maxSessions?: number;
@@ -130,7 +134,8 @@ const DEFAULT_MAX_SESSIONS = 50;
 /** 持久化保留标签页数上限（超出丢弃最旧的，其归档条目仍在侧栏可重新打开） */
 const MAX_PERSIST_CONVERSATIONS = 10;
 /** 单条工具结果的最大保留长度（Bash 输出可能非常大） */
-const MAX_TOOL_RESULT = 20000;
+const finite = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+const permissionModes = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'auto', 'dontAsk'];
 
 function makeConversation(cwd: string, over: Partial<Conversation> = {}): Conversation {
   return {
@@ -148,6 +153,9 @@ function makeConversation(cwd: string, over: Partial<Conversation> = {}): Conver
     draft: '',
     activity: null,
     todoList: null,
+    commands: [],
+    pendingApprovals: [],
+    protocolConnected: false,
     ...over,
   };
 }
@@ -160,9 +168,7 @@ function extractToolResultText(content: unknown): string {
   } else if (Array.isArray(content)) {
     text = content.map((c: { text?: string }) => c?.text || '').join('');
   }
-  return text.length > MAX_TOOL_RESULT
-    ? text.slice(0, MAX_TOOL_RESULT) + '\n… (输出过长，已截断)'
-    : text;
+  return text;
 }
 
 /** 递归查找 tool_use 块（含子代理 children） */
@@ -183,7 +189,7 @@ function findToolBlock(blocks: UIBlock[], toolId: string): Extract<UIBlock, { ki
  *  不可变更新：命中才返回新数组/新块，配合渲染层 React.memo 跳过已完成块的重渲染 */
 function applyToolResult(
   blocks: UIBlock[],
-  block: { tool_use_id: string; content: unknown; is_error?: boolean }
+  block: { tool_use_id: string; content: unknown; is_error?: boolean; structuredResult?: unknown }
 ): { blocks: UIBlock[]; hit: boolean } {
   let changed = false;
   const next = blocks.map((b) => {
@@ -194,6 +200,8 @@ function applyToolResult(
         ...b,
         status: block.is_error ? ('error' as const) : ('done' as const),
         result: extractToolResultText(block.content),
+        resultContent: block.content,
+        ...(block.structuredResult !== undefined ? { structuredResult: block.structuredResult } : {}),
         finishedAt: Date.now(),
       };
     }
@@ -350,17 +358,73 @@ function findTodoInBlocks(blocks: UIBlock[]): TodoItem[] | null {
   return found;
 }
 
-/** 从会话消息（含流式）倒序提取最新一次 TodoWrite 清单（任务面板数据源） */
+/** Rebuild only committed tool effects, in transcript order, with agent-local task IDs. */
 function latestTodoFrom(conv: Pick<Conversation, 'messages' | 'streamingMessage'>): TodoItem[] | null {
-  if (conv.streamingMessage) {
-    const r = findTodoInBlocks(conv.streamingMessage.blocks);
-    if (r) return r;
-  }
-  for (let i = conv.messages.length - 1; i >= 0; i--) {
-    const r = findTodoInBlocks(conv.messages[i].blocks);
-    if (r) return r;
-  }
-  return null;
+  let items: TodoItem[] = [];
+  let found = false;
+  const walk = (blocks: UIBlock[], namespace = '') => {
+    for (const b of blocks) {
+      if (b.kind !== 'tool_use') continue;
+      const id = (value: unknown) => `${namespace}${String(value)}`;
+      if (b.status === 'done') {
+        let response: any = b.structuredResult ?? b.resultContent ?? b.result;
+        if (typeof response === 'string' || Array.isArray(response)) {
+          try { response = JSON.parse(extractToolResultText(response)); } catch { response = null; }
+        }
+        const task = response?.task ?? response;
+        const normalize = (value: any, previous?: TodoItem): TodoItem | null => {
+          if (!value || typeof value !== 'object') return null;
+          const rawId = value.id ?? value.taskId;
+          const content = value.subject ?? value.content ?? previous?.content;
+          if (typeof content !== 'string') return null;
+          const status = value.status ?? previous?.status;
+          const blocked = value.blockedBy ?? previous?.blockedBy;
+          return { ...(previous ?? {}), content,
+            status: status === 'completed' || status === 'in_progress' ? status : 'pending',
+            ...(rawId != null ? { id: id(rawId) } : {}),
+            ...(Array.isArray(blocked) ? { blockedBy: blocked.map((v: unknown) => namespace && String(v).startsWith(namespace) ? String(v) : id(v)) } : {}),
+            ...(typeof value.activeForm === 'string' ? { activeForm: value.activeForm } : {}),
+          };
+        };
+        const upsert = (value: any) => {
+          const key = value?.id ?? value?.taskId;
+          const previous = items.find(t => t.id === id(key));
+          if (value?.status === 'deleted') { items = items.filter(t => t.id !== id(key)); found = true; return; }
+          const next = normalize(value, previous);
+          if (!next) return;
+          items = previous ? items.map(t => t === previous ? next : t) : [...items, next]; found = true;
+        };
+        if (b.toolName === 'TodoWrite' && Array.isArray(b.input.todos)) {
+          // TodoWrite replaces its own anonymous list, not tasks belonging to other agents.
+          const next = b.input.todos.map(t => normalize(t)).filter((t): t is TodoItem => !!t);
+          items = [...items.filter(t => t.id), ...next]; found = true;
+        } else if (b.toolName === 'TaskCreate') {
+          const match = b.result?.match(/^(?:Task #([\w-]+) created successfully:|Created task #([\w-]+)(?::|\s|$))/i);
+          const key = task?.id ?? task?.taskId ?? match?.[1] ?? match?.[2];
+          if (key != null) upsert({ ...b.input, ...(task && typeof task === 'object' ? task : {}), id: key });
+        } else if (b.toolName === 'TaskUpdate') {
+          const key = b.input.taskId ?? task?.id;
+          if (key != null) {
+            const previous = items.find(t => t.id === id(key));
+            const blocked = [...new Set([...(previous?.blockedBy ?? []), ...(Array.isArray(b.input.addBlockedBy) ? b.input.addBlockedBy.map(id) : [])])];
+            upsert({ ...b.input, ...(task && typeof task === 'object' ? task : {}), id: key, blockedBy: blocked });
+          }
+        } else if (b.toolName === 'TaskGet' && task && typeof task === 'object') upsert(task);
+        else if (b.toolName === 'TaskList') {
+          const tasks = Array.isArray(response) ? response : response?.tasks;
+          if (Array.isArray(tasks)) {
+            items = items.filter(t => !t.id || (namespace ? !t.id.startsWith(namespace) : t.id.includes(':')));
+            for (const task of tasks) upsert(task);
+            found = true;
+          }
+        }
+      }
+      if (b.children) walk(b.children, `${b.toolId}:`);
+    }
+  };
+  for (const m of conv.messages) walk(m.blocks);
+  if (conv.streamingMessage) walk(conv.streamingMessage.blocks);
+  return found ? items : null;
 }
 
 /** hydrate 防御：只接受形状合法的 todoList */
@@ -374,10 +438,65 @@ function sanitizeTodoList(v: unknown): Conversation['todoList'] {
   return ok ? (v as Conversation['todoList']) : null;
 }
 
+function persistentConversation(c: Conversation): Conversation {
+  // Allowlist: never spread persisted unknown keys (options/env/approvals).
+  return { id: c.id, title: c.title, sessionId: c.sessionId, cwd: c.cwd,
+    messages: c.messages, streamingMessage: c.streamingMessage, status: c.status,
+    thinkingTokens: c.thinkingTokens, contextUsage: c.contextUsage, queue: c.queue,
+    currentModel: c.currentModel, draft: c.draft, activity: null, todoList: c.todoList };
+}
+
+/** SDK history pages and raw JSONL rows share this adapter; tool results update preceding cards. */
+export function convertSessionMessages(page: unknown[] | { messages: unknown[]; raw?: unknown }): ChatMessage[] {
+  const rows = Array.isArray(page) ? page : page.messages;
+  let messages: ChatMessage[] = [];
+  const seen = new Set<string>();
+  for (const value of rows) {
+    if (!value || typeof value !== 'object') continue;
+    const row = value as Record<string, any>;
+    if (typeof row.uuid === 'string' && seen.has(row.uuid)) continue;
+    if (typeof row.uuid === 'string') seen.add(row.uuid);
+    if (Array.isArray(row.blocks) && ['user', 'assistant', 'system'].includes(row.role)) {
+      messages.push(row as ChatMessage); continue;
+    }
+    const content = typeof row.message?.content === 'string' ? [{ type: 'text', text: row.message.content }]
+      : Array.isArray(row.message?.content) ? row.message.content : [];
+    const blocks: UIBlock[] = [];
+    for (const b of content) {
+      if (!b || typeof b !== 'object') continue;
+      if (b.type === 'tool_result') {
+        messages = messages.map(m => {
+          const result = applyToolResult(m.blocks, { ...b, structuredResult: row.tool_use_result });
+          return result.hit ? { ...m, blocks: result.blocks, endUuid: row.uuid ?? m.endUuid } : m;
+        });
+      } else if (b.type === 'text' && typeof b.text === 'string') blocks.push({ kind: 'text', text: b.text, msgId: row.message?.id });
+      else if (b.type === 'thinking' && typeof b.thinking === 'string') blocks.push({ kind: 'thinking', text: b.thinking, msgId: row.message?.id });
+      else if (b.type === 'tool_use') blocks.push({ kind: 'tool_use', toolId: b.id, toolName: b.name, input: b.input ?? {}, status: 'running', metadata: b });
+      else blocks.push({ kind: 'notice', text: b.type || 'content', raw: b });
+    }
+    const role = row.type ?? row.message?.role;
+    if (!['user', 'assistant'].includes(role)) {
+      messages.push({ id: genId(), role: 'system', timestamp: Date.now(), status: 'completed', cliUuid: row.uuid, endUuid: row.uuid,
+        metadata: row, blocks: [{ kind: 'notice', text: row.subtype || row.type || 'system', raw: row }] });
+    } else if (blocks.length) {
+      const parentId = row.parent_tool_use_id;
+      const parentIndex = typeof parentId === 'string' ? messages.findIndex(m => findToolBlock(m.blocks, parentId)) : -1;
+      if (parentIndex >= 0) {
+        const target = messages[parentIndex];
+        const parent = findToolBlock(target.blocks, parentId)!;
+        messages[parentIndex] = { ...target, endUuid: row.uuid ?? target.endUuid,
+          blocks: replaceToolBlockChildren(target.blocks, parentId, [...(parent.children ?? []), ...blocks]) };
+      } else messages.push({ id: genId(), role, blocks, timestamp: Number.isFinite(Date.parse(row.timestamp)) ? Date.parse(row.timestamp) : Date.now(),
+        status: 'completed', cliUuid: row.uuid, endUuid: row.uuid, metadata: row });
+    }
+  }
+  return messages;
+}
+
 /** 持久化快照可安全序列化的标签页子集（运行态字段收敛） */
 export function snapshotConversations(conversations: Conversation[]): Conversation[] {
   return conversations.slice(0, MAX_PERSIST_CONVERSATIONS).map((c) => ({
-    ...c,
+    ...persistentConversation(c),
     // 瞬态字段不持久化：activity 是运行时阶段，重启后无意义
     activity: null,
     // 应用重启后进程已消失：运行态收敛（会话 status 标 aborted，消息归档为 completed），流式内容归档防丢
@@ -396,10 +515,20 @@ export const useStore = create<AppState>((set, get) => {
   // 每个 API 轮次：message_start 带来 msgId → thinking/text 逐 delta 到达（40ms 节流
   // 合并后一次 set，避免高频更新打爆 React）→ 完整 assistant 事件到达时按 msgId
   // 去重（内容已由 delta 构建，仅回填 tool_use 的 input）
+  const scopeKey = (convId: string, parentId?: string | null) => JSON.stringify([convId, parentId ?? null]);
   const deltaMsgIds = new Map<string, string | null>();
-  const pendingDeltas = new Map<string, { kind: 'text' | 'thinking'; chunk: string }[]>();
+  const messageKey = (convId: string, parentId?: string | null, msgId?: string | null) => JSON.stringify([convId, parentId ?? null, msgId ?? null]);
+  // CLI emits one normalised assistant content[0] BEFORE content_block_stop.
+  // Its ordinal is not the API index; retain the cursor and UUID binding per message/parent.
+  const streamBlockCursors = new Map<string, { index: number; kind: string }>();
+  const assistantBlockIndices = new Map<string, number>();
+  const lastAssistantUuids = new Map<string, string | undefined>();
+  const toolInputs = new Map<string, { toolId: string; json: string }>();
+  const pendingDeltas = new Map<string, { kind: 'text' | 'thinking'; chunk: string; parentId?: string | null; msgId?: string; index: number }[]>();
   const deltaTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const DELAY_FLUSH_MS = 40;
+  const backgroundConversations = new Set<string>();
+  const pendingBatches = new Set<string>();
 
   const flushDeltas = (convId: string) => {
     const timer = deltaTimers.get(convId);
@@ -416,30 +545,38 @@ export const useStore = create<AppState>((set, get) => {
       pendingDeltas.delete(convId);
       return; // 标签页已关闭：丢弃缓冲
     }
-    // 已中断/出错：丢弃缓冲，不复活已归档消息
-    if (!conv.streamingMessage) {
-      pendingDeltas.delete(convId);
-      return;
-    }
-    const msgId = deltaMsgIds.get(convId) ?? undefined;
-    const streaming: ChatMessage = { ...conv.streamingMessage };
-    let blocks = streaming.blocks;
+    let streaming = conv.streamingMessage;
+    let messages = conv.messages;
     for (const d of list) {
-      const last = blocks[blocks.length - 1];
-      if (last?.kind === d.kind && last.msgId === msgId) {
-        blocks = [...blocks];
-        blocks[blocks.length - 1] = { ...last, text: last.text + d.chunk };
-      } else {
-        blocks = [...blocks, { kind: d.kind, text: d.chunk, msgId }];
-      }
+      const archivedIndex = d.parentId && !findToolBlock(streaming?.blocks ?? [], d.parentId)
+        ? messages.findIndex(m => findToolBlock(m.blocks, d.parentId!)) : -1;
+      const background = archivedIndex >= 0 || (!streaming && ['completed', 'error', 'aborted'].includes(conv.status));
+      const target: ChatMessage = archivedIndex >= 0 ? messages[archivedIndex] : streaming ?? {
+        id: genId(), role: 'assistant', timestamp: Date.now(), status: 'streaming', blocks: [],
+      };
+      const parent = d.parentId ? findToolBlock(target.blocks, d.parentId) : null;
+      const container = [...(parent ? parent.children ?? [] : target.blocks)];
+      const at = container.findIndex(b => b.kind === d.kind && b.msgId === d.msgId && b.blockIndex === d.index);
+      const existing = container[at];
+      if (existing?.kind === d.kind) container[at] = { ...existing, text: existing.text + d.chunk };
+      else container.push({ kind: d.kind, text: d.chunk, msgId: d.msgId, blockIndex: d.index });
+      const updated = { ...target, blocks: parent ? replaceToolBlockChildren(target.blocks, parent.toolId, container) : container };
+      if (background) {
+        backgroundConversations.add(convId);
+        messages = archivedIndex >= 0 ? messages.map((m, i) => i === archivedIndex ? updated : m)
+          : [...messages, { ...updated, status: 'completed' }];
+      } else streaming = updated;
     }
-    streaming.blocks = blocks;
-    set({ conversations: replaceConv(state.conversations, convId, { ...conv, streamingMessage: streaming }) });
+    set({ conversations: replaceConv(state.conversations, convId, { ...conv, messages, streamingMessage: streaming,
+      ...(!streaming ? { activity: null } : {}),
+    }) });
   };
 
-  const queueDelta = (convId: string, kind: 'text' | 'thinking', chunk: string) => {
+  const queueDelta = (convId: string, kind: 'text' | 'thinking', chunk: string, parentId?: string | null, index = 0) => {
     const list = pendingDeltas.get(convId) || [];
-    list.push({ kind, chunk });
+    const msgId = deltaMsgIds.get(scopeKey(convId, parentId)) ?? undefined;
+    streamBlockCursors.set(messageKey(convId, parentId, msgId), { index, kind });
+    list.push({ kind, chunk, parentId, msgId, index });
     pendingDeltas.set(convId, list);
     if (!deltaTimers.has(convId)) {
       deltaTimers.set(
@@ -513,24 +650,43 @@ export const useStore = create<AppState>((set, get) => {
     }
   };
 
-  const dropDeltaState = (convId: string) => {
+  const dropDeltaState = (convId: string, forgetMessages = true) => {
     const timer = deltaTimers.get(convId);
     if (timer) {
       clearTimeout(timer);
       deltaTimers.delete(convId);
     }
     pendingDeltas.delete(convId);
-    deltaMsgIds.delete(convId);
+    for (const key of deltaMsgIds.keys()) if (JSON.parse(key)[0] === convId) deltaMsgIds.delete(key);
+    if (forgetMessages) {
+      for (const key of streamBlockCursors.keys()) if (JSON.parse(key)[0] === convId) streamBlockCursors.delete(key);
+      for (const key of assistantBlockIndices.keys()) if (JSON.parse(key)[0] === convId) assistantBlockIndices.delete(key);
+      for (const key of lastAssistantUuids.keys()) if (JSON.parse(key)[0] === convId) lastAssistantUuids.delete(key);
+    }
+    for (const key of toolInputs.keys()) if (JSON.parse(key)[0] === convId) toolInputs.delete(key);
   };
 
   /** 内部：往指定标签页写入用户消息并拉起 CLI */
-  const dispatchPrompt = (prompt: string, conversationId: string) => {
+  const retiredRuns = new Map<string, Set<string>>();
+  const pendingSends = new Map<string, Set<string>>();
+  const resultIds = new Map<string, Set<string>>();
+  const replayIds = new Map<string, Set<string>>();
+  const assistantEvents = new Map<string, Set<string>>();
+  const dispatchPrompt = async (prompt: string, conversationId: string, opts?: { interrupt?: boolean }): Promise<void> => {
     const state = get();
     const conv = state.conversations.find((c) => c.id === conversationId);
     if (!conv || !conv.cwd) return;
 
+    const nonce = generateUserMessageId();
+    const sends = pendingSends.get(conversationId) ?? new Set<string>();
+    sends.add(nonce);
+    pendingSends.set(conversationId, sends);
+    const busy = conv.status === 'streaming' || conv.status === 'starting';
+    backgroundConversations.delete(conversationId);
+    if (!busy) { dropDeltaState(conversationId, false); lastAssistantMsgIds.delete(scopeKey(conversationId)); }
     const userMsg: ChatMessage = {
-      id: genId(),
+      id: nonce,
+      cliUuid: nonce,
       role: 'user',
       blocks: [{ kind: 'text', text: prompt }],
       timestamp: Date.now(),
@@ -548,7 +704,7 @@ export const useStore = create<AppState>((set, get) => {
       ...conv,
       title: conv.title === '新对话' ? prompt.slice(0, 30) : conv.title,
       messages: [...conv.messages, userMsg],
-      streamingMessage: assistantMsg,
+      streamingMessage: busy ? conv.streamingMessage ?? assistantMsg : assistantMsg,
       status: 'streaming',
     };
     set({
@@ -556,22 +712,72 @@ export const useStore = create<AppState>((set, get) => {
       forceScrollNonce: ++scrollNonceCounter,
     });
 
-    void deliverPrompt({
+    const accepted = await deliverPrompt({
       prompt,
+      userMessageId: nonce,
+      ...(opts?.interrupt ? { interrupt: true } : {}),
       cwd: conv.cwd,
       sessionId: conv.sessionId || undefined,
       // 已有会话 ID 时必须用 --resume 续接，否则多轮上下文会丢失
       resume: !!conv.sessionId,
       options: {
-...(state.model ? { model: state.model } : {}),
-permissionMode: state.permissionMode,
-...(state.effortLevel ? { effortLevel: state.effortLevel } : {}),
-...(state.autocompact ? { autocompact: state.autocompact } : {}),
-...(state.maxBudgetUsd > 0 ? { maxBudgetUsd: state.maxBudgetUsd } : {}),
-},
+        ...(state.model ? { model: state.model } : {}),
+        permissionMode: conv.permissionMode ?? state.permissionMode,
+        ...(state.effortLevel ? { effortLevel: state.effortLevel } : {}),
+        ...(state.autocompact ? { autocompact: state.autocompact } : {}),
+        ...(state.maxBudgetUsd > 0 ? { maxBudgetUsd: state.maxBudgetUsd } : {}),
+      },
       conversationId,
-    });
+    }, opts?.interrupt ? () => {
+      // Only a confirmed interrupt may retire the old shell and start a new turn.
+      get().setStatus('aborted', conversationId);
+      const now = get();
+      const target = now.conversations.find(c => c.id === conversationId);
+      if (target) set({ conversations: replaceConv(now.conversations, conversationId, { ...target,
+        streamingMessage: { ...assistantMsg, blocks: [] }, status: 'streaming',
+      }) });
+    } : undefined);
+    sends.delete(nonce);
+    const fresh = get();
+    const current = fresh.conversations.find(c => c.id === conversationId);
+    if (!current || !current.messages.some(m => m.id === nonce)) return;
+    if (accepted.success) {
+      // Bind by local nonce, never by prompt text or last user index.
+      const runId = accepted.runId;
+      if (runId && retiredRuns.get(conversationId)?.has(runId)) return;
+      get().setRuntime(conversationId, { sessionId: accepted.sessionId, runId,
+        busy: current.status === 'streaming' || current.status === 'starting',
+      });
+      const now = get();
+      const target = now.conversations.find(c => c.id === conversationId)!;
+      set({ conversations: replaceConv(now.conversations, conversationId, {
+        ...target,
+        messages: target.messages.map(m => m.id === nonce ? { ...m, cliUuid: accepted.userMessageId || nonce } : m),
+      }) });
+      if (!sends.size) replayIds.delete(conversationId);
+    } else if (accepted.error !== 'no-api' || typeof window !== 'undefined') {
+      const text = accepted.error || 'Claude send was rejected';
+      if (busy) {
+        set({ conversations: replaceConv(fresh.conversations, conversationId, { ...current,
+          messages: [...current.messages, { id: genId(), role: 'assistant', timestamp: Date.now(), status: 'error', blocks: [{ kind: 'stderr', text }] }],
+        }) });
+      } else {
+        get().handleStream({ type: 'stderr', text, timestamp: Date.now(), conversationId });
+        get().setStatus('error', conversationId);
+      }
+    }
   };
+
+  registerStopHandler((id, result) => {
+    const current = get();
+    const conv = current.conversations.find(c => c.id === id);
+    if (!conv) return;
+    if (result.error) set({ conversations: replaceConv(current.conversations, id, { ...conv, queue: [],
+      messages: [...conv.messages, { id: genId(), role: 'system', timestamp: Date.now(), status: 'error', blocks: [{ kind: 'stderr', text: result.error }] }],
+    }) });
+    if (result.closed) get().setRuntime(id, { state: 'closed', busy: false, runId: null, info: null });
+    if (result.success || result.closed) get().setStatus('aborted', id);
+  });
 
   return {
     cwd: '',
@@ -613,14 +819,14 @@ permissionMode: state.permissionMode,
     },
 
     closeConversation: (id) => {
-      const state = get();
-      const conv = state.conversations.find((c) => c.id === id);
+      let state = get();
+      let conv = state.conversations.find((c) => c.id === id);
       if (!conv) return;
+      flushDeltas(id);
+      state = get(); conv = state.conversations.find(c => c.id === id)!;
       dropDeltaState(id); // 清理 delta 缓冲/定时器
-      // 运行中：先终止其进程（事件稍后到达时标签页已移除，handleStream 会忽略）
-      if (conv.status === 'streaming' || conv.status === 'starting') {
-        abortConversation(id);
-      }
+      closeRuntime(id);
+      retiredRuns.delete(id); pendingSends.delete(id); replayIds.delete(id); resultIds.delete(id); assistantEvents.delete(id); backgroundConversations.delete(id); pendingBatches.delete(id);
       // 流式中的部分内容先归档再落库，避免直接丢失（归档为 completed：
       // 中断的历史内容不挂重试按钮，与旧 setStatus 行为一致）
       const settled: Conversation =
@@ -665,8 +871,87 @@ permissionMode: state.permissionMode,
       set({ conversations: replaceConv(state.conversations, conv.id, { ...conv, draft: text }) });
     },
 
-    sendPrompt: (prompt, conversationId) => {
-      dispatchPrompt(prompt, conversationId || get().activeConversationId);
+    sendPrompt: (prompt, conversationId, opts) => dispatchPrompt(prompt, conversationId || get().activeConversationId, opts),
+    retryLastTurn: async (conversationId) => {
+      const id = conversationId || get().activeConversationId;
+      const conv = get().conversations.find(c => c.id === id);
+      const user = conv?.messages.filter(m => m.role === 'user').at(-1);
+      const text = user?.blocks.filter(b => b.kind === 'text').map(b => b.text).join('\n');
+      if (text) await dispatchPrompt(text, id);
+    },
+    setRuntime: (id, runtime) => {
+      if (!runtime || typeof runtime !== 'object') return;
+      const state = get();
+      const conv = state.conversations.find(c => c.id === id);
+      if (!conv) return;
+      if (runtime.runId && retiredRuns.get(id)?.has(runtime.runId)) return;
+      if (runtime.runId && conv.runId && runtime.runId !== conv.runId) {
+        const old = retiredRuns.get(id) ?? new Set<string>();
+        old.add(conv.runId); retiredRuns.set(id, old); dropDeltaState(id);
+      }
+      const disconnected = runtime.state === 'closed' || runtime.state === 'closing';
+      if (disconnected && conv.runId) {
+        const old = retiredRuns.get(id) ?? new Set<string>(); old.add(conv.runId); retiredRuns.set(id, old);
+      }
+      const info = runtime.info === undefined ? conv.runtime?.info : runtime.info === null ? null : { ...conv.runtime?.info, ...runtime.info };
+      const busy = runtime.busy ?? (runtime.state === 'busy' || runtime.state === 'starting' || runtime.state === 'closing' ? true
+        : runtime.state === 'ready' || runtime.state === 'closed' ? false : undefined);
+      // A `ready` snapshot belongs to the run that just settled. If the GUI
+      // already dispatched the next queued turn, that send still owns the
+      // transcript boundary until its own receipt arrives.
+      const newerGuiTurn = (pendingSends.get(id)?.size ?? 0) > 0;
+      const status: RunStatus = runtime.state === 'starting' ? 'starting' : disconnected
+        ? (conv.status === 'streaming' || conv.status === 'starting' ? 'aborted' : conv.status)
+        : busy === true ? 'streaming'
+          : busy === false && !newerGuiTurn && (conv.status === 'streaming' || conv.status === 'starting') ? 'completed'
+            : conv.status;
+      if (disconnected || busy === false) flushDeltas(id);
+      if (disconnected) dropDeltaState(id);
+      const fresh = get();
+      const current = fresh.conversations.find(c => c.id === id)!;
+      set({ conversations: replaceConv(fresh.conversations, id, {
+        ...current,
+        // Runtime readiness is metadata, not the transcript boundary: the service
+        // publishes ready before result, which must still attach stats to this shell.
+        ...(disconnected && current.streamingMessage ? finalizeStreaming(current, 'completed') : {}),
+        status,
+        runtime: { ...conv.runtime, ...runtime, info, ...(busy !== undefined ? { busy,
+          state: runtime.state ?? (busy ? 'busy' : 'ready'),
+        } : {}),
+          ...(disconnected ? { pendingApprovals: [], pendingUserMessageIds: [], commands: [], capabilities: [], runId: null } : {}),
+        },
+        ...(runtime.runId !== undefined ? { runId: runtime.runId || undefined } : {}),
+        ...(runtime.sessionId ? { sessionId: runtime.sessionId } : {}),
+        ...(info?.model ? { currentModel: info.model } : {}),
+        ...(info?.permissionMode && permissionModes.includes(info.permissionMode) ? { permissionMode: info.permissionMode } : {}),
+        ...(runtime.commands ?? info?.commands ? { commands: runtime.commands ?? info?.commands } : {}),
+        ...(runtime.capabilities ?? info?.capabilities ? { capabilities: runtime.capabilities ?? info?.capabilities } : {}),
+        ...(runtime.pendingApprovals ? { pendingApprovals: runtime.pendingApprovals } : {}),
+        ...(disconnected ? { pendingApprovals: [], commands: [], capabilities: [], runId: undefined, queue: [], activity: null } : {}),
+        protocolConnected: !disconnected,
+      }) });
+      if (disconnected) pendingBatches.delete(id);
+      else if (busy === false && pendingBatches.has(id)) get().setStatus('completed', id, runtime.runId || conv.runId);
+    },
+    setSessionMessages: (id, messages) => {
+      const state = get();
+      const conv = state.conversations.find(c => c.id === id);
+      if (!conv) return;
+      const converted = convertSessionMessages(messages);
+      const next = { ...conv, messages: converted, streamingMessage: null };
+      const items = latestTodoFrom(next);
+      set({ conversations: replaceConv(state.conversations, id, { ...next, todoList: items ? { items, updatedAt: Date.now() } : null }) });
+    },
+    importSession: (data) => {
+      const messages = convertSessionMessages(data.messages);
+      const session: Session = { sessionId: data.sessionId, cwd: data.cwd, title: data.title || 'Session', messages,
+        createdAt: Date.now(), cost: 0, inputTokens: 0, outputTokens: 0, origin: 'cli' };
+      const state = get();
+      const existing = state.sessions.find(s => s.sessionId === data.sessionId);
+      set({ sessions: sortSessions(existing ? state.sessions.map(s => s.sessionId === data.sessionId ? { ...s, ...session, cost: s.cost, inputTokens: s.inputTokens, outputTokens: s.outputTokens } : s) : [session, ...state.sessions]) });
+      const tab = get().conversations.find(c => c.sessionId === data.sessionId);
+      if (tab) { get().setSessionMessages(tab.id, data.messages); get().setActiveConversation(tab.id); return tab.id; }
+      return get().newConversation({ fromSession: session });
     },
 
     removeLastTurn: () => {
@@ -684,13 +969,7 @@ permissionMode: state.permissionMode,
       if (userIdx < 0) return null;
       const text = msgs[userIdx].blocks.find((b) => b.kind === 'text')?.text?.trim();
       if (!text) return null;
-      // 移除该 user 消息及其后全部（失败的 assistant 消息/stderr 等）
-      set({
-        conversations: replaceConv(state.conversations, conv.id, {
-          ...conv,
-          messages: msgs.slice(0, userIdx),
-        }),
-      });
+      // Deprecated compatibility accessor: retries must retain the failed transcript.
       return text;
     },
 
@@ -702,7 +981,7 @@ permissionMode: state.permissionMode,
 
     model: '',
     setModel: (model) => set({ model }),
-    permissionMode: 'bypassPermissions',
+    permissionMode: 'default',
     setPermissionMode: (permissionMode) => set({ permissionMode }),
     showThinking: true,
     setShowThinking: (showThinking) => set({ showThinking }),
@@ -834,10 +1113,18 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
     setHighlightMessage: (highlightMessageId) => set({ highlightMessageId }),
 
     handleStream: (msg) => {
-      const state = get();
+      let state = get();
       const convId = msg.conversationId || state.activeConversationId;
-      const conv = state.conversations.find((c) => c.id === convId);
+      let conv = state.conversations.find((c) => c.id === convId);
       if (!conv) return; // 标签页已关闭：残余事件直接丢弃
+      if (msg.runId && retiredRuns.get(convId)?.has(msg.runId)) return;
+      if (msg.runId && conv.runId && msg.runId !== conv.runId && !pendingSends.get(convId)?.size) return;
+      if (msg.type !== 'stream_event') flushDeltas(convId);
+      state = get(); conv = state.conversations.find(c => c.id === convId)!;
+      if (msg.runId && !conv.runId) {
+        get().setRuntime(convId, { runId: msg.runId });
+        state = get(); conv = state.conversations.find(c => c.id === convId)!;
+      }
 
       // 中断后到达的残留流事件直接丢弃（进程退出前 stdout 缓冲区可能还有数据），
       // 否则会创建出永远无法归档的幽灵 streamingMessage
@@ -846,6 +1133,36 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
       }
 
       switch (msg.type) {
+        case 'runner_error':
+        case 'approval_validation_error': {
+          const text = typeof msg.error === 'string' ? msg.error : msg.type;
+          const approvals = msg.type === 'approval_validation_error'
+            ? (conv.pendingApprovals ?? []).map(p => p.requestId === msg.requestId ? { ...p, validationError: text } : p)
+            : undefined;
+          const notice: ChatMessage = { id: genId(), role: 'system', timestamp: Date.now(), status: 'error',
+            cliUuid: msg.uuid, endUuid: msg.uuid, metadata: msg, blocks: [{ kind: 'stderr', text }] };
+          set({ conversations: replaceConv(state.conversations, convId, { ...conv,
+            messages: [...conv.messages, notice],
+            ...(approvals ? { pendingApprovals: approvals, runtime: { ...conv.runtime, pendingApprovals: approvals } } : {}),
+          }) });
+          break;
+        }
+        case 'session_changed':
+          get().setRuntime(convId, { sessionId: msg.sessionId }); break;
+        case 'command_lifecycle': {
+          const notice: ChatMessage = { id: genId(), role: 'system', timestamp: Date.now(), status: 'completed',
+            metadata: msg, blocks: [{ kind: 'notice', text: `command ${msg.state}`, raw: msg }] };
+          set({ conversations: replaceConv(state.conversations, convId, { ...conv, messages: [...conv.messages, notice] }) });
+          break;
+        }
+        case 'approval_request': {
+          const approvals = [...(conv.pendingApprovals || []).filter(p => p.requestId !== msg.requestId), msg];
+          get().setRuntime(convId, { pendingApprovals: approvals }); break;
+        }
+        case 'approval_resolved':
+          get().setRuntime(convId, { pendingApprovals: (conv.pendingApprovals || []).filter(p => p.requestId !== msg.requestId) }); break;
+        case 'permission_mode_changed':
+          get().setRuntime(convId, { info: { ...conv.runtime?.info, permissionMode: msg.permissionMode } }); break;
         case 'system': {
           if (msg.subtype === 'init') {
             set({
@@ -854,6 +1171,10 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
                 sessionId: msg.session_id,
                 currentModel: msg.model || '',
                 thinkingTokens: 0,
+                permissionMode: permissionModes.includes(msg.permissionMode) ? msg.permissionMode : conv.permissionMode,
+                commands: msg.commands ?? msg.slash_commands ?? [],
+                capabilities: msg.capabilities,
+                protocolConnected: true,
               }),
             });
           } else if (msg.subtype === 'thinking_tokens') {
@@ -861,29 +1182,45 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
             set({
               conversations: replaceConv(state.conversations, convId, {
                 ...conv,
-                thinkingTokens: typeof msg.estimated_tokens === 'number' ? msg.estimated_tokens : 0,
+                thinkingTokens: finite(msg.estimated_tokens),
               }),
             });
             setActivity(convId, 'thinking');
           } else if (msg.subtype === 'status' && msg.status === 'requesting') {
             // 每个 API 轮次开始前都会发（含工具结果返回后的下一轮）——反馈条核心信号
             setActivity(convId, 'requesting');
+          } else if (msg.subtype === 'runtime') {
+            get().setRuntime(convId, (msg.state && typeof msg.state === 'object' ? msg.state : msg.runtime ?? msg) as ConversationRuntime);
+          } else if (msg.subtype === 'commands_changed') {
+            get().setRuntime(convId, { commands: Array.isArray(msg.commands) ? msg.commands : [] });
+          } else {
+            const notice: ChatMessage = { id: genId(), role: 'system', timestamp: Date.now(), status: 'completed',
+              cliUuid: msg.uuid, endUuid: msg.uuid, metadata: msg,
+              blocks: [{ kind: 'notice', text: typeof msg.message === 'string' ? msg.message : msg.subtype, raw: msg }] };
+            set({ conversations: replaceConv(state.conversations, convId, { ...conv, messages: [...conv.messages, notice] }) });
           }
           break;
         }
 
         case 'stream_event': {
-          // 逐 token 流式（--include-partial-messages）。只处理顶层；子代理内容
-          // （parent_tool_use_id 非空）仍走完整 assistant 事件，保持块级粒度
-          if (msg.parent_tool_use_id) break;
+          // Partial identities are scoped to the API message, block index and parent.
+          const parentId = msg.parent_tool_use_id;
+          const scope = scopeKey(convId, parentId);
           const ev = msg.event || {};
+          const index = typeof ev.index === 'number' ? ev.index : 0;
+          const toolKey = JSON.stringify([convId, parentId ?? null, deltaMsgIds.get(scope), index]);
 
           if (ev.type === 'message_start') {
             // 记录本轮消息 id：后续完整 assistant 事件据此去重
-            deltaMsgIds.set(convId, ev.message?.id ?? null);
+            flushDeltas(convId);
+            deltaMsgIds.set(scope, ev.message?.id ?? null);
+            lastAssistantMsgIds.set(scope, ev.message?.id ?? null);
             break;
           }
 
+          if (ev.type === 'content_block_start' && ev.content_block?.type) {
+            streamBlockCursors.set(messageKey(convId, parentId, deltaMsgIds.get(scope)), { index, kind: ev.content_block.type });
+          }
           if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
             // 工具调用开始即创建 running 卡片（名称立即可见，input 由完整事件回填）
             flushDeltas(convId); // 保序：先把已缓冲文本落盘
@@ -892,6 +1229,7 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
             const streaming: ChatMessage = cur.streamingMessage
               ? { ...cur.streamingMessage }
               : { id: genId(), role: 'assistant', blocks: [], timestamp: Date.now(), status: 'streaming' };
+            const parent = parentId ? findToolBlock(streaming.blocks, parentId) : null;
             const toolBlock = {
               kind: 'tool_use' as const,
               toolName: String(ev.content_block.name || 'Tool'),
@@ -903,9 +1241,11 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
             set({
               conversations: replaceConv(get().conversations, convId, {
                 ...cur,
-                streamingMessage: { ...streaming, blocks: [...streaming.blocks, toolBlock] },
+                streamingMessage: { ...streaming, blocks: findToolBlock(streaming.blocks, toolBlock.toolId) ? streaming.blocks
+                  : parent ? replaceToolBlockChildren(streaming.blocks, parent.toolId, [...(parent.children ?? []), toolBlock]) : [...streaming.blocks, toolBlock] },
               }),
             });
+            toolInputs.set(toolKey, { toolId: toolBlock.toolId, json: '' });
             setActivity(convId, 'tool', String(ev.content_block.name || 'Tool'));
             break;
           }
@@ -913,35 +1253,83 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
           if (ev.type === 'content_block_delta') {
             const d = ev.delta || {};
             if (d.type === 'text_delta' && typeof d.text === 'string' && d.text) {
-              queueDelta(convId, 'text', d.text);
+              queueDelta(convId, 'text', d.text, parentId, index);
               setActivity(convId, 'writing');
             } else if (d.type === 'thinking_delta' && typeof d.thinking === 'string' && d.thinking) {
-              queueDelta(convId, 'thinking', d.thinking);
+              queueDelta(convId, 'thinking', d.thinking, parentId, index);
               setActivity(convId, 'thinking');
+            } else if (d.type === 'input_json_delta' && typeof d.partial_json === 'string') {
+              const tool = toolInputs.get(toolKey);
+              if (tool) tool.json += d.partial_json;
             }
             break;
+          }
+          if (ev.type === 'content_block_stop') {
+            flushDeltas(convId);
+            const tool = toolInputs.get(toolKey);
+            if (tool?.json) {
+              try {
+                const input = JSON.parse(tool.json);
+                const state = get(); const current = state.conversations.find(c => c.id === convId);
+                if (current?.streamingMessage && input && typeof input === 'object' && !Array.isArray(input)) {
+                  set({ conversations: replaceConv(state.conversations, convId, { ...current, streamingMessage: {
+                    ...current.streamingMessage, blocks: backfillToolInput(current.streamingMessage.blocks, tool.toolId, input),
+                  } }) });
+                }
+              } catch { /* A full assistant event remains authoritative for incomplete JSON. */ }
+            }
           }
           break;
         }
 
         case 'assistant': {
+          if (msg.uuid) {
+            const fingerprints = assistantEvents.get(convId) ?? new Set<string>();
+            const fingerprint = JSON.stringify([msg.runId, msg.parent_tool_use_id, msg.uuid, msg.message]);
+            if (fingerprints.has(fingerprint)) break;
+            fingerprints.add(fingerprint); assistantEvents.set(convId, fingerprints);
+          }
           // 字段防御：id/content 缺失时不得抛异常，也不得误判为同消息分片
           const msgId = typeof msg.message?.id === 'string' ? msg.message.id : null;
-          const sameMsgShard = msgId !== null && lastAssistantMsgIds.get(convId) === msgId;
-          lastAssistantMsgIds.set(convId, msgId);
-
           const parentId = msg.parent_tool_use_id;
-          // delta 模式：本条消息的 text/thinking 已由 stream_event 逐字构建，
-          // 完整事件仅用于回填 tool_use 的 input（内容去重，避免双倍文本）
-          const deltaMode = !parentId && msgId !== null && deltaMsgIds.get(convId) === msgId;
+          const shardKey = JSON.stringify([convId, parentId ?? null]);
+          const sameMsgShard = msgId !== null && lastAssistantMsgIds.get(shardKey) === msgId
+            && (!msg.uuid || lastAssistantUuids.get(shardKey) === msg.uuid);
+          const contentBlocks = Array.isArray(msg.message?.content) ? msg.message.content : [];
+          const cursor = msgId !== null ? streamBlockCursors.get(messageKey(convId, parentId, msgId)) : undefined;
+          const uuidKey = JSON.stringify([convId, parentId ?? null, msgId, msg.uuid]);
+          const blockIndices = contentBlocks.map((block, ordinal) => {
+            if (contentBlocks.length > 1) return ordinal;
+            const bound = msg.uuid ? assistantBlockIndices.get(uuidKey) : undefined;
+            const index = bound ?? (cursor?.kind === block.type ? cursor.index : undefined);
+            if (msg.uuid && index !== undefined) assistantBlockIndices.set(uuidKey, index);
+            return index;
+          });
+          const isIndexedEcho = (block: typeof contentBlocks[number], ordinal: number, container: UIBlock[]) => {
+            const kind = block.type;
+            const index = blockIndices[ordinal];
+            return msgId !== null && index !== undefined && (kind === 'text' || kind === 'thinking')
+              && container.some(b => b.kind === kind && b.msgId === msgId && b.blockIndex === index);
+          };
+          // A late normalised echo may arrive after result or after the next prompt.
+          // Look only at matching indexed identities, never at equal text across blocks.
+          const archivedContainer = parentId ? conv.messages.flatMap(m => findToolBlock(m.blocks, parentId)?.children ?? [])
+            : conv.messages.filter(m => m.role === 'assistant').flatMap(m => m.blocks);
+          if (contentBlocks.length && contentBlocks.every((block, i) => isIndexedEcho(block, i, archivedContainer))) break;
+          lastAssistantMsgIds.set(shardKey, msgId);
+          lastAssistantUuids.set(shardKey, msg.uuid);
 
           // 浅拷贝消息壳，后续块更新全部不可变（新数组/新块对象）：
           // 配合渲染层 React.memo，已完成块引用稳定可跳过重渲染
-          const streaming: ChatMessage = conv.streamingMessage
-            ? { ...conv.streamingMessage }
+          const archivedParent = parentId ? conv.messages.find(m => findToolBlock(m.blocks, parentId)) : undefined;
+          const background = !!parentId && (!conv.streamingMessage || (!!archivedParent && !findToolBlock(conv.streamingMessage.blocks, parentId)));
+          if (background) backgroundConversations.add(convId);
+          const streaming: ChatMessage = background && archivedParent ? { ...archivedParent }
+            : conv.streamingMessage ? { ...conv.streamingMessage }
             : { id: genId(), role: 'assistant', blocks: [], timestamp: Date.now(), status: 'streaming' };
-
-          const contentBlocks = Array.isArray(msg.message?.content) ? msg.message.content : [];
+          streaming.cliUuid ??= msg.uuid;
+          streaming.endUuid = msg.uuid ?? streaming.endUuid;
+          streaming.metadata = msg;
 
           // 1) tool_result：不可变地更新对应 tool_use 块（含子代理 children 路径）
           let blocks = streaming.blocks;
@@ -955,7 +1343,7 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
         // 2) text/thinking/tool_use：定位容器（顶层或子代理父块），不可变合并/追加。
         //    重新查找父块：步骤 1 可能已替换其 children 数组（parentId 已在 case 开头声明）
         let parentToolId: string | null = null;
-        let container: UIBlock[] = blocks;
+        let container: UIBlock[] = [...blocks];
         if (parentId) {
             const parent = findToolBlock(blocks, parentId);
             if (parent) {
@@ -964,35 +1352,35 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
             }
           }
 
-        let touched = parentToolId !== null; // 子代理容器拷贝后必须写回
-        for (const block of contentBlocks) {
+        let touched = true; // 子代理容器拷贝后必须写回
+        for (const [ordinal, block] of contentBlocks.entries()) {
+          const blockIndex = blockIndices[ordinal];
           if (block.type === 'text') {
-            // delta 模式下已由 stream_event 逐字构建，跳过（去重）
-            if (deltaMode) continue;
+            if (isIndexedEcho(block, ordinal, container)) continue;
             // 同消息分片续写：仅当容器尾部是同一条消息的 text 块时追加。
               // 不得按 kind 全局查找——CLI 会把同一条消息拆成多个事件发送
               // （[thinking]、[text] 分片），若第 1 轮已有开场文本，后续轮次的
               // 最终答案会被拼进那个旧块，造成“结果在中间、后面跟着思考/工具”的错位
               const last = container[container.length - 1];
-              if (sameMsgShard && last?.kind === 'text' && last.msgId === msgId) {
-                container[container.length - 1] = { kind: 'text', text: last.text + block.text, msgId: msgId ?? undefined };
+              if (sameMsgShard && blockIndex === undefined && last?.kind === 'text' && last.msgId === msgId && last.blockIndex === undefined) {
+                container[container.length - 1] = { ...last, text: last.text + block.text };
               } else {
-                container.push({ kind: 'text', text: block.text, msgId: msgId ?? undefined });
+                container.push({ kind: 'text', text: block.text, msgId: msgId ?? undefined, blockIndex });
                 touched = true;
               }
           } else if (block.type === 'thinking') {
-            if (deltaMode) continue; // 已由 delta 构建，跳过
+            if (isIndexedEcho(block, ordinal, container)) continue;
             const last = container[container.length - 1];
-              if (sameMsgShard && last?.kind === 'thinking' && last.msgId === msgId) {
-                container[container.length - 1] = { kind: 'thinking', text: last.text + block.thinking, msgId: msgId ?? undefined };
+              if (sameMsgShard && blockIndex === undefined && last?.kind === 'thinking' && last.msgId === msgId && last.blockIndex === undefined) {
+                container[container.length - 1] = { ...last, text: last.text + block.thinking };
               } else {
-                container.push({ kind: 'thinking', text: block.thinking, msgId: msgId ?? undefined });
+                container.push({ kind: 'thinking', text: block.thinking, msgId: msgId ?? undefined, blockIndex });
                 touched = true;
               }
           } else if (block.type === 'tool_use') {
-            if (deltaMode && findToolBlock(blocks, block.id)) {
+            if (findToolBlock(blocks, block.id)) {
               // 卡片已由 content_block_start 预创建：回填 input（不可变）
-              blocks = parentToolId ? replaceToolBlockChildren(blocks, parentToolId, backfillToolInput(container, block.id, block.input)) : backfillToolInput(blocks, block.id, block.input);
+              container = backfillToolInput(container, block.id, block.input);
               continue;
             }
             container.push({
@@ -1002,6 +1390,7 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
               input: block.input,
               status: 'running',
               startedAt: Date.now(),
+              metadata: block,
             });
             touched = true;
           }
@@ -1029,8 +1418,10 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
         set({
           conversations: replaceConv(state.conversations, convId, {
             ...conv,
-            streamingMessage: streaming,
-            activity,
+            ...(background ? { messages: archivedParent
+              ? conv.messages.map(m => m === archivedParent ? { ...streaming, status: 'completed' as const } : m)
+              : [...conv.messages, { ...streaming, status: 'completed' as const }] }
+              : { streamingMessage: streaming, activity }),
           }),
         });
         // TodoWrite 清单同步（fresh 读取；无 TodoWrite 调用时为 no-op）
@@ -1039,15 +1430,31 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
       }
 
       case 'user': {
+          if (msg.uuid && !conv.messages.some(m => m.cliUuid === msg.uuid) && pendingSends.get(convId)?.size) {
+            const replay = replayIds.get(convId) ?? new Set<string>();
+            replay.add(msg.uuid); replayIds.set(convId, replay);
+          }
           // tool_result 通过 user 消息返回
           const streaming = conv.streamingMessage;
           const content = Array.isArray(msg.message?.content) ? msg.message.content : [];
+          let archivedMessages = conv.messages;
+          for (const block of content) {
+            if (block.type !== 'tool_result') continue;
+            archivedMessages = archivedMessages.map(m => {
+              const updated = applyToolResult(m.blocks, { ...block, structuredResult: msg.tool_use_result });
+              return updated.hit ? { ...m, blocks: updated.blocks, endUuid: msg.uuid ?? m.endUuid } : m;
+            });
+          }
+          if (archivedMessages.some((m, i) => m !== conv.messages[i])) {
+            set({ conversations: replaceConv(get().conversations, convId, { ...conv, messages: archivedMessages }) });
+            syncTodosFromBlocks(convId);
+          }
           if (streaming && content.length > 0) {
             let blocks = streaming.blocks;
             let hit = false;
             for (const block of content) {
               if (block.type === 'tool_result') {
-                const r = applyToolResult(blocks, block);
+                const r = applyToolResult(blocks, { ...block, structuredResult: msg.tool_use_result });
                 if (r.hit) {
                   blocks = r.blocks;
                   hit = true;
@@ -1059,17 +1466,26 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
               set({
                 conversations: replaceConv(state.conversations, convId, {
                   ...conv,
-                  streamingMessage: { ...streaming, blocks },
+                  messages: archivedMessages,
+                  streamingMessage: { ...streaming, blocks, endUuid: msg.uuid ?? streaming.endUuid },
                 }),
               });
               // 工具结果返回后将发起下一轮请求：阶段切回 requesting
               setActivity(convId, 'requesting');
+              syncTodosFromBlocks(convId);
             }
           }
           break;
         }
 
         case 'result': {
+          if (msg.uuid) {
+            const ids = resultIds.get(convId) ?? new Set<string>();
+            if (ids.has(msg.uuid)) break;
+            ids.add(msg.uuid); resultIds.set(convId, ids);
+          }
+          if (msg.hasPending) pendingBatches.add(convId); else pendingBatches.delete(convId);
+          const isError = msg.is_error || (typeof msg.subtype === 'string' && msg.subtype.startsWith('error'));
           // 先落盘缓冲中的 delta（最多 40ms 尾巴），避免归档丢失；
           // flush 会更新 store，后续必须用 fresh 读取（不能用 switch 开头的旧快照）
           flushDeltas(convId);
@@ -1077,13 +1493,24 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
           if (!convNow) break;
 
           // stats 块以不可变方式附加（finalizeStreaming 不 mutate 原引用）
-          const withStats = convNow.streamingMessage
-            ? { ...convNow.streamingMessage, blocks: [...convNow.streamingMessage.blocks, { kind: 'stats', data: msg } as UIBlock] }
-            : null;
+          const shell = convNow.streamingMessage ?? { id: genId(), role: 'assistant' as const, timestamp: Date.now(), status: 'streaming' as const, blocks: [] as UIBlock[] };
+          let resultBlocks = [...shell.blocks];
+          const finalMsgId = lastAssistantMsgIds.get(scopeKey(convId));
+          const hasFinalText = resultBlocks.some(b => b.kind === 'text' && b.text && (!finalMsgId || b.msgId === finalMsgId));
+          // A tool preamble from an earlier API message is not the final answer.
+          // Never compare result text against all history or rewrite its newlines.
+          if (!hasFinalText && typeof msg.result === 'string' && msg.result) {
+            resultBlocks.push({ kind: 'text', text: msg.result, msgId: finalMsgId ?? undefined });
+          }
+          if (Array.isArray(msg.errors)) for (const error of msg.errors) {
+            if (typeof error === 'string') resultBlocks.push({ kind: 'stderr', text: error });
+          }
+          const withStats = { ...shell,
+            blocks: [...resultBlocks, { kind: 'stats', data: msg } as UIBlock] };
 
           const archived = finalizeStreaming(
             { ...convNow, streamingMessage: withStats },
-            msg.is_error ? 'error' : 'completed'
+            isError ? 'error' : 'completed'
           );
 
           // 归档会话（标题取第一条用户消息）
@@ -1092,9 +1519,11 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
 
           // 字段防御：CLI 版本间字段可能缺失/畸形，缺省按 0 处理而非 NaN 扩散
           const usage = msg.usage || {};
-          const inputTokens = usage.input_tokens || 0;
-          const outputTokens = usage.output_tokens || 0;
-          const cost = typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : 0;
+          const models = msg.modelUsage && typeof msg.modelUsage === 'object' ? Object.values(msg.modelUsage) : [];
+          const inputTokens = models.length ? models.reduce((n, u) => n + finite(u?.inputTokens) + finite(u?.cacheReadInputTokens) + finite(u?.cacheCreationInputTokens), 0)
+            : finite(usage.input_tokens) + finite(usage.cache_read_input_tokens) + finite(usage.cache_creation_input_tokens);
+          const outputTokens = models.length ? models.reduce((n, u) => n + finite(u?.outputTokens), 0) : finite(usage.output_tokens);
+          const cost = finite(msg.total_cost_usd);
 
           // 上下文占用校准：
           // - limit 始终从 modelUsage.contextWindow 校准（真实上限）
@@ -1105,17 +1534,14 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
           //   compact 后占用下降是正常现象，不做 Math.max 钉死。
           let contextUsage = convNow.contextUsage;
           const modelUsage = msg.modelUsage ? Object.values(msg.modelUsage)[0] : undefined;
-          if (modelUsage?.contextWindow) {
+          if (finite(modelUsage?.contextWindow) > 0) {
             const turns = typeof msg.num_turns === 'number' ? msg.num_turns : 1;
             if (turns <= 1) {
               const used =
-                inputTokens +
-                (usage.cache_read_input_tokens || 0) +
-                (usage.cache_creation_input_tokens || 0) +
-                outputTokens;
-              contextUsage = { used, limit: modelUsage.contextWindow };
+                finite(usage.input_tokens) + finite(usage.cache_read_input_tokens) + finite(usage.cache_creation_input_tokens) + finite(usage.output_tokens);
+              contextUsage = { used, limit: finite(modelUsage?.contextWindow) };
             } else if (contextUsage) {
-              contextUsage = { ...contextUsage, limit: modelUsage.contextWindow };
+              contextUsage = { ...contextUsage, limit: finite(modelUsage?.contextWindow) };
             }
           }
 
@@ -1180,7 +1606,8 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
               ...convNow,
               messages: archived.messages,
               streamingMessage: null,
-              status: msg.is_error ? 'error' : 'completed',
+              status: msg.hasPending ? 'streaming' : isError ? 'error' : 'completed',
+              runtime: { ...convNow.runtime, busy: msg.hasPending === true, state: msg.hasPending ? 'busy' : 'ready' },
               contextUsage,
               activity: null, // 轮次结束：清除反馈条
             }),
@@ -1192,7 +1619,7 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
 
           // 首次归档的新会话：触发 AI 自动命名（异步，不阻塞队列续发；
           // 仅当首条用户消息非空，失败静默保留截断标题）
-          if (isNewSessionEntry && !msg.is_error) {
+          if (isNewSessionEntry && !isError) {
             const firstText = firstUserMsg?.blocks.find((b) => b.kind === 'text')?.text || '';
             if (firstText.trim()) {
               void autoTitleSession(msg.session_id, convNow.cwd, firstText.slice(0, 30), firstText);
@@ -1201,7 +1628,8 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
 
           // 队列续发/清空：result 是本轮的确定性终点（比 status 事件先到），
           // 即便该标签页在后台也必须处理
-          if (msg.is_error) {
+          if (msg.hasPending) break;
+          if (isError) {
             const cur = get().conversations.find((c) => c.id === convId);
             if (cur && cur.queue.length > 0) {
               set({ conversations: replaceConv(get().conversations, convId, { ...cur, queue: [] }) });
@@ -1257,15 +1685,27 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
       }
     },
 
-    setStatus: (status, conversationId) => {
-      const state = get();
+    setStatus: (status, conversationId, runId) => {
+      let state = get();
       const convId = conversationId || state.activeConversationId;
-      const conv = state.conversations.find((c) => c.id === convId);
-      if (!conv) return; // 标签页已关闭：忽略
+      let conv = state.conversations.find((c) => c.id === convId);
+      if (!conv) return false; // 标签页已关闭：忽略
+      if (runId && (retiredRuns.get(convId)?.has(runId) || (conv.runId && conv.runId !== runId && !pendingSends.get(convId)?.size))) return false;
+      // A terminal status for the previous turn must not close a turn that was
+      // already dispatched from the GUI queue. The new send keeps a pending
+      // nonce until its acceptance receipt arrives, so it is authoritative
+      // over a stale completed/ready notification from the previous run.
+      if (status === 'completed' && (pendingSends.get(convId)?.size ?? 0) > 0) return false;
+      if (!conv.streamingMessage && (backgroundConversations.has(convId) || (pendingDeltas.get(convId)?.length && conv.status === 'completed'))) {
+        flushDeltas(convId);
+        if ((status === 'error' || status === 'completed') && conv.status === 'completed' && !conv.runtime?.busy && !runId && !pendingBatches.has(convId)) return false;
+        state = get(); conv = state.conversations.find(c => c.id === convId)!;
+      }
 
       // 中断或出错：先落盘缓冲的 delta（保留最后 ≤40ms 内容）再归档，避免丢失
       if (status === 'aborted' || status === 'error') {
         flushDeltas(convId);
+        state = get(); conv = state.conversations.find(c => c.id === convId)!;
       }
 
       // 中断或出错时，把未完成的流式消息归档，避免内容丢失
@@ -1287,7 +1727,23 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
           conversations: replaceConv(state.conversations, convId, { ...conv, status }),
         });
       }
-      dropDeltaState(convId);
+      const latest = get();
+      const target = latest.conversations.find(c => c.id === convId)!;
+      const busy = status === 'starting' || status === 'streaming';
+      set({ conversations: replaceConv(latest.conversations, convId, { ...target,
+        runtime: { ...target.runtime, busy, state: target.protocolConnected === false ? 'closed' : busy ? status === 'starting' ? 'starting' : 'busy' : 'ready' },
+        ...(!busy ? { activity: null } : {}),
+        ...(status === 'aborted' || status === 'error' ? { queue: [] } : {}),
+      }) });
+      if (!busy && pendingBatches.delete(convId) && status === 'completed' && target.queue.length) {
+        const [next, ...rest] = target.queue;
+        const now = get();
+        const current = now.conversations.find(c => c.id === convId)!;
+        set({ conversations: replaceConv(now.conversations, convId, { ...current, queue: rest }) });
+        void dispatchPrompt(next, convId);
+      }
+      if (status === 'aborted' || status === 'error') dropDeltaState(convId);
+      return true;
     },
 
     setContextUsage: (usage, conversationId) => {
@@ -1299,6 +1755,9 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
     },
 
     hydrate: (data) => {
+      for (const id of deltaTimers.keys()) dropDeltaState(id);
+      deltaMsgIds.clear(); streamBlockCursors.clear(); assistantBlockIndices.clear(); lastAssistantUuids.clear(); toolInputs.clear(); pendingDeltas.clear();
+      lastAssistantMsgIds.clear(); retiredRuns.clear(); pendingSends.clear(); resultIds.clear(); replayIds.clear(); assistantEvents.clear(); backgroundConversations.clear(); pendingBatches.clear();
       const sessions = data.sessions || [];
 
       // 标签页恢复：新格式（conversations 数组）或旧格式（单会话字段）迁移
@@ -1308,7 +1767,10 @@ setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
           if (!c || typeof c.id !== 'string') continue;
           const restored: Conversation = {
             ...makeConversation(typeof c.cwd === 'string' ? c.cwd : data.cwd || ''),
-            ...c,
+            ...persistentConversation(c),
+            protocolConnected: false,
+            commands: [],
+            pendingApprovals: [],
             activity: null, // 瞬态：重启后清除
             todoList: sanitizeTodoList(c.todoList), // 形状防御：畸形数据置空
             // 应用重启后进程已消失：运行态收敛
@@ -1349,11 +1811,11 @@ restored.messages = [...restored.messages, { ...c.streamingMessage, status: 'com
         sessions: sortSessions(sessions),
         conversations,
         activeConversationId,
-        totalCost: data.totalCost || 0,
-        totalInputTokens: data.totalInputTokens || 0,
-        totalOutputTokens: data.totalOutputTokens || 0,
+        totalCost: finite(data.totalCost),
+        totalInputTokens: finite(data.totalInputTokens),
+        totalOutputTokens: finite(data.totalOutputTokens),
         model: data.model || '',
-        permissionMode: data.permissionMode || 'bypassPermissions',
+        permissionMode: data.permissionMode && permissionModes.includes(data.permissionMode) ? data.permissionMode : 'default',
         showThinking: data.showThinking !== false,
         notifyOnComplete: data.notifyOnComplete !== false,
         maxSessions: typeof data.maxSessions === 'number' && data.maxSessions > 0

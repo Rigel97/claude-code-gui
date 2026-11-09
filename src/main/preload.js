@@ -1,6 +1,29 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+function subscribe(channel, callback) {
+  const handler = (_event, payload) => callback(payload);
+  ipcRenderer.on(channel, handler);
+  return () => ipcRenderer.removeListener(channel, handler);
+}
+
 const api = {
+  openExternal: url => ipcRenderer.invoke('app:open-external', url),
+  runtime: {
+    get: () => ipcRenderer.invoke('runtime:get'),
+    set: (options, storage) => ipcRenderer.invoke('runtime:set', options, storage),
+    diagnostics: () => ipcRenderer.invoke('runtime:diagnostics'),
+  },
+  terminal: {
+    create: spec => ipcRenderer.invoke('terminal:create', spec),
+    list: () => ipcRenderer.invoke('terminal:list'),
+    attach: id => ipcRenderer.invoke('terminal:attach', id),
+    write: (id, data) => ipcRenderer.invoke('terminal:write', id, data),
+    resize: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', id, cols, rows),
+    close: id => ipcRenderer.invoke('terminal:close', id),
+    health: () => ipcRenderer.invoke('terminal:health'),
+    onData: callback => subscribe('native-terminal:data', callback),
+    onExit: callback => subscribe('native-terminal:exit', callback),
+  },
   openDirectory: () => ipcRenderer.invoke('dialog:open-directory'),
 
   // 复制文本：走主进程 clipboard（渲染进程失焦时 Web Clipboard API 会失败）
@@ -47,20 +70,47 @@ const api = {
   },
 
   claude: {
+    start: payload => ipcRenderer.invoke('claude:start', payload),
+    interrupt: payload => ipcRenderer.invoke('claude:interrupt', payload),
+    close: payload => ipcRenderer.invoke('claude:close', payload),
+    // Explicit read-only snapshot: no bootstrap, prompt, polling or implicit model call.
+    runtimeState: payload => ipcRenderer.invoke('claude:runtime-state', payload),
+    states: () => ipcRenderer.invoke('claude:states'),
+    getRunners: () => ipcRenderer.invoke('claude:states'),
+    commands: payload => ipcRenderer.invoke('claude:commands', payload),
+    mcpStatus: payload => ipcRenderer.invoke('claude:mcp-status', payload),
+    mode: payload => ipcRenderer.invoke('claude:mode', payload),
+    respond: payload => ipcRenderer.invoke('claude:respond', payload),
+    plan: payload => ipcRenderer.invoke('claude:plan', payload),
+    historyList: payload => ipcRenderer.invoke('claude:history-list', payload),
+    historyRead: payload => ipcRenderer.invoke('claude:history-read', payload),
+    fork: payload => ipcRenderer.invoke('claude:fork', payload),
+    editFork: payload => ipcRenderer.invoke('claude:edit-fork', payload),
+    rewind: payload => ipcRenderer.invoke('claude:rewind', payload),
+    rename: payload => ipcRenderer.invoke('claude:rename', payload),
+    exportTranscript: payload => ipcRenderer.invoke('claude:export-transcript', payload),
+    onRuntime: callback => subscribe('claude:runtime', callback),
+    onRuntimeChange: callback => subscribe('claude:runtime', callback),
     send: (payload) => ipcRenderer.invoke('claude:send', payload),
     // 中断指定对话（多标签页各自的 runner）
     abort: (conversationId) => ipcRenderer.invoke('claude:abort', conversationId),
-    // 零成本查询会话当前上下文占用（/context 本地命令）
-    getContext: (cwd, sessionId) => ipcRenderer.invoke('claude:context', { cwd, sessionId }),
+    // 优先读取 live SDK context；不支持时交由主进程执行可取消的 /context CLI。
+    getContext: (cwd, sessionId, conversationId) => ipcRenderer.invoke('claude:context', typeof cwd === 'object' ? cwd : { cwd, sessionId, conversationId }),
     // 压缩会话上下文（/compact，需一次总结调用）；返回 { success, error?, context? }
-    compact: (cwd, sessionId) => ipcRenderer.invoke('claude:compact', { cwd, sessionId }),
-    // AI 自动命名：传入首条用户消息文本，返回标题或 null（失败静默）
+    compact: (cwd, sessionId, conversationId) => ipcRenderer.invoke('claude:compact', typeof cwd === 'object' ? cwd : { cwd, sessionId, conversationId }),
+    // Legacy API 保留兼容；主进程返回 null，不进行自动命名模型调用。
     generateTitle: (cwd, text) => ipcRenderer.invoke('claude:generate-title', { cwd, text }),
 
     onStream: (callback) => {
       const handler = (_e, data) => callback(data);
       ipcRenderer.on('claude:stream', handler);
-      return () => ipcRenderer.removeListener('claude:stream', handler);
+      // Legacy App uses this metadata-only branch; consumers should choose this OR onRuntime, not both.
+      const runtimeHandler = (_event, state) => callback({ type: 'system', subtype: 'runtime', conversationId: state.conversationId, runId: state.runId, state });
+      ipcRenderer.on('claude:runtime', runtimeHandler);
+      return () => {
+        ipcRenderer.removeListener('claude:stream', handler);
+        ipcRenderer.removeListener('claude:runtime', runtimeHandler);
+      };
     },
 
     onStatusChange: (callback) => {
@@ -71,22 +121,13 @@ const api = {
   },
 
   fs: {
-    readDir: (dirPath) => ipcRenderer.invoke('fs:read-dir', dirPath),
+    readDir: (dirPath, options) => ipcRenderer.invoke('fs:read-dir', dirPath, options),
+    openExternal: filePath => ipcRenderer.invoke('fs:open-external', filePath),
     // 粘贴的图片（dataURL）存为临时文件，返回绝对路径供 @ 引用
     saveImage: (dataUrl) => ipcRenderer.invoke('fs:save-image', { dataUrl }),
     // 文件预览：返回 { ok, kind: 'text'|'image', content?, dataUrl?, size, truncated? }
-    readFile: (filePath) => ipcRenderer.invoke('fs:read-file', { path: filePath }),
+    readFile: (filePath, options) => ipcRenderer.invoke('fs:read-file', { ...options, path: filePath }),
   },
-
-  git: {
-    // 返回 { repo, branch?, changes?: [{path, change, staged}] }
-    status: (cwd) => ipcRenderer.invoke('git:status', cwd),
-    // 单文件 unified diff 文本（无差异返回 ''）
-    diff: (cwd, filePath) => ipcRenderer.invoke('git:diff', { cwd, path: filePath }),
-    // 回滚单文件工作区改动，返回 { ok, error? }
-    checkoutFile: (cwd, filePath) => ipcRenderer.invoke('git:checkout', { cwd, path: filePath }),
-  },
-
   skills: {
     list: (cwd) => ipcRenderer.invoke('skills:list', cwd),
     create: (payload) => ipcRenderer.invoke('skills:create', payload),

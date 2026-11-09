@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { X, FileText, Loader2, AlertCircle } from 'lucide-react';
 // PrismLight + 按需注册：与 MarkdownRenderer 同款策略，避免全量语言打包
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -63,30 +63,95 @@ function formatSize(n: number): string {
 interface PreviewData {
   ok: boolean;
   error?: string;
-  kind?: 'text' | 'image';
+  kind?: 'text' | 'image' | 'binary';
+  offset?: number;
+  nextOffset?: number | null;
+  version?: string;
   content?: string;
   dataUrl?: string;
   size?: number;
   truncated?: boolean;
 }
 
-/**
- * 文件预览弹层：文本（语法高亮，512KB 截断）/ 图片（dataURL）。
- * Esc 或点击遮罩关闭。
- */
+const PAGE_BYTES = 512 * 1024;
+// Defense in depth: the main-process bridge must also enforce file type and executable restrictions.
+function safeExternalPath(filePath: string): boolean {
+  const local = (filePath.startsWith('/') && !filePath.startsWith('//')) || /^[A-Za-z]:[\\/]/.test(filePath);
+  if (!local || filePath.includes('\0') || /(?:^|[\\/])[^\\/]+\.app(?:[\\/]|$)/i.test(filePath)) return false;
+  return /\.(?:txt|md|markdown|json|jsonl|csv|tsv|log|yaml|yml|toml|ini|cfg|conf|css|scss|less|html|htm|xml|svg|ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|c|h|cpp|hpp|sql|png|jpe?g|gif|webp|bmp|ico)$/i.test(filePath);
+}
+
+/** Local file preview, retaining only the current text page. */
 export function FilePreview({ path, onClose }: { path: string; onClose: () => void }) {
   const [data, setData] = useState<PreviewData | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setData(null);
-    Promise.resolve().then(() => (window as any).api.fs.readFile(path)).then((r: PreviewData) => {
-      if (!cancelled) setData(r);
-    }).catch((error: unknown) => {
-      if (!cancelled) setData({ ok: false, error: error instanceof Error ? error.message : String(error) });
-    });
-    return () => { cancelled = true; };
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [externalError, setExternalError] = useState('');
+  const [opening, setOpening] = useState(false);
+  const [history, setHistory] = useState<number[]>([0]);
+  const [pageIndex, setPageIndex] = useState(0);
+  const generation = useRef(0);
+  const busy = useRef(false);
+  const current = useRef<PreviewData | null>(null);
+  const pending = useRef({ offset: 0, index: 0, reset: true });
+  const load = useCallback(async (offset: number, index: number, reset = false) => {
+    if (busy.current) return;
+    busy.current = true;
+    const token = generation.current;
+    pending.current = { offset, index, reset };
+    setLoading(true);
+    setError('');
+    try {
+      const result: PreviewData = await (window as any).api.fs.readFile(path, { offset, limit: PAGE_BYTES });
+      if (token !== generation.current) return;
+      if (!result || !result.ok) {
+        if (!current.current) setData(result || { ok: false });
+        throw new Error(result?.error || '无法读取文件');
+      }
+      const paged = typeof result.offset === 'number' && result.nextOffset !== undefined;
+      if (offset > 0 && !paged) throw new Error('当前连接不支持分页，请回到首页');
+      if (paged && (result.offset !== offset || (result.nextOffset !== null && (!Number.isSafeInteger(result.nextOffset) || result.nextOffset! <= offset || result.nextOffset! > (result.size ?? 0))))) throw new Error('分页偏移无效，请回到首页');
+      if (!reset && current.current && ((result.version && current.current.version && result.version !== current.current.version) || result.size !== current.current.size)) throw new Error('文件已变化，请回到首页重新读取（当前仍为旧页）');
+      if (result.kind === 'text' && new TextEncoder().encode(result.content || '').length > PAGE_BYTES) throw new Error('返回文本超过单页 512KB 限制');
+      current.current = result;
+      setData(result);
+      setPageIndex(index);
+      setHistory(previous => reset ? [0] : [...previous.slice(0, index), offset]);
+    } catch (reason) {
+      if (token === generation.current) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+        if (!current.current) setData(previous => previous?.ok === false ? previous : { ok: false });
+      }
+    } finally {
+      if (token === generation.current) { busy.current = false; setLoading(false); }
+    }
   }, [path]);
+  useEffect(() => {
+    generation.current++;
+    busy.current = false;
+    current.current = null;
+    setData(null);
+    setHistory([0]);
+    setPageIndex(0);
+    setExternalError('');
+    setOpening(false);
+    void load(0, 0, true);
+    return () => { generation.current++; busy.current = false; };
+  }, [load]);
+  const openExternal = async () => {
+    if (!safeExternalPath(path) || opening) return;
+    const token = generation.current;
+    setOpening(true);
+    setExternalError('');
+    try {
+      const bridge = (window as any).api.fs;
+      if (typeof bridge.openExternal !== 'function') throw new Error('当前连接不支持外部打开');
+      const result = await bridge.openExternal(path);
+      if (result === false || (typeof result === 'string' && result) || result?.ok === false || result?.error) throw new Error(result?.error || (typeof result === 'string' ? result : '外部打开失败'));
+    } catch (reason) {
+      if (token === generation.current) setExternalError(reason instanceof Error ? reason.message : String(reason));
+    } finally { if (token === generation.current) setOpening(false); }
+  };
 
   // Esc 关闭（capture 阶段拦截：避免同时触发输入框的「Esc 中断生成」）
   useEffect(() => {
@@ -123,21 +188,25 @@ export function FilePreview({ path, onClose }: { path: string; onClose: () => vo
           <span className="text-[10px] font-mono text-text-dim shrink-0">
             {typeof data?.size === 'number' ? formatSize(data.size) : ''}
           </span>
+          <button disabled={!safeExternalPath(path) || opening} onClick={() => void openExternal()} title={safeExternalPath(path) ? '使用本地默认应用打开' : '仅允许安全的本地文本或图片路径，主进程还会校验文件类型'} className="text-xs text-accent-cyan disabled:opacity-40">在外部打开</button>
           <button onClick={onClose} className="text-text-muted hover:text-text-primary shrink-0 ml-1" title="关闭 (Esc)">
             <X className="w-4 h-4" />
           </button>
         </div>
 
+        {error && <div role="alert" className="px-4 py-2 text-xs text-accent-orange">{error} <button disabled={loading} onClick={() => void load(pending.current.offset, pending.current.index, pending.current.reset)} className="underline">重试</button> <button disabled={loading} onClick={() => void load(0, 0, true)} className="underline">回到首页</button></div>}
+        {externalError && <div role="alert" className="px-4 py-2 text-xs text-accent-orange">{externalError}</div>}
+        {loading && data !== null && <div role="status" className="text-xs px-4">正在读取，当前显示仍为已加载页</div>}
         {/* 内容 */}
-        <div className="flex-1 overflow-auto">
+        <div key={`${path}:${pageIndex}`} className="flex-1 overflow-auto">
           {data === null ? (
             <div className="flex items-center justify-center h-full text-text-dim">
               <Loader2 className="w-5 h-5 animate-spin" />
             </div>
-          ) : !data.ok ? (
+          ) : !data.ok || data.kind === 'binary' ? (
             <div className="flex flex-col items-center justify-center h-full gap-2 text-center px-6">
               <AlertCircle className="w-6 h-6 text-accent-orange/70" />
-              <div className="text-xs text-text-muted">{data.error || '无法读取文件'}</div>
+              <div className="text-xs text-text-muted">{error ? '无法预览；可重试或请求在外部打开（由安全策略校验）' : data.error || '无法读取文件'}</div>
             </div>
           ) : data.kind === 'image' ? (
             <div className="flex items-center justify-center h-full p-4">
@@ -149,7 +218,7 @@ export function FilePreview({ path, onClose }: { path: string; onClose: () => vo
             </div>
           ) : (
             <div className="relative">
-              <SyntaxHighlighter
+              {(data.content || '').length > 32 * 1024 ? <pre className="p-3 text-xs font-mono whitespace-pre-wrap break-words">{data.content || ''}</pre> : <SyntaxHighlighter
                 language={lang || 'text'}
                 style={oneDark}
                 showLineNumbers
@@ -162,15 +231,18 @@ export function FilePreview({ path, onClose }: { path: string; onClose: () => vo
                 codeTagProps={{ style: { fontFamily: 'JetBrains Mono, Fira Code, monospace' } }}
               >
                 {data.content || ''}
-              </SyntaxHighlighter>
-              {data.truncated && (
-                <div className="sticky bottom-0 bg-bg-deep/95 border-t border-accent-orange/30 px-4 py-1.5 text-[10px] font-mono text-accent-orange/90">
-                  文件超过 512KB，仅显示前 512KB 内容
-                </div>
-              )}
+              </SyntaxHighlighter>}
             </div>
           )}
         </div>
+        {data?.ok && data.kind === 'text' && <div className="shrink-0 border-t border-border/50 px-4 py-2 text-xs text-text-muted">
+          {typeof data.offset === 'number' && data.nextOffset !== undefined ? <div className="flex flex-wrap items-center gap-3">
+            <button disabled={loading || pageIndex === 0} onClick={() => void load(history[pageIndex - 1], pageIndex - 1)}>上一页</button>
+            <span>第 {pageIndex + 1} 页 · 字节 {data.offset}–{data.offset + new TextEncoder().encode(data.content || '').length} / {data.size} · 每页最多 512KB{data.nextOffset === null ? ' · 已到末尾' : ''}</span>
+            <button disabled={loading || data.nextOffset === null} onClick={() => data.nextOffset != null && void load(data.nextOffset, pageIndex + 1)}>下一页</button>
+            <button disabled={loading} onClick={() => void load(0, 0, true)}>回到首页</button>
+          </div> : <span>{data.truncated ? '当前连接不支持分页，仅显示已返回的部分文本；可在外部打开' : '当前连接返回的文本预览（不支持分页）'}</span>}
+        </div>}
       </div>
     </div>
   );

@@ -1044,12 +1044,13 @@ describe('Projects IPC 接入', () => {
     let ready;
     const app = { isPackaged, getPath: key => key === 'home' ? dir : path.join(dir, 'userdata'), requestSingleInstanceLock: () => true, whenReady: () => ({ then: callback => { ready = callback; } }), on: vi.fn() };
     const loadURL = vi.fn(), loadFile = vi.fn();
+    const windows = [];
     class WindowMock {
-      constructor() { this.webContents = { setWindowOpenHandler() {}, on() {}, openDevTools() {} }; }
-      on() {}
+      constructor() { this.webContents = { id: windows.length + 1, isDestroyed: () => false, setWindowOpenHandler() {}, on() {}, once() {}, openDevTools() {} }; windows.push(this); }
+      on() {} once() {} isDestroyed() { return false; }
       loadURL(url) { loadURL(url); }
       loadFile(file) { loadFile(file); }
-      static getAllWindows() { return []; }
+      static getAllWindows() { return windows; }
     }
     const electron = { app, BrowserWindow: WindowMock, ipcMain: { handle: (channel, handler) => handlers.set(channel, handler), on: vi.fn() }, shell: { showItemInFolder: vi.fn() }, Menu: { buildFromTemplate: () => [], setApplicationMenu: vi.fn() }, protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() } };
     const nativeRequire = createRequire(mainPath);
@@ -1057,10 +1058,11 @@ describe('Projects IPC 接入', () => {
     const mainSource = await fs.promises.readFile(mainPath, 'utf8');
     const http = { get: vi.fn((_url, callback) => { callback(); return { on() {}, setTimeout() {} }; }) };
     vm.runInNewContext(mainSource, {
-      require: name => name === 'electron' ? electron : name === './projects' ? { ProjectsBackend: BackendMock } : name === './store' ? { Store: class {} } : name === 'http' ? http : ['runner', 'git', 'images'].some(module => name === `./${module}`) ? {} : nativeRequire(name),
+      require: name => name === 'electron' ? electron : name === './projects' ? { ProjectsBackend: BackendMock } : name === './store' ? { Store: class { constructor() { this.data = {}; } get(key) { return this.data[key]; } set(key, value) { this.data[key] = value; } } } : name === 'http' ? http : ['runner', 'images'].some(module => name === `./${module}`) ? {} : nativeRequire(name),
       __dirname: path.dirname(mainPath), process: { env: {}, platform: 'test' }, Buffer,
     });
-    await expect(handlers.get('projects:list')({})).rejects.toThrow(/未初始化/);
+    const early = new WindowMock();
+    await expect(Promise.resolve().then(() => handlers.get('projects:list')({ sender: early.webContents }))).rejects.toThrow(/未初始化/);
     ready();
     await new Promise(resolve => setImmediate(resolve));
     if (isPackaged) {
@@ -1077,7 +1079,7 @@ describe('Projects IPC 接入', () => {
     options.revealFile('/work/file');
     expect(electron.shell.showItemInFolder).toHaveBeenCalledWith('/work/file');
     let api;
-    const invoke = vi.fn((channel, ...args) => handlers.get(channel)({}, ...args));
+    const invoke = vi.fn((channel, ...args) => handlers.get(channel)({ sender: windows.at(-1).webContents }, ...args));
     const preloadPath = path.resolve('src/main/preload.js');
     vm.runInNewContext(await fs.promises.readFile(preloadPath, 'utf8'), {
       require: () => ({ contextBridge: { exposeInMainWorld: (_name, value) => { api = value; } }, ipcRenderer: { invoke } }),
