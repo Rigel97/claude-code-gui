@@ -121,10 +121,27 @@ async function openForm() {
   await page.getByLabel('工作目录').waitFor();
 }
 
+async function showNewForm() {
+  if (!await page.getByRole('dialog', { name: '新终端', exact: true }).isVisible()) {
+    await page.getByRole('button', { name: '新终端', exact: true }).click();
+  }
+  await page.getByLabel('工作目录').waitFor();
+}
+
+/** 高级选项默认收起，交互前显式展开（验证默认折叠 + 可键盘展开）。 */
+async function openAdvanced() {
+  const toggle = page.getByRole('button', { name: '高级选项', exact: true });
+  if (await toggle.getAttribute('aria-expanded') !== 'true') {
+    await toggle.click();
+  }
+  await page.getByLabel('Chrome', { exact: true }).waitFor();
+}
+
 it('独立 StrictMode Host 从全局 show 打开原生表单，默认新 session 和当前 chat cwd', async () => {
   await openForm();
   expect(await page.getByLabel('工作目录').inputValue()).toBe('/project-a');
   expect(await page.getByLabel('恢复会话').inputValue()).toBe('');
+  await openAdvanced();
   await page.getByLabel('Chrome', {exact:true}).selectOption('enabled');
   await page.getByLabel('IDE').check();
   await page.getByLabel('Worktree 名称（可选）').fill('feature-ui');
@@ -133,6 +150,7 @@ it('独立 StrictMode Host 从全局 show 打开原生表单，默认新 session
   const spec = await page.evaluate(() => (window as any).fixture.calls.find((c: any) => c.method === 'create').args[0]);
   expect(spec).toEqual({ mode: 'interactive', cwd: '/project-a', options: { chrome: true, ide: true, worktree: 'feature-ui' } });
   await page.getByRole('tab', { name: /Terminal 1/ }).waitFor();
+  await page.getByRole('dialog', {name:'新终端'}).waitFor({state:'detached'});
   expect(errors).toEqual([]);
 });
 
@@ -183,6 +201,8 @@ it('真实键盘与 ResizeObserver，隐藏/切聊天/终端 tab 保留同一 Ho
     w.fixture.emit({id:w.fixture.records[0].id,seq:1,data:'HIDDEN-TAIL\r\n'});
   });
   await page.getByRole('button', { name: '侧栏终端' }).click();
+  // 窄窗口默认收起新建表单，先显式展开再继续验证。
+  await page.getByRole('button', { name: '展开新建表单', exact: true }).click();
   expect(await page.getByLabel('工作目录').inputValue()).toBe('/project-b');
   expect(await page.evaluate(() => (window as any).originalXterm === document.querySelector('.xterm'))).toBe(true);
   await expect.poll(() => output.locator('.xterm-rows').innerText()).toContain('HIDDEN-TAIL');
@@ -217,7 +237,8 @@ it('缺失 API 与 health unavailable 禁用而不 crash，刷新恢复；错误
   await page.getByRole('alert').filter({hasText:'list unavailable'}).waitFor();
   await page.evaluate(() => { (window as any).fixture.fail = 'create'; });
   await page.getByRole('button', { name:'创建终端',exact:true }).click();
-  await page.getByRole('alert').filter({hasText:'create unavailable'}).waitFor();
+  await page.getByRole('dialog', {name:'新终端'}).getByRole('alert').filter({hasText:'create unavailable'}).waitFor();
+  expect(await page.getByLabel('工作目录').inputValue()).toBe('/project-a');
   await page.evaluate(() => { (window as any).fixture.fail = 'attach'; });
   await page.getByRole('button', { name:'创建终端',exact:true }).click();
   await page.getByRole('alert').filter({hasText:'attach unavailable'}).waitFor();
@@ -263,13 +284,16 @@ it('session 恢复必须显式选择，各 mode 只发送对应选项，Cloud �
   await page.getByRole('tab').waitFor();
   expect(await page.evaluate(() => (window as any).fixture.calls.find((c: any) => c.method === 'create').args[0])).toEqual({mode:'interactive',cwd:'/project-a',sessionId:sid,resume:true});
   for (const mode of ['teams','remote','shell','mcp','plugins','agents','auth','doctor','cloud']) {
+    await showNewForm();
     await page.getByLabel('模式', {exact:true}).selectOption(mode);
+    if (['teams', 'remote'].includes(mode)) await page.getByLabel('恢复会话').selectOption(sid);
     if (mode === 'cloud') await page.getByLabel('已有 Cloud session ID 或 URL').fill('https://claude.ai/code/session_existing');
     await page.getByRole('button', {name:'创建终端',exact:true}).click();
     await expect.poll(() => page.evaluate(() => (window as any).fixture.calls.filter((c: any) => c.method === 'create').at(-1).args[0].mode)).toBe(mode);
     await page.waitForFunction(() => !(window as any).terminalStore.getState().loading);
   }
   const specs = await page.evaluate(() => (window as any).fixture.calls.filter((c: any) => c.method === 'create').map((c: any) => c.args[0]));
+  for (const spec of specs.filter((s: any) => ['teams','remote'].includes(s.mode))) expect(spec).toEqual({mode:spec.mode,cwd:'/project-a',sessionId:sid,resume:true});
   for (const spec of specs.filter((s: any) => ['shell','mcp','plugins','agents','auth','doctor'].includes(s.mode))) expect(spec).toEqual({mode:spec.mode,cwd:'/project-a'});
   expect(specs.at(-1)).toEqual({mode:'cloud',cwd:'/project-a',options:{cloudSession:'https://claude.ai/code/session_existing'}});
   expect(await page.evaluate(() => (window as any).fixture.calls.some((c: any) => c.method === 'write'))).toBe(false);
@@ -287,7 +311,10 @@ it('创建 promise 去重且隐藏期间完成不再打开面板；4 MiB 批量�
     if (a !== b) throw new Error('Create must deduplicate pending promise');
   });
   await page.waitForFunction(() => !!(window as any).fixture.resolveCreate);
-  await page.getByRole('button', {name:'隐藏终端'}).click();
+  await page.keyboard.press('Escape');
+  expect(await page.getByRole('dialog', { name: '新终端', exact: true }).isVisible()).toBe(true);
+  // 隐藏宿主是显式外部动作，不等同于取消已提交的创建。
+  await page.evaluate(() => { (window as any).terminalStore.getState().hide(); });
   await page.evaluate(() => { (window as any).fixture.resolveCreate(); });
   await page.waitForFunction(() => (window as any).terminalStore.getState().terminals.length === 1);
   expect(await page.getByRole('region', {name:'官方原生终端'}).count()).toBe(0);
@@ -330,6 +357,7 @@ it('刷新旧响应不覆盖创建/关闭，session lock 错误可见，卸载�
     const w = window as any;
     w.fixture.attachPending = true;
   });
+  await page.keyboard.press('Escape');
   await page.getByRole('button', {name:'重新连接'}).click();
   await page.waitForFunction(() => !!(window as any).fixture.resolveAttach);
   await page.evaluate(() => {
@@ -364,6 +392,7 @@ it('仅 attach 快照也显示截断提示，并在重连后保留后端原有 P
 it('管理模式是真 shell，建议命令仅显式插入，不自动执行；IPC 占用显示 ID', async () => {
   await openForm();
   for (const [mode, command] of [['mcp','claude mcp --help'],['plugins','claude plugin --help'],['agents','claude agents --help']]) {
+    await showNewForm();
     await page.getByLabel('模式', {exact:true}).selectOption(mode);
     await page.getByRole('button', {name:'创建终端',exact:true}).click();
     await expect.poll(() => page.getByRole('tabpanel').locator('.xterm-rows').innerText()).toContain('READY');
@@ -390,6 +419,8 @@ it('默认 Chrome/IDE 不覆盖 CLI，禁用 Chrome 显式 false，新 session �
   await page.getByRole('button', {name:'创建终端',exact:true}).click();
   await page.getByRole('tab').waitFor();
   expect(await page.evaluate(() => (window as any).fixture.calls.find((c: any) => c.method === 'create').args[0])).toEqual({mode:'interactive',cwd:'/project-a'});
+  await showNewForm();
+  await openAdvanced();
   await page.getByLabel('Chrome', {exact:true}).selectOption('disabled');
   await page.getByLabel('交互预设').selectOption('/hooks');
   await page.getByRole('button', {name:'创建终端',exact:true}).click();
@@ -417,6 +448,7 @@ it('metadata 命令只允许固定预设，显式写入失败可见；show 草�
     w.terminalStore.getState().show({mode:'interactive',initialCommand:'/hooks'});
     return sid;
   });
+  await openAdvanced();
   expect(await page.getByLabel('恢复会话').inputValue()).toBe('');
   expect(await page.getByLabel('交互预设').inputValue()).toBe('/hooks');
   expect(await page.evaluate(() => (window as any).fixture.calls.filter((c: any) => c.method === 'create').length)).toBe(0);
@@ -482,6 +514,115 @@ it('显式 close 立即 closing，pending 去重不移除，拒绝/失败对象�
   expect(errors).toEqual([]);
 });
 
+it('浮层字段对齐、失败保留高级参数、Esc 归还焦点，不额外创建或写命令', async () => {
+  await openForm();
+  await page.keyboard.press('Escape');
+  const trigger = page.getByRole('button', {name:'新终端',exact:true});
+  await trigger.click();
+  const dialog = page.getByRole('dialog', {name:'新终端',exact:true});
+  expect(await dialog.getAttribute('aria-modal')).toBe('true');
+  const modeBox = (await page.getByLabel('模式', {exact:true}).boundingBox())!;
+  const cwdBox = (await page.getByLabel('工作目录').boundingBox())!;
+  expect(modeBox.y).toBe(cwdBox.y);
+  expect(modeBox.height).toBe(cwdBox.height);
+  await expect.poll(() => page.getByLabel('模式', {exact:true}).evaluate(el => el === document.activeElement)).toBe(true);
+  await page.getByLabel('工作目录').fill('/preserved');
+  await openAdvanced();
+  await page.getByLabel('Chrome', {exact:true}).selectOption('disabled');
+  await page.getByLabel('IDE').check();
+  await page.getByLabel('Worktree 名称（可选）').fill('kept-worktree');
+  await page.getByLabel('交互预设').selectOption('/hooks');
+  await page.evaluate(() => { (window as any).fixture.fail = 'create'; });
+  await dialog.getByRole('button', {name:'创建终端',exact:true}).click();
+  await dialog.getByRole('alert').waitFor();
+  expect(await page.getByLabel('工作目录').inputValue()).toBe('/preserved');
+  expect(await page.getByLabel('Chrome', {exact:true}).inputValue()).toBe('disabled');
+  expect(await page.getByLabel('IDE').isChecked()).toBe(true);
+  expect(await page.getByLabel('Worktree 名称（可选）').inputValue()).toBe('kept-worktree');
+  expect(await page.getByLabel('交互预设').inputValue()).toBe('/hooks');
+  await page.setViewportSize({width:360,height:400});
+  const footerBox = (await dialog.locator('footer').boundingBox())!;
+  expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(384);
+  expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(328);
+  await dialog.getByRole('button', {name:'创建终端',exact:true}).focus();
+  await page.keyboard.press('Tab');
+  expect(await dialog.getByRole('button', {name:'收起表单'}).evaluate(el => el === document.activeElement)).toBe(true);
+  await page.keyboard.press('Escape');
+  expect(await trigger.evaluate(el => el === document.activeElement)).toBe(true);
+  expect(await page.evaluate(() => (window as any).fixture.calls.filter((c: any) => c.method === 'create').length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).fixture.calls.some((c: any) => c.method === 'write' || c.method === 'close'))).toBe(false);
+  expect(errors).toEqual([]);
+});
+
+it('创建期间取消与 Esc 不丢表单，迟到创建结果不关闭后来打开的表单', async () => {
+  await openForm();
+  await page.evaluate(() => { (window as any).fixture.createPending = true; });
+  const form = page.getByRole('dialog', { name: '新终端', exact: true });
+  await page.getByLabel('工作目录').fill('/first-create');
+  await form.getByRole('button', { name: '创建终端', exact: true }).click();
+  await page.waitForFunction(() => !!(window as any).fixture.resolveCreate);
+  expect(await form.getByRole('button', { name: '取消', exact: true }).isDisabled()).toBe(true);
+  await page.keyboard.press('Escape');
+  expect(await form.isVisible()).toBe(true);
+  await page.evaluate(() => { (window as any).terminalStore.getState().hide(); });
+  await page.getByRole('button', { name: '侧栏终端', exact: true }).click();
+  await page.getByRole('dialog', { name: '新终端', exact: true }).getByLabel('工作目录').fill('/later-draft');
+  await page.evaluate(() => { (window as any).fixture.resolveCreate(); });
+  await page.waitForFunction(() => !(window as any).terminalStore.getState().loading);
+  expect(await page.getByRole('dialog', { name: '新终端', exact: true }).isVisible()).toBe(true);
+  expect(await page.getByLabel('工作目录').inputValue()).toBe('/later-draft');
+  expect(await page.evaluate(() => (window as any).fixture.calls.filter((call: any) => call.method === 'create').length)).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+it('实际父高度预算、auto 宿主 fallback、数字 aria、键盘及拖拽清理', async () => {
+  await page.setViewportSize({width:900,height:600});
+  await page.goto(url);
+  await page.waitForFunction(() => !!(window as any).terminalStore);
+  await page.getByRole('button', {name:'侧栏终端'}).click();
+  expect(await page.getByRole('dialog').count()).toBe(0);
+  const host = page.getByRole('region', {name:'官方原生终端'});
+  const separator = page.getByRole('separator');
+  await expect.poll(() => separator.getAttribute('aria-valuemax')).toBe('232');
+  expect(await separator.getAttribute('aria-valuemin')).toBe('140');
+  const headerSizes = await host.locator('header').first().locator('button, select').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height));
+  expect(headerSizes).toEqual([28,28,28,28]);
+  await page.getByRole('button', {name:'展开新建表单',exact:true}).click();
+  await page.keyboard.press('Escape');
+  await separator.focus();
+  await page.keyboard.press('End');
+  expect(await separator.getAttribute('aria-valuenow')).toBe('232');
+  expect((await host.boundingBox())!.height).toBe(232);
+  await page.keyboard.press('Home');
+  expect(await separator.getAttribute('aria-valuenow')).toBe('140');
+  await page.keyboard.press('ArrowUp');
+  expect(await separator.getAttribute('aria-valuenow')).toBe('160');
+  await page.evaluate(() => { document.getElementById('root')!.style.cssText = 'display:flex;flex-direction:column;height:480px'; });
+  await expect.poll(() => separator.getAttribute('aria-valuemax')).toBe('180');
+  await separator.press('End');
+  expect((await host.boundingBox())!.height).toBe(180);
+  await page.evaluate(() => { document.getElementById('root')!.style.height = '700px'; });
+  await expect.poll(() => separator.getAttribute('aria-valuemax')).toBe('400');
+  const box = (await separator.boundingBox())!;
+  await page.mouse.move(box.x + 50, box.y + 3);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 50, box.y - 57);
+  await expect.poll(() => separator.getAttribute('aria-valuenow')).toBe('240');
+  await page.mouse.up();
+  await page.mouse.move(box.x + 50, box.y - 100);
+  expect(await separator.getAttribute('aria-valuenow')).toBe('240');
+  await separator.dispatchEvent('mousedown', {clientY:100});
+  await page.evaluate(() => (window as any).terminalStore.getState().hide());
+  await page.mouse.move(100, 500);
+  await page.getByRole('button', {name:'侧栏终端'}).click();
+  expect(await separator.getAttribute('aria-valuenow')).toBe('240');
+  await separator.dispatchEvent('mousedown', {clientY:100});
+  await page.evaluate(() => (window as any).unmountHost());
+  await page.mouse.move(100, 400);
+  expect(await page.evaluate(() => (window as any).fixture.calls.some((c: any) => ['create','write','close'].includes(c.method)))).toBe(false);
+  expect(errors).toEqual([]);
+});
+
 it('health 拒绝或 unavailable 仍读取真实 list，关闭失败可刷新退出状态，不自动重试 IPC', async () => {
   await openForm();
   await page.getByRole('button', {name:'创建终端',exact:true}).click();
@@ -498,6 +639,7 @@ it('health 拒绝或 unavailable 仍读取真实 list，关闭失败可刷新退
   await page.getByRole('button', {name:'刷新列表'}).click();
   await page.getByRole('tab', {name:/已退出 \(9\)/}).waitFor();
   await page.getByRole('alert').filter({hasText:'health unavailable'}).waitFor();
+  await showNewForm();
   expect(await page.getByRole('button', {name:'创建终端',exact:true}).isDisabled()).toBe(true);
   await page.evaluate(() => {
     const w = window as any;

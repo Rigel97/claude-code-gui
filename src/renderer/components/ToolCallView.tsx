@@ -29,7 +29,7 @@ function ToolElapsed({ startedAt, finishedAt }: { startedAt?: number; finishedAt
   if (!startedAt) return null;
   const end = finishedAt ?? Date.now();
   return (
-    <span className="text-[10px] font-mono text-text-dim shrink-0" title={finishedAt ? '总耗时' : '已运行'}>
+    <span className="text-2xs font-mono text-text-dim shrink-0" title={finishedAt ? '总耗时' : '已运行'}>
       {formatElapsed(end - startedAt)}
     </span>
   );
@@ -102,7 +102,7 @@ export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { k
 
         {/* 子代理调用计数徽标 */}
         {childToolCount > 0 && (
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-accent-yellow/10 border border-accent-yellow/30 text-accent-yellow shrink-0">
+          <span className="text-2xs font-mono px-1.5 py-0.5 rounded bg-accent-yellow/10 border border-accent-yellow/30 text-accent-yellow shrink-0">
             {childToolCount} 子调用
           </span>
         )}
@@ -134,7 +134,7 @@ export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { k
           ) : (
             /* 输入参数 */
             <div>
-              <div className="text-[10px] text-text-dim font-mono uppercase mb-1">INPUT</div>
+              <div className="text-2xs text-text-dim font-mono uppercase mb-1">INPUT</div>
               <pre className="text-xs font-mono text-text-secondary whitespace-pre-wrap overflow-x-auto selectable-text">
                 {JSON.stringify(block.input, null, 2)}
               </pre>
@@ -144,7 +144,7 @@ export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { k
           {/* 结果 */}
           {hasResult && (
             <div>
-              <div className="text-[10px] text-text-dim font-mono uppercase mb-1">RESULT</div>
+              <div className="text-2xs text-text-dim font-mono uppercase mb-1">RESULT</div>
               <ToolResult result={result} isError={block.status === 'error'} />
             </div>
           )}
@@ -152,7 +152,7 @@ export function ToolCallView({ block, depth = 0 }: { block: Extract<UIBlock, { k
           {/* 子代理调用树（Task 嵌套的子调用） */}
           {children && children.length > 0 && (
             <div>
-              <div className="text-[10px] text-text-dim font-mono uppercase mb-1">SUBAGENT</div>
+              <div className="text-2xs text-text-dim font-mono uppercase mb-1">SUBAGENT</div>
               <div className="space-y-1.5 border-l-2 border-accent-yellow/30 pl-2.5">
                 {children.map((child, i) =>
                   child.kind === 'tool_use' ? (
@@ -183,7 +183,7 @@ function CopyText({ text, label }: { text: string; label: string }) {
     <button
       type="button"
       aria-label={label}
-      className="text-[10px] font-mono text-text-secondary hover:text-text-primary"
+      className="text-2xs font-mono text-text-secondary hover:text-text-primary"
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(text);

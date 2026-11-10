@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { useStore } from '../store';
 import { useTerminalStore, type TerminalSpec } from '../terminalStore';
 import type { ChatMessage, Conversation, ConversationRuntime } from '../types';
+import { useDialogBehavior, usePopoverBehavior } from './useDialogBehavior';
+import { confirmAction } from './ConfirmDialog';
+import { BUTTON_SM, BUTTON_SM_GHOST, ICON_BUTTON_SM, MENU_ITEM, MENU_ITEM_DANGER, POPOVER_PANEL } from './controls';
+import { copyText } from '../utils/clipboard';
+import { Settings2, X, Copy, GitFork, Terminal, Download, ChevronDown } from 'lucide-react';
 
 interface HistoryEntry {
   sessionId: string;
@@ -190,7 +195,7 @@ function useActionScope(key: string) {
   };
   return { pending, locked, error, notice, run, cancel };
 }
-const buttonClass = 'px-2 py-1 rounded border border-border text-xs text-text-secondary hover:text-accent-cyan hover:bg-bg-light disabled:opacity-40 disabled:cursor-not-allowed';
+const buttonClass = BUTTON_SM;
 function Feedback({ error, notice, pending, cancel }: { error: string; notice: string; pending?: boolean; cancel?: () => void }) {
   return <>
     {pending && <button className={buttonClass} title="仅取消等待和应用结果，无法撤销已提交的后端操作" onClick={cancel}>取消等待</button>}
@@ -202,18 +207,27 @@ function Feedback({ error, notice, pending, cancel }: { error: string; notice: s
 export function SessionMessageActions({ message, conversationId }: { message: ChatMessage; conversationId: string }) {
   const conv = useStore(s => s.conversations.find(c => c.id === conversationId));
   const action = useActionScope(conversationId);
+  const containerRef = useRef<HTMLDivElement>(null);
+  usePopoverBehavior(containerRef);
   if (!conv || !conv.messages.includes(message)) return null;
   const disabled = action.locked || busy(conv) || !conv.sessionId;
   const user = message.role === 'user' && !!message.cliUuid;
   const assistant = message.role === 'assistant' && !!message.endUuid && message.status !== 'streaming';
   if (!user && !assistant) return null;
-  return <div className="flex flex-wrap gap-2 items-center mt-2">
-    {user && <button className={buttonClass} disabled={disabled} title="在此用户消息之前分叉，原文预填为草稿，不自动发送" onClick={() => void action.run(async valid => {
+  return <div ref={containerRef} className="mt-2 space-y-1.5">
+    <div className="flex flex-wrap items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 has-[details[open]]:opacity-100">
+    {user && <button className={BUTTON_SM_GHOST} disabled={disabled} title="在此用户消息之前分叉，原文预填为草稿，不自动发送" onClick={() => void action.run(async valid => {
       await closeIdle(conv, valid);
       const result = await apiMethod('editFork')({ ...payload(conv), messageId: message.cliUuid! });
       await importFork(conv, { ...result, draft: result.draft ?? message.blocks.filter(b => b.kind === 'text').map(b => b.text).join('\n') }, valid, true);
     })}>编辑并分叉</button>}
-    {user && <button className={buttonClass} disabled={disabled} title="仅回退可用文件检查点；不会撤销消息或外部操作" onClick={() => void action.run(async valid => {
+    {user && <details data-popover className="relative">
+      <summary className={`${BUTTON_SM_GHOST} list-none cursor-pointer [&::-webkit-details-marker]:hidden`} aria-label="危险操作" title="危险操作">
+        危险操作<ChevronDown className="h-3.5 w-3.5" />
+      </summary>
+      <div className={`${POPOVER_PANEL} absolute left-0 top-full mt-1 w-64 max-w-[80vw]`}>
+        <p className="px-3 py-1.5 text-xs leading-5 text-text-muted">仅回退文件检查点，不撤销消息或外部操作。</p>
+        <button className={MENU_ITEM_DANGER} disabled={disabled} title="仅回退可用文件检查点；不会撤销消息或外部操作" onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void action.run(async valid => {
       await requireIdle(conv, valid);
       const request = { ...payload(conv), messageId: message.cliUuid! };
       const preview = successful(await apiMethod('rewind')({ ...request, dryRun: true }));
@@ -225,18 +239,21 @@ export function SessionMessageActions({ message, conversationId }: { message: Ch
       if (!refreshed) throw new Error('原会话上下文已变化，未应用结果');
       if (!preview.canRewind || !preview.confirmationToken) throw new Error(preview.error || '此消息没有可用的文件回退检查点');
       const files = preview.filesChanged ?? [];
-      const confirmed = window.confirm(`回退以下文件到此用户消息的检查点？\n${files.join('\n') || '没有文件变更'}\n新增 ${preview.insertions ?? 0} 行 / 删除 ${preview.deletions ?? 0} 行\n\n不会撤销外部操作（命令、网络、数据库等），也不会删除对话历史。不会自动重做。`);
+      const confirmed = await confirmAction({ title: '回退文件到检查点', message: `回退以下文件到此用户消息的检查点？\n${files.join('\n') || '没有文件变更'}\n新增 ${preview.insertions ?? 0} 行 / 删除 ${preview.deletions ?? 0} 行\n\n不会撤销外部操作（命令、网络、数据库等），也不会删除对话历史。不会自动重做。`, confirmLabel: '确认回退', tone: 'danger' });
       if (!confirmed || !valid()) return;
       await requireIdle(refreshed, valid);
       const result = successful(await apiMethod('rewind')({ ...payload(refreshed), messageId: message.cliUuid!, dryRun: false, confirmationToken: preview.confirmationToken }));
       if (!valid() || !sameConversation(refreshed)) return;
       const skipped = Array.isArray(result.skippedLinks) ? result.skippedLinks.length : result.skippedLinks ?? 0;
       return skipped ? `文件回退已执行；跳过 ${skipped} 个链接，未全部恢复。外部操作未撤销。` : '文件回退已执行；外部操作未撤销，对话历史保留。';
-    })}>回退文件</button>}
-    {assistant && <button className={buttonClass} disabled={disabled} onClick={() => void action.run(async valid => {
+    }); }}>回退文件</button>
+      </div>
+    </details>}
+    {assistant && <button className={BUTTON_SM_GHOST} disabled={disabled} onClick={() => void action.run(async valid => {
       await closeIdle(conv, valid);
       await importFork(conv, await apiMethod('fork')({ ...payload(conv), upToMessageId: message.endUuid! }), valid);
     })}>从此处分叉</button>}
+    </div>
     <Feedback {...action}/>
   </div>;
 }
@@ -276,6 +293,8 @@ export function SessionHistoryPanel({ cwd, onClose }: { cwd: string; onClose: ()
     return () => { scope.current++; };
   }, [cwd]);
   const cancel = () => { scope.current++; onClose(); };
+  const dialogRef = useRef<HTMLElement>(null);
+  useDialogBehavior({ open: true, dialogRef, onRequestClose: cancel, initialFocusSelector: '[aria-label="关闭历史"]' });
   const importHistory = (entry: HistoryEntry) => void action.run(async valid => {
     const generation = scope.current;
     const state = useStore.getState();
@@ -294,8 +313,8 @@ export function SessionHistoryPanel({ cwd, onClose }: { cwd: string; onClose: ()
     cancel();
   });
   return <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center" onClick={event => { if (event.target === event.currentTarget) cancel(); }}>
-    <section role="dialog" aria-modal="true" aria-label="CLI 历史" className="w-full max-w-2xl max-h-[80vh] overflow-y-auto rounded-xl border border-border bg-bg-deep p-5 space-y-3">
-      <div className="flex justify-between items-center"><h2 className="text-text-primary">CLI 历史</h2><button className={buttonClass} onClick={cancel}>关闭历史</button></div>
+    <section ref={dialogRef} role="dialog" aria-modal="true" aria-label="CLI 历史" className="w-full max-w-2xl max-h-[80vh] overflow-y-auto rounded-xl border border-border bg-bg-deep p-5 space-y-3">
+      <div className="flex justify-between items-center"><h2 className="text-text-primary">CLI 历史</h2><button className={buttonClass} onClick={cancel} aria-label="关闭历史">关闭历史</button></div>
       <p className="text-xs text-text-muted break-all">{cwd} · 导入完整历史不会自动分叉或发送消息</p>
       {entries.map(entry => {
         const title = entry.customTitle || entry.summary || entry.sessionId;
@@ -316,27 +335,77 @@ export function SessionHistoryPanel({ cwd, onClose }: { cwd: string; onClose: ()
 export function SessionActions({ conv }: { conv: Conversation }) {
   const action = useActionScope(conv.id);
   const disabled = action.locked || busy(conv) || !conv.sessionId;
-  return <section aria-label="会话操作" className="px-4 py-2 border-b border-border/30 space-y-2">
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs font-mono text-text-muted selectable-text">Session ID: {conv.sessionId || '尚未创建'}</span>
-      <button className={buttonClass} disabled={disabled} onClick={() => void action.run(async valid => {
+  return <section aria-label="会话操作" className="shrink-0 space-y-3 px-3 py-3">
+    <div className="flex min-w-0 items-center gap-2 rounded-lg border border-border/50 bg-bg-light/40 px-2 py-1">
+      <span className="min-w-0 flex-1 truncate font-mono text-2xs text-text-secondary selectable-text" title={conv.sessionId || '尚未创建'}>Session ID: {conv.sessionId || '尚未创建'}</span>
+      <button type="button" className={ICON_BUTTON_SM} aria-label="复制 Session ID" title="复制 Session ID" disabled={action.locked || !conv.sessionId} onClick={() => void action.run(async valid => {
+        const copied = await copyText(conv.sessionId!);
+        if (!valid()) return;
+        if (!copied) throw new Error('复制 Session ID 失败，请手动选择复制');
+        return 'Session ID 已复制';
+      })}><Copy className="h-3.5 w-3.5" /></button>
+    </div>
+    <div className="space-y-1">
+      <p className="px-3 text-xs text-text-muted">继续会话</p>
+      <button className={MENU_ITEM} disabled={disabled} onClick={() => void action.run(async valid => {
         await closeIdle(conv, valid);
         await importFork(conv, await apiMethod('fork')(payload(conv)), valid);
-      })}>分叉会话</button>
-      <button className={buttonClass} disabled={disabled} title="只打开恢复表单；创建终端时由主进程检查并移交空闲会话所有权" onClick={() => void action.run(async valid => {
+      })}><GitFork className="h-3.5 w-3.5 shrink-0" />分叉会话</button>
+      <button className={MENU_ITEM} disabled={disabled} title="只打开恢复表单；创建终端时由主进程检查并移交空闲会话所有权" onClick={() => void action.run(async valid => {
         await requireIdle(conv, valid);
         if (!valid() || !sourceIsCurrent(conv)) return;
         const spec: Partial<TerminalSpec> & { resume: true } = { mode: 'interactive', cwd: conv.cwd, sessionId: conv.sessionId!, resume: true };
         useTerminalStore.getState().show(spec);
-      })}>原生终端恢复</button>
-      <button className={buttonClass} disabled={action.locked || !conv.sessionId} onClick={() => void action.run(async valid => {
+      })}><Terminal className="h-3.5 w-3.5 shrink-0" />原生终端恢复</button>
+    </div>
+    <div className="space-y-1 border-t border-border/40 pt-2">
+      <p className="px-3 text-xs text-text-muted">保存记录</p>
+      <button className={MENU_ITEM} disabled={action.locked || !conv.sessionId} onClick={() => void action.run(async valid => {
         const name = conv.title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 40) || 'session';
         const result = await apiMethod('exportTranscript')({ cwd: conv.cwd, sid: conv.sessionId!, defaultName: `${name}.jsonl` });
         if (!valid() || result?.canceled || result?.cancelled) return;
         successful(result);
         return result.path ? `原生 JSONL 已导出：${result.path}` : '原生 JSONL 已导出';
-      })}>导出原生 JSONL</button>
+      })}><Download className="h-3.5 w-3.5 shrink-0" />导出原生 JSONL</button>
     </div>
     <Feedback {...action}/>
   </section>;
+}
+
+/** 会话操作收进标签栏弹层，避免长期占用对话阅读高度。 */
+export function SessionActionsPopover({ conv }: { conv: Conversation }) {
+  const [open, setOpen] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDialogBehavior({
+    open,
+    dialogRef: panelRef,
+    onRequestClose: () => setOpen(false),
+    initialFocusSelector: '[aria-label="关闭会话操作"]',
+  });
+  return <div className="relative">
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-haspopup="dialog"
+      aria-label="会话操作"
+      title="会话 ID、分叉、原生终端恢复与导出"
+      onClick={() => setOpen(value => !value)}
+      className={BUTTON_SM}
+    >
+      <Settings2 className="h-3.5 w-3.5" />
+      <span className="hidden sm:inline">会话</span>
+    </button>
+    {open && <>
+      <div className="fixed inset-0 z-30 bg-black/20" aria-hidden="true" onClick={() => setOpen(false)} />
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-label="会话操作" className="absolute right-0 top-full z-40 mt-1 w-[min(360px,92vw)] max-h-[70vh] overflow-y-auto rounded-xl border border-border bg-bg-deep shadow-2xl">
+        <div className="flex items-center justify-between border-b border-border/50 px-3 py-1.5">
+          <span className="text-xs font-medium text-text-primary">会话操作</span>
+          <button type="button" onClick={() => setOpen(false)} aria-label="关闭会话操作" className={ICON_BUTTON_SM}>
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <SessionActions conv={conv} />
+      </div>
+    </>}
+  </div>;
 }

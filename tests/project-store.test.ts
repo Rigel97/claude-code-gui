@@ -118,7 +118,7 @@ describe('候选审核门控', () => {
     expect(bridge.confirm).not.toHaveBeenCalled();
     expect(await useProjectsStore.getState().confirm()).toBe(false);
     expect(bridge.confirm).not.toHaveBeenCalled();
-    useProjectsStore.getState().cancelReview();
+    await useProjectsStore.getState().cancelReview();
     expect(useProjectsStore.getState().scanResult).toBeNull();
     expect(bridge.update).not.toHaveBeenCalled();
   });
@@ -197,14 +197,14 @@ describe('项目生命周期操作', () => {
     useProjectsStore.getState().setDirty(false, 'background');
     expect(useProjectsStore.getState().dirty).toBe(false);
   });
-  it('有未保存内容时离开项目中心需要确认', () => {
+  it('有未保存内容时离开项目中心需要确认', async () => {
     useProjectsStore.setState({ open: true, dirty: true, dirtyReasons: { background: true } });
     const confirm = vi.mocked((window as any).confirm);
     confirm.mockReturnValueOnce(false);
-    useProjectsStore.getState().showChat();
+    await useProjectsStore.getState().showChat();
     expect(useProjectsStore.getState().open).toBe(true);
     confirm.mockReturnValueOnce(true);
-    useProjectsStore.getState().showChat();
+    await useProjectsStore.getState().showChat();
     expect(useProjectsStore.getState().open).toBe(false);
     expect(useProjectsStore.getState().dirty).toBe(false);
     expect(useProjectsStore.getState().dirtyReasons).toEqual({});
@@ -215,18 +215,18 @@ describe('项目生命周期操作', () => {
     expect(useProjectsStore.getState().selectedProjectId).toBe('p');
     expect(useProjectsStore.getState().dirty).toBe(true);
     vi.mocked((window as any).confirm).mockReturnValueOnce(false);
-    expect(useProjectsStore.getState().selectProject('other')).toBe(false);
+    expect(await useProjectsStore.getState().selectProject('other')).toBe(false);
     expect(useProjectsStore.getState().selectedProjectId).toBe('p');
     vi.mocked((window as any).confirm).mockReturnValueOnce(false);
-    expect(useProjectsStore.getState().showChat()).toBe(false);
+    expect(await useProjectsStore.getState().showChat()).toBe(false);
   });
-  it('统一离开守卫在用户取消后不清除草稿，允许后才清除指定编辑源', () => {
+  it('统一离开守卫在用户取消后不清除草稿，允许后才清除指定编辑源', async () => {
     useProjectsStore.getState().setDirty(true, 'background');
     useProjectsStore.getState().setDirty(true, 'task');
     vi.mocked((window as any).confirm).mockReturnValueOnce(false);
-    expect(useProjectsStore.getState().confirmDiscard('切换任务', ['task'])).toBe(false);
+    expect(await useProjectsStore.getState().confirmDiscard('切换任务', ['task'])).toBe(false);
     expect(useProjectsStore.getState().dirtyReasons.task).toBe(true);
-    expect(useProjectsStore.getState().confirmDiscard('切换任务', ['task'])).toBe(true);
+    expect(await useProjectsStore.getState().confirmDiscard('切换任务', ['task'])).toBe(true);
     expect(useProjectsStore.getState().dirtyReasons.task).toBeUndefined();
     expect(useProjectsStore.getState().dirtyReasons.background).toBe(true);
   });
@@ -351,7 +351,7 @@ describe('独立扫描与持久审核公开行为', () => {
     await flushQueues();
     const savedCalls = vi.mocked(bridge.saveReviewDraft!).mock.calls.length;
     vi.mocked(window.confirm).mockReturnValueOnce(false);
-    useProjectsStore.getState().cancelReview();
+    await useProjectsStore.getState().cancelReview();
     await flushQueues();
     expect(useProjectsStore.getState().scanResult?.scanId).toBe('scan');
     expect(useProjectsStore.getState().reviewOpen).toBe(true);

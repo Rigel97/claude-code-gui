@@ -50,7 +50,7 @@ export function ActivityStrip({ conv }: { conv: Conversation }) {
 
   return (
     <div className="px-6 pb-1 animate-fade-in select-none">
-      <div className="flex items-center gap-2 text-[11px] font-mono">
+      <div className="flex items-center gap-2 text-2xs font-mono">
         <span className={`flex items-center gap-1.5 ${config.color}`}>
           <span className="flex gap-0.5">
             <span className="w-1 h-1 rounded-full bg-current animate-pulse" />

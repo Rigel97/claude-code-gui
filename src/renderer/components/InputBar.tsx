@@ -1,7 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useStore } from '../store';
-import { Send, Square, Sparkles, X, ListOrdered } from 'lucide-react';
+import { useProjectsStore } from '../projectStore';
+import { Send, Square, Sparkles, X, ListOrdered, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { abortConversation } from '../utils/deliver';
+import { BUTTON_DANGER, BUTTON_PRIMARY, BUTTON_SM_GHOST, SELECT, POPOVER_PANEL } from './controls';
+import { usePopoverBehavior } from './useDialogBehavior';
 import type { Conversation } from '../types';
 
 interface SlashCommand {
@@ -30,6 +33,9 @@ function cliCommands(values: unknown[]): SlashCommand[] {
 
 type SendMode = 'queue' | 'insert' | 'interrupt';
 
+/** 按平台显示快捷键，避免在 Windows/Linux 上仍然提示 ⌘ */
+const modKey = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
+
 export function InputBar({ initialDraft }: { initialDraft: string }) {
   const [input, setInput] = useState(initialDraft);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -45,6 +51,8 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
   const sendingRef = useRef(false);
   const mountedRef = useRef(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const inputBarRef = useRef<HTMLDivElement>(null);
+  usePopoverBehavior(inputBarRef);
   // 文件拖入高亮态（从访达/文件管理器拖文件到输入框上时置真）
   const [dragOver, setDragOver] = useState(false);
   // 输入法组合状态（中文输入法打字中），组合期间的按键属于输入法而非发送动作
@@ -58,6 +66,7 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
   );
   const globalCwd = useStore((s) => s.cwd);
   const cwd = conv ? conv.cwd : globalCwd;
+  const activeProject = useProjectsStore((s) => s.projects.find(project => project.conversations?.some(link => link.conversationId === (conv?.id ?? ''))));
   const model = useStore((s) => s.model);
   const injectedText = useStore((s) => s.injectedText);
   const injectText = useStore((s) => s.injectText);
@@ -368,45 +377,21 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   };
 
-  return (
-    <div className="px-6 py-4 border-t border-border/30 bg-bg-deep/50 backdrop-blur-sm">
-      <div className="relative">
-        {/* 待发队列（当前标签页的） */}
-        {queue.length > 0 && (
-          <div className="mb-2 space-y-1 animate-fade-in">
-            <div className="flex items-center gap-1.5 px-1 text-[10px] text-text-dim font-mono uppercase tracking-wider">
-              <ListOrdered className="w-3 h-3" />
-              排队中 · {queue.length} 条
-            </div>
-            {queue.map((text, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-accent-yellow/5 border border-accent-yellow/20"
-              >
-                <span className="text-[10px] font-mono text-accent-yellow/70 shrink-0">#{i + 1}</span>
-                <span className="flex-1 text-xs text-text-secondary truncate">{text}</span>
-                <button
-                  onClick={() => removeQueuedMessage(i)}
-                  className="text-text-dim hover:text-accent-red transition-colors shrink-0"
-                  title="移出队列"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+  const sendLabel = sending ? '发送中…' : isStreaming ? ({ queue: '排队发送', insert: '立即插话', interrupt: '停止并发送' }[sendMode]) : '发送';
 
+  return (
+    <div ref={inputBarRef} className="relative flex min-h-0 shrink flex-col border-t border-border/30 bg-bg-deep/50 px-4 py-2 backdrop-blur-sm md:px-6" style={{ maxHeight: 'min(360px, 100%)' }}>
+      <div className="relative mx-auto flex min-h-0 w-full max-w-[920px] flex-col">
         {/* 斜杠命令面板 */}
         {showSlash && (
-          <div className="absolute bottom-full left-0 right-0 mb-2 glass-panel rounded-xl border border-border overflow-hidden z-20 animate-fade-in">
-            <div className="px-3 py-1.5 border-b border-border/30 flex items-center gap-1.5">
-              <Sparkles className="w-3 h-3 text-accent-cyan" />
-              <span className="text-[10px] text-text-dim font-mono uppercase tracking-wider">快捷命令</span>
+          <div className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-xl border border-border glass-panel animate-fade-in">
+            <div className="flex items-center gap-1.5 border-b border-border/30 px-3 py-1.5">
+              <Sparkles className="h-3 w-3 text-accent-cyan" />
+              <span className="font-mono text-2xs uppercase tracking-wider text-text-muted">快捷命令</span>
             </div>
-            <div className="px-3 py-2 text-xs text-text-muted">
-              <button type="button" onClick={() => void readCommands()} disabled={readingCommands} className="text-accent-cyan disabled:opacity-40">
-                {readingCommands ? '读取中…' : '读取CLI命令（加载项目配置，不发送提示词）'}
+            <div className="px-3 py-2 text-xs text-text-secondary">
+              <button type="button" aria-label={readingCommands ? '读取中…' : '读取CLI命令（加载项目配置，不发送提示词）'} title="仅握手读取命令；可能执行项目 hooks，副作用及费用未知，不自动发送提示词" onClick={() => void readCommands()} disabled={readingCommands} className={BUTTON_SM_GHOST}>
+                <RefreshCw className={`h-3.5 w-3.5 ${readingCommands ? 'animate-spin' : ''}`} />{readingCommands ? '读取中…' : '读取 CLI 命令'}
               </button>
               {filteredCommands.length === 0 && <div>无已知匹配命令；未知 /命令可按原样发送。</div>}
             </div>
@@ -416,41 +401,51 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
                   key={cmd.name}
                   onClick={() => selectCommand(cmd)}
                   onMouseEnter={() => setSlashIndex(i)}
-                  className={`w-full flex items-center gap-3 px-3 py-2 text-left transition-colors ${
+                  className={`flex w-full items-center gap-3 px-3 py-2 text-left transition-colors ${
                     i === slashIndex ? 'bg-accent-cyan/10' : 'hover:bg-bg-light'
                   }`}
                 >
-                  <span className={`text-xs font-mono font-semibold shrink-0 ${
+                  <span className={`shrink-0 font-mono text-xs font-semibold ${
                     i === slashIndex ? 'text-accent-cyan' : 'text-text-secondary'
                   }`}>
                     /{cmd.name}
                   </span>
-                  <span className="text-xs text-text-muted truncate">{cmd.description} {cmd.argumentHint}</span>
+                  <span className="truncate text-xs text-text-secondary">{cmd.description} {cmd.argumentHint}</span>
                 </button>
               ))}
             </div>
           </div>
         )}
 
-        {/* 输入框容器 */}
+        {/* 输入框容器：文本区与操作栏分行，按钮不再覆盖正文 */}
         <div
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
-          className={`relative rounded-2xl border transition-all input-focus-glow ${
+          className={`relative flex min-h-[120px] shrink flex-col overflow-hidden rounded-xl border transition-all input-focus-glow ${
             dragOver
               ? 'border-accent-cyan/70 bg-accent-cyan/10 tech-glow-cyan'
               : isStreaming
                 ? 'border-accent-yellow/40 bg-accent-yellow/5'
-                : 'border-border bg-bg-light hover:border-accent-cyan/30 focus-within:border-accent-cyan/50 focus-within:tech-glow-cyan'
+                : 'border-border bg-bg-light hover:border-accent-cyan/30 focus-within:border-accent-cyan/50'
           }`}
         >
           {/* 拖放提示层 */}
           {dragOver && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl pointer-events-none">
-              <span className="text-xs font-mono text-accent-cyan">松开即可插入 @文件引用</span>
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl">
+              <span className="font-mono text-xs text-accent-cyan">松开即可插入 @文件引用</span>
             </div>
           )}
+          {/* 作用域摘要：发送前可确认自己在哪个项目、哪个目录下工作 */}
+          <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border/30 px-3 text-xs text-text-secondary">
+            <span className="shrink-0 rounded bg-bg-deepest/60 px-1.5 py-0.5 text-text-dim">作用域</span>
+            <span className="min-w-0 truncate" title={activeProject ? `项目：${activeProject.name}` : `对话：${conv?.title || '新对话'}`}>
+              {activeProject ? `项目：${activeProject.name}` : `对话：${conv?.title || '新对话'}`}
+            </span>
+            <span className="ml-auto max-w-[45%] shrink-0 truncate font-mono text-text-dim" title={cwd || '未设置工作目录'}>
+              目录：{cwd ? cwd.split('/').pop() : '未设置'}
+            </span>
+          </div>
           <textarea
             ref={textareaRef}
             value={input}
@@ -460,71 +455,85 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
             onCompositionStart={() => { isComposingRef.current = true; }}
             onCompositionEnd={() => { isComposingRef.current = false; }}
             aria-label="消息输入"
-            placeholder={argumentHint || (isStreaming ? '生成中仍可输入，Enter 加入队列… (ESC 中断)' : '输入指令，/ 唤起快捷命令，Enter 发送')}
+            placeholder={argumentHint || (isStreaming ? '生成中仍可输入，Enter 加入队列… (Esc 中断)' : '输入指令，/ 唤起快捷命令，Enter 发送')}
             rows={1}
-            className="w-full bg-transparent text-sm text-text-primary placeholder-text-dim resize-none px-4 py-3 pr-28 max-h-48 overflow-y-auto font-sans"
+            className="max-h-48 min-h-[44px] w-full shrink resize-none overflow-y-auto bg-transparent px-4 py-2 font-sans text-sm text-text-primary placeholder-text-dim"
             style={{ minHeight: '44px' }}
           />
 
-          {/* 按钮区域 */}
-          <div className="absolute right-2 bottom-2 flex items-center gap-2">
-            {/* 模型指示器 */}
-            {displayModel && (
-              <span className="text-[10px] font-mono text-text-dim px-2 py-1 rounded bg-bg-deepest/50">
-                {displayModel}
-              </span>
-            )}
-
-            {isStreaming && (
-              <button
-                onClick={handleAbort}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent-red/20 hover:bg-accent-red/30 border border-accent-red/40 text-accent-red transition-all"
-              >
-                <Square className="w-3.5 h-3.5" fill="currentColor" />
-                <span className="text-xs font-medium">停止</span>
-              </button>
-            )}
+          {/* 操作栏：模型、发送方式、停止与发送都在文本区之外 */}
+          <div className="flex shrink-0 items-center gap-2 border-t border-border/40 px-2.5 py-1.5">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              {displayModel && (
+                <span className="hidden min-w-0 max-w-[180px] truncate font-mono text-xs text-text-muted sm:inline" title={displayModel}>
+                  {displayModel}
+                </span>
+              )}
+              <span className="flex-1" />
+              {isStreaming && (
+                <select
+                  aria-label="发送方式"
+                  value={sendMode}
+                  onChange={e => setSendMode(e.target.value as SendMode)}
+                  title="Ctrl+Enter 立即插话（不停止当前生成）"
+                  className={`${SELECT} max-w-[132px]`}
+                >
+                  <option value="queue">轮后排队</option>
+                  <option value="insert">立即插话</option>
+                  <option value="interrupt">停止并发送</option>
+                </select>
+              )}
+              {isStreaming && (
+                <button
+                  onClick={handleAbort}
+                  className={`${BUTTON_DANGER} shrink-0`}
+                >
+                  <Square className="h-3.5 w-3.5" fill="currentColor" />
+                  <span>停止</span>
+                </button>
+              )}
               <button
                 onClick={() => void handleSend(isStreaming ? sendMode : 'insert')}
                 disabled={!input.trim() || sending}
-                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-gradient-to-r from-accent-cyan/20 to-accent-blue/20 hover:from-accent-cyan/30 hover:to-accent-blue/30 border border-accent-cyan/40 hover:border-accent-cyan/60 text-accent-cyan transition-all disabled:opacity-30 disabled:cursor-not-allowed group send-btn-glow"
+                className={`${BUTTON_PRIMARY} send-btn-glow group shrink-0 font-medium`}
               >
-                <Send className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-                <span className="text-xs font-medium">{sending ? '发送中…' : isStreaming ? ({ queue: '排队发送', insert: '立即插话', interrupt: '停止并发送' }[sendMode]) : '发送'}</span>
+                <Send className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                <span>{sendLabel}</span>
               </button>
+            </div>
           </div>
         </div>
 
-        <div className="mt-2 px-2 text-[10px] text-text-dim space-y-1">
-          {!showSlash && <button type="button" onClick={() => void readCommands()} disabled={readingCommands} className="text-accent-cyan disabled:opacity-40">
-            {readingCommands ? '读取中…' : '读取CLI命令（加载项目配置，不发送提示词）'}
-          </button>}
-          <div>仅 SDK 握手读取；可能执行项目配置 hooks，副作用及费用未知，不自动发送模型探测请求。</div>
-          {isStreaming && <label>发送方式 <select aria-label="发送方式" value={sendMode} onChange={e => setSendMode(e.target.value as SendMode)} className="bg-bg-deep">
-            <option value="queue">轮后排队</option><option value="insert">立即插话</option><option value="interrupt">停止并发送</option>
-          </select> · Ctrl+Enter 立即插话（不停止）</label>}
-          {argumentHint && <div>参数：{argumentHint}</div>}
-          {pendingModel && <div>待下次启动模型：{pendingModel}（非当前运行模型）</div>}
-          {/^\/clear(?:\s|$)/.test(input) && <div>/clear 将原样交给 CLI，不会新建 GUI 标签页；若 SDK 不支持，请在原生终端显式执行。</div>}
+        {/* 帮助是弹出层，不再随展开挤压输入和发送操作。 */}
+        <div className="mt-1 flex h-7 shrink-0 items-center gap-3 text-xs text-text-muted">
+          {!showSlash && <button type="button" aria-label={readingCommands ? '读取中…' : '读取CLI命令（加载项目配置，不发送提示词）'} title="读取 CLI 命令，不发送提示词；可能执行项目 hooks，副作用及费用未知" onClick={() => void readCommands()} disabled={readingCommands} className={`${BUTTON_SM_GHOST} px-1`}><RefreshCw className={`h-3.5 w-3.5 ${readingCommands ? 'animate-spin' : ''}`} />{readingCommands ? '读取中…' : '读取命令'}</button>}
+          {queue.length > 0 && <details data-popover data-popover-anchor="container" className="text-accent-yellow">
+            <summary className={`${BUTTON_SM_GHOST} list-none cursor-pointer px-1 text-accent-yellow [&::-webkit-details-marker]:hidden`}><ListOrdered className="h-3.5 w-3.5" />排队中 · {queue.length} 条</summary>
+            <div className={`${POPOVER_PANEL} absolute bottom-full left-0 mb-2 max-h-[40vh] w-80 max-w-[70vw] overflow-y-auto p-2 text-xs`} aria-label="待发队列">
+              <p className="mb-2 px-1 text-text-secondary">轮后按顺序发送，可移除尚未发送的消息。</p>
+              {queue.map((text, i) => <div key={i} className="flex items-center gap-2 rounded-md px-2 py-1.5"><span className="text-text-muted">#{i + 1}</span><span className="min-w-0 flex-1 truncate text-text-primary" title={text}>{text}</span><button onClick={() => removeQueuedMessage(i)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-bg-lighter hover:text-accent-red" title="移出队列" aria-label={`移出队列 ${i + 1}`}><X className="h-3.5 w-3.5" /></button></div>)}
+            </div>
+          </details>}
+          <span className="hidden whitespace-nowrap sm:inline">Enter {isStreaming ? '排队' : '发送'}</span>
+          <span className="hidden whitespace-nowrap lg:inline">Shift+Enter 换行</span>
+          {isStreaming && <span className="hidden text-accent-red/80 md:inline">Esc 停止</span>}
+          <details data-popover data-popover-anchor="container" className="ml-auto">
+            <summary className={`${BUTTON_SM_GHOST} list-none cursor-pointer px-1 [&::-webkit-details-marker]:hidden`}><SlidersHorizontal className="h-3.5 w-3.5" />说明与参数</summary>
+            <div className={`${POPOVER_PANEL} absolute bottom-full right-0 mb-2 max-h-[45vh] w-80 max-w-[70vw] space-y-2 overflow-y-auto p-3 text-xs leading-5 text-text-secondary`}>
+              <p>“读取 CLI 命令”仅 SDK 握手读取；可能执行项目配置 hooks，副作用及费用未知，不自动发送模型探测请求。</p>
+              <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1"><span>Enter</span><span>{isStreaming ? '轮后排队' : '发送消息'}</span><span>Shift+Enter</span><span>换行</span><span>Ctrl+Enter</span><span>立即插话，不停止生成</span><span>{modKey}F</span><span>搜索会话</span></div>
+              {argumentHint && <p>参数：{argumentHint}</p>}
+              <p className="border-t border-border/40 pt-2 font-mono text-text-muted">会话 {sessionId ? sessionId.slice(0, 8) : 'new session'} · {input.length} chars</p>
+            </div>
+          </details>
         </div>
-        {commandsError && <div role="alert" className="mt-2 px-2 text-xs text-accent-red">{commandsError}</div>}
-        {sendError && <div role="alert" className="mt-2 px-2 text-xs text-accent-red">{sendError}</div>}
-
-        {/* 底部提示 */}
-        <div className="flex items-center justify-between mt-2 px-2">
-          <div className="flex items-center gap-3 text-[10px] text-text-dim font-mono">
-            <span>⏎ {isStreaming ? '排队' : '发送'}</span>
-            <span>⇧⏎ 换行</span>
-            <span>/ 命令</span>
-            <span>拖文件 @引用</span>
-            <span>⌘F 搜索</span>
-            {isStreaming && <span className="text-accent-red/70">ESC 中断</span>}
-            <span className="text-accent-cyan/50">● {sessionId ? sessionId.slice(0, 8) : 'new session'}</span>
-          </div>
-          <div className="text-[10px] text-text-dim font-mono">
-            {input.length > 0 && `${input.length} chars`}
-          </div>
-        </div>
+        {/* 高危命令的行为提示必须在发送前可见，不能折叠进说明 */}
+        {/^\/clear(?:\s|$)/.test(input) && <div role="status" className="mt-1 px-1 text-2xs leading-5 text-accent-yellow">/clear 将原样交给 CLI，不会新建 GUI 标签页；若 SDK 不支持，请在原生终端显式执行。</div>}
+        {pendingModel && <div className="mt-1 px-1 text-2xs leading-5 text-text-secondary">待下次启动模型：<span className="font-mono text-accent-yellow">{pendingModel}</span>（非当前运行模型）</div>}
+        {(commandsError || sendError) && <div className="mt-1 max-h-16 min-h-0 shrink overflow-y-auto px-1 text-xs text-accent-red">
+          {commandsError && <p role="alert">{commandsError}</p>}
+          {sendError && <p role="alert">{sendError}</p>}
+        </div>}
       </div>
     </div>
   );

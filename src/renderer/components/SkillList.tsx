@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store';
+import { ICON_BUTTON, ICON_BUTTON_SM, BUTTON_SM, BUTTON_SM_GHOST } from './controls';
 import {
   Zap, RefreshCw, Loader2, Search, Plus, Trash2, Check, X,
   FolderOpen, Globe, FolderGit2,
@@ -56,6 +57,10 @@ export function SkillList() {
 
   const projectSkills = (skills || []).filter((s) => s.scope === 'project');
   const globalSkills = (skills || []).filter((s) => s.scope === 'global');
+  // 仅当名称不可直接插入或存在同名技能时展示完整路径，避免每行都占用两行。
+  const nameCounts = new Map<string, number>();
+  (skills || []).forEach((skill) => nameCounts.set(skill.name, (nameCounts.get(skill.name) || 0) + 1));
+  const needsPath = (skill: SkillInfo) => !/^[\p{L}\p{N}_-]+(?:[:/][\p{L}\p{N}_-]+)*$/u.test(skill.name) || (nameCounts.get(skill.name) || 0) > 1;
   const match = (s: SkillInfo) =>
     (s.name + ' ' + s.description).toLowerCase().includes(filter.trim().toLowerCase());
 
@@ -63,23 +68,23 @@ export function SkillList() {
     <div className="px-2 pb-2">
       {/* 标题栏 + 操作 */}
       <div className="flex items-center justify-between px-2 py-1.5">
-        <span className="text-[10px] text-text-dim font-mono uppercase tracking-wider">
+        <span className="font-mono text-2xs uppercase tracking-wider text-text-dim">
           Skills {skills ? `· ${skills.length}` : ''}
         </span>
         <div className="flex items-center gap-1">
           <button
             onClick={() => { setAdding(!adding); setConfirmDeletePath(null); }}
-            className={`transition-colors ${adding ? 'text-accent-cyan' : 'text-text-dim hover:text-accent-cyan'}`}
+            className={`${ICON_BUTTON} ${adding ? 'bg-bg-lighter text-accent-cyan' : ''}`}
             title="新建技能"
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={refresh}
-            className="text-text-dim hover:text-accent-cyan transition-colors"
+            className={ICON_BUTTON}
             title="刷新技能列表"
           >
-            <RefreshCw className="w-3 h-3" />
+            <RefreshCw className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
@@ -99,7 +104,7 @@ export function SkillList() {
       {/* 新建表单 */}
       {adding && <AddSkillForm key={cwd} cwd={cwd} onDone={refresh} />}
 
-      {listError && <div role="alert" className="px-3 py-2 text-xs text-red-400">{listError}</div>}
+      {listError && <div role="alert" className="px-3 py-2 text-xs text-accent-red">{listError}</div>}
       {/* 列表 */}
       {skills === null ? (
         <div className="flex items-center justify-center py-6 text-text-dim">
@@ -108,7 +113,7 @@ export function SkillList() {
       ) : (skills.length === 0 ? (
         <div className="text-xs text-text-dim px-3 py-4 text-center">
           未找到任何技能
-          <div className="text-[10px] mt-1 leading-relaxed">
+          <div className="mt-1 text-2xs leading-relaxed">
             点击右上角 + 新建，或将技能包放入<br />~/.claude/skills/
           </div>
         </div>
@@ -119,6 +124,7 @@ export function SkillList() {
               label="项目技能"
               icon={<FolderGit2 className="w-3 h-3 text-accent-cyan/70" />}
               skills={projectSkills.filter(match)}
+              needsPath={needsPath}
               confirmDeletePath={confirmDeletePath}
               setConfirmDeletePath={setConfirmDeletePath}
               onRefresh={refresh}
@@ -129,6 +135,7 @@ export function SkillList() {
               label="全局技能"
               icon={<Globe className="w-3 h-3 text-accent-purple/70" />}
               skills={globalSkills.filter(match)}
+              needsPath={needsPath}
               confirmDeletePath={confirmDeletePath}
               setConfirmDeletePath={setConfirmDeletePath}
               onRefresh={refresh}
@@ -140,27 +147,28 @@ export function SkillList() {
         </div>
       ))}
 
-      <div className="text-[10px] text-text-dim/60 font-mono px-2 pt-2 leading-relaxed">
+      <div className="px-2 pt-2 font-mono text-2xs leading-relaxed text-text-dim">
         技能来自 ~/.claude/skills 与项目的 .claude/skills
       </div>
     </div>
   );
 }
 
-function SkillGroup({ label, icon, skills, confirmDeletePath, setConfirmDeletePath, onRefresh }: {
+function SkillGroup({ label, icon, skills, confirmDeletePath, setConfirmDeletePath, onRefresh, needsPath }: {
   label: string;
   icon: React.ReactNode;
   skills: SkillInfo[];
   confirmDeletePath: string | null;
   setConfirmDeletePath: (p: string | null) => void;
   onRefresh: () => void;
+  needsPath: (skill: SkillInfo) => boolean;
 }) {
   if (skills.length === 0) return null;
   return (
     <div>
       <div className="flex items-center gap-1.5 px-2 pb-1">
         {icon}
-        <span className="text-[10px] text-text-muted font-mono uppercase tracking-wider">{label}</span>
+        <span className="font-mono text-2xs uppercase tracking-wider text-text-muted">{label}</span>
       </div>
       <div className="space-y-1">
         {skills.map((skill) => (
@@ -168,6 +176,7 @@ function SkillGroup({ label, icon, skills, confirmDeletePath, setConfirmDeletePa
             key={skill.path}
             skill={skill}
             confirming={confirmDeletePath === skill.path}
+            showPath={needsPath(skill)}
             setConfirming={(v) => setConfirmDeletePath(v ? skill.path : null)}
             onRefresh={onRefresh}
           />
@@ -177,11 +186,12 @@ function SkillGroup({ label, icon, skills, confirmDeletePath, setConfirmDeletePa
   );
 }
 
-function SkillItem({ skill, confirming, setConfirming, onRefresh }: {
+function SkillItem({ skill, confirming, setConfirming, onRefresh, showPath }: {
   skill: SkillInfo;
   confirming: boolean;
   setConfirming: (v: boolean) => void;
   onRefresh: () => void;
+  showPath: boolean;
 }) {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
@@ -206,85 +216,93 @@ function SkillItem({ skill, confirming, setConfirming, onRefresh }: {
     <div
       className={`w-full px-2.5 py-2 rounded-lg transition-all group ${
         confirming
-          ? 'bg-red-500/10 border border-red-500/40'
+          ? 'bg-accent-red/10 border border-accent-red/40'
           : 'border border-transparent hover:bg-bg-light'
       }`}
     >
-      <div className="flex items-start gap-2">
+      <div className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-x-2 gap-y-1.5">
         <Zap
-          className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
-            confirming ? 'text-red-400' : skill.scope === 'project' ? 'text-accent-cyan' : 'text-accent-purple'
+          className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${
+            confirming ? 'text-accent-red' : skill.scope === 'project' ? 'text-accent-cyan' : 'text-accent-purple'
           }`}
         />
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0">
           {confirming ? (
-            <div className="text-xs text-red-300 font-medium leading-tight pt-0.5">
+            <div className="pt-0.5 text-xs font-medium leading-tight text-accent-red">
               删除 {skill.name}？不可恢复
             </div>
           ) : (
             <>
-              <div className="text-xs text-text-primary truncate font-mono">{skill.name}</div>
-              <div className="text-[10px] text-text-dim break-all" title={skill.path}>{skill.path}</div>
-              <button
-                type="button"
-                disabled={!validName || !hasConversation}
-                title={validName ? '只插入原生命令，不发送；同名技能由 CLI 解析' : '名称不是有效 CLI 命令，请按路径查看技能'}
-                onClick={() => {
-                  if (validName) useStore.getState().injectText(`/${skill.name} `);
-                }}
-                className="mt-1 text-[10px] text-accent-cyan disabled:opacity-40 disabled:cursor-not-allowed"
-              >插入 /{skill.name}</button>
-              {skill.description && (
-                <div className="text-[10px] text-text-dim leading-snug mt-0.5 line-clamp-2" title={skill.description}>
-                  {skill.description}
-                </div>
-              )}
+              <div className="flex items-center gap-1.5">
+                <span className="truncate font-mono text-xs text-text-primary" title={skill.path}>{skill.name}</span>
+              </div>
+              <div className="mt-0.5 flex items-center gap-1.5 text-2xs leading-4 text-text-dim" title={skill.description || skill.path}>
+                <span className="shrink-0 rounded bg-bg-lighter px-1 text-text-muted">{skill.scope === 'project' ? '项目' : '全局'}</span>
+                <span className="line-clamp-1 min-w-0">{skill.description || '无简介'}</span>
+              </div>
+              {showPath && <div className="truncate font-mono text-2xs leading-4 text-text-dim" title={skill.path}>{skill.path}</div>}
             </>
           )}
         </div>
         {confirming ? (
-          <div className="flex items-center gap-1 shrink-0 mt-0.5">
+          <div className="col-start-2 flex min-w-0 items-center justify-end gap-1">
             <button
               onClick={handleDelete}
               disabled={deleting}
-              className="text-red-400 hover:text-red-300 transition-colors disabled:opacity-40"
+              className={`${ICON_BUTTON_SM} text-accent-red hover:text-accent-red`}
+              aria-label={`确认删除 ${skill.name}`}
               title="确认删除"
             >
-              {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+              {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
             </button>
             <button
               onClick={() => setConfirming(false)}
-              className="text-text-dim hover:text-text-primary transition-colors"
+              className={ICON_BUTTON_SM}
+              aria-label={`取消删除 ${skill.name}`}
               title="取消"
             >
-              <X className="w-4 h-4" />
+              <X className="h-4 w-4" />
             </button>
           </div>
         ) : (
-          <div className="flex items-center gap-1 shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="col-start-2 flex min-w-0 items-center justify-end gap-1">
             <button
+              type="button"
+              disabled={!validName || !hasConversation}
+              aria-label={`插入 /${skill.name}`}
+              title={validName ? '只插入原生命令，不发送；同名技能由 CLI 解析' : '名称不是有效 CLI 命令，请按路径查看技能'}
               onClick={() => {
-                void (async () => {
-                  try { await (window as any).api.skills.reveal(skill.path); }
-                  catch (error) { setError(error instanceof Error ? error.message : String(error)); }
-                })();
+                if (validName) useStore.getState().injectText(`/${skill.name} `);
               }}
-              className="text-text-dim hover:text-accent-cyan transition-colors"
-              title="在访达中打开"
-            >
-              <FolderOpen className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setConfirming(true)}
-              className="text-text-dim hover:text-red-400 transition-colors"
-              title="删除技能"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
+              className={`${BUTTON_SM_GHOST} mr-auto`}
+            ><Plus className="h-3.5 w-3.5" /><span>插入</span></button>
+            <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+              <button
+                onClick={() => {
+                  void (async () => {
+                    try { await (window as any).api.skills.reveal(skill.path); }
+                    catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+                  })();
+                }}
+                className={ICON_BUTTON_SM}
+                aria-label={`在访达中打开 ${skill.name}`}
+                title="在访达中打开"
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => setConfirming(true)}
+                className={`${ICON_BUTTON_SM} hover:text-accent-red`}
+                aria-label={`删除技能 ${skill.name}`}
+                title="删除技能"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
         )}
       </div>
-      {error && <div role="alert" className="text-[10px] text-red-400">{error}</div>}
+      {error && <div role="alert" className="mt-1 text-2xs text-accent-red break-words">{error}</div>}
     </div>
   );
 }
@@ -337,7 +355,7 @@ function AddSkillForm({ cwd, onDone }: { cwd: string; onDone: () => void }) {
         <button
           onClick={() => setScope('project')}
           disabled={!cwd}
-          className={`flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[10px] font-mono transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
+          className={`flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-2xs font-mono transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
             scope === 'project'
               ? 'bg-accent-cyan/10 border border-accent-cyan/40 text-accent-cyan'
               : 'border border-border text-text-muted hover:text-text-primary'
@@ -348,7 +366,7 @@ function AddSkillForm({ cwd, onDone }: { cwd: string; onDone: () => void }) {
         </button>
         <button
           onClick={() => setScope('global')}
-          className={`flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[10px] font-mono transition-all ${
+          className={`flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-2xs font-mono transition-all ${
             scope === 'global'
               ? 'bg-accent-purple/10 border border-accent-purple/40 text-accent-purple'
               : 'border border-border text-text-muted hover:text-text-primary'
@@ -359,19 +377,19 @@ function AddSkillForm({ cwd, onDone }: { cwd: string; onDone: () => void }) {
         </button>
       </div>
       {error && (
-        <div className="text-[10px] text-red-400 leading-snug break-all">{error}</div>
+        <div className="text-2xs text-accent-red leading-snug break-all">{error}</div>
       )}
       <div className="flex justify-end gap-1.5">
         <button
           onClick={onDone}
-          className="px-2.5 py-1 rounded-md text-[11px] text-text-muted hover:text-text-primary transition-colors"
+          className={BUTTON_SM_GHOST}
         >
           取消
         </button>
         <button
           onClick={handleCreate}
           disabled={!name.trim() || creating}
-          className="px-2.5 py-1 rounded-md text-[11px] bg-accent-cyan/20 hover:bg-accent-cyan/30 border border-accent-cyan/40 text-accent-cyan transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          className={BUTTON_SM}
         >
           {creating ? '创建中…' : '创建'}
         </button>

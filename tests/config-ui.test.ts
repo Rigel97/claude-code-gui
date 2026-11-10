@@ -64,7 +64,8 @@ describe.skipIf(process.env.RUN_CONFIG_UI !== '1')('配置与输入框独立浏�
       (window as any).api = {
         store: { get: () => rpc('get'), reload: () => rpc('reload'), set: (...args: unknown[]) => rpc('set', ...args), flush: (data: unknown) => rpc('flush', data) },
         projects: { list: async () => [], storageInfo: async () => null, reviewDraft: async () => null, activeJob: async () => null },
-        claude: { onStream: () => () => {}, onStatusChange: () => () => {}, getContext: async () => null, send: async () => { throw new Error('Unexpected model invocation'); } },
+        claude: { onStream: () => () => {}, onStatusChange: (callback: (payload: unknown) => void) => { (window as any).__configChangeStatus = callback; return () => {}; }, getContext: async () => null, send: async () => { throw new Error('Unexpected model invocation'); } },
+        terminal: { health: async () => ({ available: true }), list: async () => [] },
         fs: { readDir: async () => [] }, openDirectory: async () => '/fixture/project',
         window: { minimize: () => {}, maximize: () => {}, close: () => {} },
       };
@@ -79,6 +80,31 @@ describe.skipIf(process.env.RUN_CONFIG_UI !== '1')('配置与输入框独立浏�
     await context?.close();
   });
   afterAll(async () => { await browser?.close(); await server?.close(); }, 60000);
+
+  it('可见设置入口：危险保存确认的 Esc 只取消顶层，保留草稿，成功保存才关闭', async () => {
+    await page.goto(baseURL);
+    const opener = page.getByRole('button', { name: '设置', exact: true });
+    await opener.click();
+    const settings = page.getByRole('dialog', { name: '设置', exact: true });
+    await settings.getByRole('button', { name: '权限与安全', exact: true }).click();
+    await settings.getByRole('button', { name: /全部放行（危险）/ }).click();
+    await settings.getByRole('button', { name: '关闭设置', exact: true }).click();
+    await settings.getByRole('button', { name: '保存并关闭', exact: true }).click();
+    const confirm = page.getByRole('alertdialog', { name: '启用全部放行', exact: true });
+    await confirm.waitFor();
+    await page.keyboard.press('Escape');
+    await confirm.waitFor({ state: 'hidden' });
+    expect(await settings.isVisible()).toBe(true);
+    expect(await settings.getByRole('alertdialog', { name: '有未保存的设置更改', exact: true }).isVisible()).toBe(true);
+    await settings.getByText('1 项更改未保存', { exact: true }).waitFor();
+    expect(disk.permissionMode).not.toBe('bypassPermissions');
+    await settings.getByRole('button', { name: '保存并关闭', exact: true }).click();
+    await confirm.getByRole('button', { name: '启用全部放行', exact: true }).click();
+    await settings.waitFor({ state: 'hidden' });
+    await expect.poll(() => disk.permissionMode, { timeout: 6000 }).toBe('bypassPermissions');
+    await expect.poll(() => opener.evaluate(el => el === document.activeElement)).toBe(true);
+    expect(errors).toEqual([]);
+  }, 20000);
 
   it('切换标签不污染新标签草稿，正在输入的草稿无需卸载即可持久化', async () => {
     await page.goto(baseURL);
@@ -147,25 +173,108 @@ describe.skipIf(process.env.RUN_CONFIG_UI !== '1')('配置与输入框独立浏�
     readFailure = true;
     await page.goto(baseURL);
     await page.getByRole('alert').filter({ hasText: '会话配置读取失败' }).waitFor();
-    await page.getByTitle('当前标签页的工作目录；选择其他目录会新建对话，不影响正在运行的任务').click();
+    await page.getByRole('button', { name: /^工作目录：/ }).click();
     await draftField().fill('坏配置期间的新草稿');
     expect(writes).toEqual([]);
     readFailure = false;
     const retry = page.getByRole('button', { name: '修复后重新读磁盘（确认合并内存）', exact: true });
-    let confirmation = '';
-    page.once('dialog', dialog => { confirmation = dialog.message(); void dialog.dismiss(); });
     await retry.click();
+    const recovery = page.getByRole('alertdialog', { name: '重新读取配置', exact: true });
+    await recovery.waitFor();
+    expect(await recovery.innerText()).toContain('尚未保存的会话与草稿');
+    await recovery.getByRole('button', { name: '取消', exact: true }).click();
     await page.getByRole('alert').filter({ hasText: '已取消恢复读取' }).waitFor();
-    expect(confirmation).toContain('尚未保存的会话与草稿');
     expect(await draftField().inputValue()).toBe('坏配置期间的新草稿');
     expect(writes).toEqual([]);
     expect(await unload()).toBe(false);
     expect(flushes).toEqual([]);
-    page.once('dialog', dialog => void dialog.accept());
     await retry.click();
+    await recovery.getByRole('button', { name: '读取并合并', exact: true }).click();
     await expect.poll(() => disk.conversations.length).toBe(3);
     expect(disk.conversations.map((item: any) => item.draft)).toEqual(['甲原草稿', '乙原草稿', '坏配置期间的新草稿']);
     expect(await draftField().inputValue()).toBe('坏配置期间的新草稿');
+    expect(errors).toEqual([]);
+  }, 20000);
+
+  it('最小窗口展开终端后长输入仍可见可点击，说明与参数不挤走发送动作', async () => {
+    await page.setViewportSize({ width: 900, height: 600 });
+    await page.goto(baseURL);
+    const text = Array.from({ length: 20 }, (_, i) => `第 ${i + 1} 行完整工作说明`).join('\n');
+    await page.getByRole('button', { name: '原生终端', exact: true }).click();
+    await draftField().fill(text);
+    const terminal = page.getByRole('region', { name: '官方原生终端', exact: true });
+    await terminal.waitFor();
+    const send = page.getByRole('button', { name: '发送', exact: true });
+    const initialHit = await send.evaluate(button => {
+      const rect = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      return button === hit || button.contains(hit);
+    });
+    expect(initialHit).toBe(true);
+    await send.click({ trial: true });
+    const bounds = await send.boundingBox();
+    const terminalBounds = await terminal.boundingBox();
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(terminalBounds!.y);
+    await page.getByText('说明与参数', { exact: true }).click();
+    await send.click({ trial: true });
+    expect(await draftField().inputValue()).toBe(text);
+    await page.keyboard.press('Escape');
+    await terminal.getByRole('button', { name: '隐藏终端', exact: true }).click();
+    await send.click({ trial: true });
+    expect(errors).toEqual([]);
+  }, 20000);
+
+  it('最小窗口排队列表与命令说明顶层展开，不裁切停止和发送操作', async () => {
+    await page.setViewportSize({ width: 900, height: 600 });
+    await page.goto(baseURL);
+    await draftField().waitFor();
+    await page.evaluate(() => (window as any).__configChangeStatus({ conversationId: '标签甲', status: 'streaming' }));
+    const field = page.getByRole('textbox', { name: '消息输入', exact: true });
+    await field.fill('排队指令甲');
+    await field.press('Enter');
+    await field.fill('排队指令乙');
+    await field.press('Enter');
+    await page.getByRole('button', { name: '原生终端', exact: true }).click();
+    const separator = page.getByRole('separator', { name: '拖拽调整终端高度' });
+    await separator.press('End');
+    await field.fill(Array.from({ length: 12 }, (_, i) => `长输入 ${i + 1}`).join('\n'));
+    await page.getByText('排队中 · 2 条', { exact: true }).click();
+    const send = page.getByRole('button', { name: '排队发送', exact: true });
+    expect(await send.evaluate(button => { const rect = button.getBoundingClientRect(); const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2); return button === hit || button.contains(hit); })).toBe(true);
+    await page.getByRole('button', { name: '移出队列 1', exact: true }).click();
+    await send.click({ trial: true });
+    await page.getByRole('button', { name: '停止', exact: true }).click({ trial: true });
+    expect(await field.inputValue()).toContain('长输入 12');
+    expect(errors).toEqual([]);
+  }, 20000);
+
+  it('新终端弹层优先持有键盘，全局搜索不会在背后打开或抢焦点', async () => {
+    await page.goto(baseURL);
+    await draftField().waitFor();
+    await page.getByRole('button', { name: '原生终端', exact: true }).click();
+    const form = page.getByRole('dialog', { name: '新终端', exact: true });
+    await form.waitFor();
+    const cwd = form.getByLabel('工作目录', { exact: true });
+    await cwd.focus();
+    await page.keyboard.press('Meta+f');
+    expect(await page.getByRole('dialog', { name: '搜索消息', exact: true }).count()).toBe(0);
+    expect(await cwd.evaluate(el => el === document.activeElement)).toBe(true);
+    await page.keyboard.press('Escape');
+    await form.waitFor({ state: 'hidden' });
+    expect(errors).toEqual([]);
+  }, 20000);
+
+  it('折叠侧栏的文件和会话入口自动展开内容，不产生空操作或新对话', async () => {
+    await page.goto(baseURL);
+    await draftField().waitFor();
+    await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
+    await page.getByRole('button', { name: '文件', exact: true }).click();
+    await page.getByRole('button', { name: '折叠侧栏', exact: true }).waitFor();
+    expect(await page.locator('#sidebar-content').isVisible()).toBe(true);
+    await page.getByRole('button', { name: '折叠侧栏', exact: true }).click();
+    await page.getByRole('button', { name: '会话', exact: true }).click();
+    expect(await page.locator('#sidebar-content').isVisible()).toBe(true);
+    expect(await draftField().inputValue()).toBe('甲原草稿');
     expect(errors).toEqual([]);
   }, 20000);
 

@@ -2,11 +2,18 @@
 
 [简体中文](README.md) · [English](README.en.md)
 
-A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/overview): multi-tab parallel conversations, image input, streaming chat, tool-call visualization, line-level diffs, a file tree, cross-session search, a token usage dashboard, AI session naming, a TodoWrite progress panel, a file previewer, a project management center, and an optional live video background.
+A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/overview): multi-tab parallel conversations, image input, streaming chat, tool-call visualization, line-level diffs, a file tree, cross-session search, a token usage dashboard, AI session naming, a TodoWrite progress panel, a file previewer, a project management center, a unified control hierarchy with a responsive workspace, and an optional live video background.
 
 ---
 
 ## Features
+
+### Layout and interaction
+
+- **Consistent action hierarchy** — Page actions use a 32px control, toolbar and inline actions use 28px, and primary, secondary, danger, and navigation variants share the same box model, icon sizing, and focus ring. A page header keeps one filled primary action; lower-frequency or destructive actions move into “More” without removing capability.
+- **Responsive workspace** — Project center, project detail, settings, and chat toolbars collapse into compact layouts at 900×600. Filters, recognition setup, and the message queue open on demand; content uses a bounded reading column, workflow takes the full canvas, and an open terminal still preserves a minimum chat height.
+- **Consistent overlays and keyboard behavior** — Menus render in the browser top layer, flip automatically, and reposition on scroll so scroll containers cannot clip them. Dialogs share `Esc` dismissal, focus trapping and restoration, and unsaved-change confirmation. Charts, search, tabs, and task lists are keyboard-operable.
+- **Readable visualizations** — Project cards show required-task progress, active work, and the next action. The workflow adds a minimap, cross-viewport task search, upstream/downstream relation highlighting, canvas dragging, and fit-to-window. The usage panel combines a unified KPI strip, an exact-scale 14-day chart, an expandable data table, and Top-5 session share bars.
 
 ### Conversations and execution
 
@@ -16,9 +23,9 @@ A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/o
 - **Everything is copyable** — Replies, thinking, and tool output are selectable; hovering a message reveals a copy button. Standard Edit menu roles keep `⌘C` / `⌘A` reliable on macOS.
 - **Tool-call visualization** — Bash, Read, Write, Edit, and other calls render as collapsible cards with status indicators; sub-agent (`Task` / `Agent`) output nests under its parent call.
 - **Interactive approval and questions** — Tool calls use per-call approval by default, with allow/deny/edit-input/always-allow. `AskUserQuestion` supports single-select, multi-select, and free-form answers; `ExitPlanMode` renders plan approval.
-- **Native interactive terminal** — Embedded xterm + PTY for interactive CLI, shell, MCP/plugins/agents, auth, doctor, Remote/Cloud, and Teams modes. A live session is handed off exclusively between chat and terminal to avoid concurrent writers.
+- **Native interactive terminal** — Embedded xterm + PTY for interactive CLI, shell, MCP/plugins/agents, auth, doctor, Remote/Cloud, and Teams modes. A live session is handed off exclusively between chat and terminal to avoid concurrent writers. New terminals use a dedicated dialog, the panel height is draggable, and chat input keeps a minimum visible height while the terminal is open.
 - **Interrupt and retry** — `ESC` or the stop button aborts only the active tab. The child process gets `SIGTERM`, then `SIGKILL` after a timeout (tree-kill via `taskkill` on Windows). Retry preserves CLI history and resends; use message fork or file checkpoint rewind for a clean rerun.
-- **Message queue** — Messages typed during generation join that tab's queue and auto-send when the turn completes; failed turns drop their queue so it never bleeds into the next instruction.
+- **Message queue** — Messages typed during generation join that tab's queue and auto-send when the turn completes. The queue opens in an on-demand popover for inspection and item removal; failed turns drop their queue so it never bleeds into the next instruction.
 - **Background notifications** — A system notification with a prompt snippet appears when a task finishes while the window is not focused.
 
 ### Project management workbench
@@ -48,7 +55,7 @@ The project center turns conversation history into trackable long-term projects.
 - **Tasks, acceptance, and workflow**
   - Required and optional tasks are counted separately. If every required task is cancelled or only optional tasks remain, progress reads “not applicable” instead of faking 100%.
   - Goal acceptance is always explicit. Changing the goal, deliverables, or required-task scope automatically invalidates acceptance and records the reason.
-  - The workflow view draws a DAG from real dependency edges with branch/merge support, zoom/pan, and viewport culling. An isolated node only means no recorded edge; it does not prove the absence of dependencies.
+  - The workflow view draws a DAG from real dependency edges with branch/merge support, zoom/pan, a full-graph minimap, task search, upstream/downstream relation highlighting, and viewport culling. An isolated node only means no recorded edge; it does not prove the absence of dependencies.
 - **Working directory and conversation links**
   - A project's working directory must be set explicitly. It never silently inherits the global directory or the first historical source directory.
   - “Continue project” only creates a draft with a project brief; it never auto-sends. You can start a task-specific conversation, reopen the most recent linked conversation, or link the current conversation.
@@ -69,7 +76,7 @@ The project center turns conversation history into trackable long-term projects.
 - **Per-conversation input drafts** — Drafts are bound to a `conversationId`. Switching tabs, creating a conversation, or opening an archived session never overwrites another tab's draft. Sending without a working directory is blocked and the text is preserved.
 - **Slash commands** — Commands are discovered dynamically from the CLI (including skills and plugin commands) and sent verbatim; unknown commands are never replaced by GUI templates.
 - **Cross-session search** — `⌘F` / `Ctrl+F` searches all open tabs and archived sessions; jumping routes to the right tab and highlights the hit. Navigation is subject to the same unsaved-change guard.
-- **Token usage dashboard** — Last 14 days aggregated in the local timezone, with input/output breakdown, totals, and top-consuming sessions.
+- **Token usage dashboard** — Summarizes total/input/output tokens, session count, and the last 7 days. The last 14 days are drawn on a true linear scale by local timezone, with hover, keyboard, and data-table access to exact values, plus directly openable Top-5 consuming sessions.
 - **Context meter and compact** — A zero-cost CLI `/context` query shows real context usage; the archive icon next to it compacts the session.
 - **File tree and preview** — Browse the project directory and click a file to insert an `@path` reference. Preview syntax-highlighted text (512KB cap, binary detection, truncation notice) and common image formats.
 - **Line-level diff** — `Edit` / `Write` / `MultiEdit` calls render red/green diffs with collapsible context. A custom LCS engine degrades gracefully on huge files.
@@ -81,7 +88,7 @@ The project center turns conversation history into trackable long-term projects.
 
 ### Appearance
 
-- **Cyberpunk UI** — Particle network background, scan lines, and glow effects (Tailwind CSS).
+- **Cyberpunk UI** — Particle network background, scan lines, and glow effects (Tailwind CSS); decorative animation can be disabled and honors `prefers-reduced-motion`.
 - **Live video background (opt-in)** — Choose a local video (mp4/webm/mov/m4v/ogv) from **Settings → Dynamic Video Background**. It plays muted, looping, and cover-fitted, with a darkening overlay for readability. A privileged `bgmedia://` protocol provides HTTP Range streaming and only ever serves the selected file. Playback pauses when the window is hidden and falls back to the default background if the file moves or is deleted.
 ## Prerequisites
 
@@ -183,7 +190,7 @@ The model field is passed through verbatim as `--model`, so custom endpoints (GL
   - Security hardening: context isolation, no Node integration in the renderer, intercepted navigation/window-open, and markdown links opened only through the system browser.
   - Single-instance lock; a second launch focuses the existing window.
   - Close guard: renderer `beforeunload` plus a native Electron `will-prevent-unload` confirmation.
-- **React 18 + TypeScript** — Renderer UI.
+- **React 18 + TypeScript** — Renderer UI; shared control tokens (`controls.ts`) and top-layer dialog/focus management (`useDialogBehavior.ts`) keep interaction density and keyboard behavior consistent.
 - **Zustand** — State management with per-conversation isolation. Streaming shards of one message merge by `message.id`; events route by `conversationId`.
 - **Session isolation** — `SessionOwnership` enforces one writer per `sessionId` across chat, native terminal, and auxiliary tasks. History fork/rename runs in an isolated worker; CLI credentials are encrypted with `safeStorage` and only whitelisted environment variables are imported.
 - **Persistence** — A custom JSON store in `userData` with temp file + `fsync` + `rename`; config writes are throttled to 3 seconds with a trailing write and a pre-close flush.
@@ -204,7 +211,7 @@ scripts/           # packaging and signing helpers
 
 ## Testing
 
-The default suite has **858 passing unit/integration tests**; **29** conditional tests that require a real CLI, Electron, or browser are skipped by default.
+The default suite has **889 passing unit/integration tests**; **37** conditional tests that require a real CLI, Electron, or browser are skipped by default.
 
 - `tests/store.test.ts` — message merging by `message.id`, multi-tab isolation and routing, background queue continuation, close-tab draft archiving, legacy migration, malformed-event hardening, immutable updates.
 - `tests/diff.test.ts` — LCS diff correctness, huge-input fallback, context folding.
@@ -228,8 +235,9 @@ The default suite has **858 passing unit/integration tests**; **29** conditional
 - `tests/runtime-settings-ui.test.ts` — permission, model, environment, and connection-state persistence.
 - `tests/desktop-integration.test.ts` — opt-in (`RUN_DESKTOP_INTEGRATION=1`) real Electron + CLI + PTY end-to-end regression.
 - `tests/e2e-partial.test.ts` — opt-in (`RUN_E2E=1`) real Claude CLI tool-loop verification, which may incur API costs.
-- `tests/project-ui.test.ts` — opt-in (`RUN_PROJECT_UI=1`) real-browser E2E: review, lifecycle, conversation links, draft recovery, and write-failure protection.
-- `tests/config-ui.test.ts` — opt-in (`RUN_CONFIG_UI=1`) config persistence, per-tab draft isolation, close guard, and recovery.
+- `tests/observability.test.tsx` — usage-panel layout at 900×600 / 1400×900, exact-scale and keyboard date navigation, Top-5 session opening, and draft protection.
+- `tests/project-ui.test.ts` — opt-in (`RUN_PROJECT_UI=1`) real-browser E2E: review, lifecycle, conversation links, draft recovery, workflow navigation, overlay layout, and write-failure protection.
+- `tests/config-ui.test.ts` — opt-in (`RUN_CONFIG_UI=1`) config persistence, per-tab draft isolation, minimum-window queue and overlays, close guard, and recovery.
 
 Run the optional real-CLI test:
 

@@ -6,7 +6,21 @@ export const TASK_LABELS: Record<TaskStatus, string> = {
 export const PROJECT_LABELS: Record<ProjectStatus, string> = {
   not_started: '未启动', in_progress: '进行中', completed: '已完成',
 };
+/** 列表、详情和筛选共用同一套状态配色：中性 = 未启动，蓝色 = 进行中，绿色 = 完成。
+ *  进行中不再复用主操作青色，避免“当前状态”与“可以点击/主按钮”混淆。 */
+export const PROJECT_STATUS_STYLE: Record<ProjectStatus, string> = {
+  not_started: 'bg-bg-lighter text-text-secondary',
+  in_progress: 'bg-accent-blue/10 text-accent-blue',
+  completed: 'bg-accent-green/10 text-accent-green',
+};
 export const TASK_STATUSES: TaskStatus[] = ['pending', 'in_progress', 'completed', 'cancelled'];
+/** 任务状态文字色在所有视图中共用，颜色只作辅助，标签始终存在。 */
+export const TASK_STATUS_STYLE: Record<TaskStatus, string> = {
+  pending: 'text-text-secondary',
+  in_progress: 'text-accent-blue',
+  completed: 'text-accent-green',
+  cancelled: 'text-text-secondary',
+};
 export const PROVENANCE_LABELS: Record<FieldProvenance, string> = {
   quoted: '原文', model: '模型解释', user: '用户编辑', unknown: '未知',
 };
@@ -54,6 +68,23 @@ export function projectSummary(project: Pick<ManagedProject, 'tasks' | 'goalConf
   return { counts, total, requiredTotal, requiredCompleted, allTasksComplete, status,
     optionalTotal: project.tasks.filter(task => task.optional === true && task.status !== 'cancelled').length,
     progress: requiredTotal ? Math.round(requiredCompleted / requiredTotal * 100) : 0 };
+}
+
+/** 只提供基于已记录事实的工作提示，不调度任务，也不把未知依赖视为已核实。 */
+export function projectWorkState(project: Pick<ManagedProject, 'tasks' | 'goalConfirmed'>) {
+  const byId = new Map(project.tasks.map(task => [task.id, task]));
+  const required = requiredTasks(project.tasks);
+  const active = required.filter(task => task.status === 'in_progress');
+  const pending = required.filter(task => task.status === 'pending');
+  const blocked = pending.filter(task => task.dependsOn.some(id => byId.get(id)?.status !== 'completed'));
+  const blockedIds = new Set(blocked.map(task => task.id));
+  const nextTask = active[0] ?? pending.find(task => !blockedIds.has(task.id)) ?? blocked[0] ?? null;
+  const allComplete = required.length > 0 && required.every(task => task.status === 'completed');
+  const label = allComplete ? (project.goalConfirmed ? '项目已验收' : '核对交付并验收')
+    : !required.length ? '添加必要任务' : active.length ? '继续进行中的任务'
+      : nextTask && blockedIds.has(nextTask.id) ? '核对前置任务' : '下一项必要任务';
+  const note = '仅按已记录依赖提供提示；未知关系仍需核对，不自动执行或阻止状态修改。';
+  return { active, pending, blocked, nextTask: allComplete ? null : nextTask, label, note };
 }
 
 export function projectCounts(projects: ManagedProject[]) {

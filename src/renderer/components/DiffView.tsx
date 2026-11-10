@@ -106,15 +106,15 @@ export function DiffView({ oldText, newText, label }: {
     <div className="rounded-lg border border-border/50 bg-bg-deepest/80 overflow-hidden">
       {/* 头部统计 */}
       <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-border/30 bg-bg-deep/50">
-        {label && <span className="text-[10px] font-mono text-text-dim truncate flex-1">{label}</span>}
+        {label && <span className="text-2xs font-mono text-text-dim truncate flex-1">{label}</span>}
         <span className="flex-1" />
-        <span className="text-[10px] font-mono text-accent-green">+{addCount}</span>
-        <span className="text-[10px] font-mono text-accent-red">-{delCount}</span>
+        <span className="text-2xs font-mono text-accent-green">+{addCount}</span>
+        <span className="text-2xs font-mono text-accent-red">-{delCount}</span>
       </div>
 
       {/* diff 内容 */}
       <div className="overflow-x-auto max-h-80 overflow-y-auto">
-        <pre className="text-[11px] font-mono leading-5 min-w-full">
+        <pre className="text-2xs font-mono leading-5 min-w-full">
           {rows.map((row, i) => {
             if (row.type === 'fold') {
               return (
@@ -143,7 +143,7 @@ export function DiffView({ oldText, newText, label }: {
       {totalLines > COLLAPSE_THRESHOLD && (
         <button
           onClick={() => setShowAll(!showAll)}
-          className="w-full flex items-center justify-center gap-1 px-2 py-1 border-t border-border/30 text-[10px] font-mono text-text-dim hover:text-accent-cyan hover:bg-bg-light/50 transition-colors"
+          className="w-full flex items-center justify-center gap-1 px-2 py-1 border-t border-border/30 text-2xs font-mono text-text-dim hover:text-accent-cyan hover:bg-bg-light/50 transition-colors"
         >
           {showAll ? <ChevronsUp className="w-3 h-3" /> : <ChevronsUpDown className="w-3 h-3" />}
           {showAll ? '折叠上下文' : `展开全部 ${totalLines} 行`}

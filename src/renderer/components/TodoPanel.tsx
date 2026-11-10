@@ -22,17 +22,25 @@ export function TodoPanel({ conv }: { conv: Conversation }) {
       {/* 头部：进度摘要 */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-white/5 transition-colors text-left"
+        aria-expanded={expanded}
+        className="flex h-9 w-full items-center gap-2 px-3 text-left transition-colors hover:bg-white/5"
       >
         {expanded
           ? <ChevronDown className="w-3.5 h-3.5 text-text-dim shrink-0" />
           : <ChevronRight className="w-3.5 h-3.5 text-text-dim shrink-0" />}
         <ListTodo className={`w-3.5 h-3.5 shrink-0 ${running ? 'text-accent-purple animate-pulse' : 'text-accent-purple/70'}`} />
-        <span className="text-[11px] font-mono text-text-secondary shrink-0">
+        <span className="text-2xs font-mono text-text-secondary shrink-0">
           任务清单 {done}/{items.length}
         </span>
+        {/* 当前任务与进度合并为一行，避免折叠态长期占用两行高度 */}
+        {current && (
+          <span className="min-w-0 flex-1 truncate text-2xs text-text-muted">
+            {current.activeForm || current.content}
+          </span>
+        )}
+        {!current && <span className="flex-1" />}
         {/* 进度条 */}
-        <div className="flex-1 h-1.5 rounded-full bg-bg-deepest overflow-hidden min-w-[40px]">
+        <div role="progressbar" aria-label="会话任务进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-bg-deepest">
           <div
             className={`h-full rounded-full transition-all duration-500 ${
               done === items.length ? 'bg-accent-green' : 'bg-accent-purple'
@@ -40,24 +48,14 @@ export function TodoPanel({ conv }: { conv: Conversation }) {
             style={{ width: `${pct}%` }}
           />
         </div>
-        <span className={`text-[10px] font-mono shrink-0 ${done === items.length ? 'text-accent-green' : 'text-text-dim'}`}>
+        <span className={`text-2xs font-mono shrink-0 ${done === items.length ? 'text-accent-green' : 'text-text-dim'}`}>
           {pct}%
         </span>
       </button>
 
-      {/* 折叠态：当前进行中的任务 */}
-      {!expanded && current && (
-        <div className="px-3 pb-2 -mt-0.5 flex items-center gap-1.5">
-          <CircleDot className="w-3 h-3 text-accent-cyan animate-pulse shrink-0" />
-          <span className="text-[11px] text-text-muted truncate">
-            {current.activeForm || current.content}
-          </span>
-        </div>
-      )}
-
       {/* 展开态：全部条目 */}
       {expanded && (
-        <div className="px-3 pb-2 space-y-1 border-t border-accent-purple/15 pt-2">
+        <div className="max-h-[min(180px,20vh)] space-y-1 overflow-y-auto border-t border-accent-purple/15 px-3 pb-2 pt-2">
           {items.map((t, i) => (
             <TodoRow key={i} item={t} />
           ))}

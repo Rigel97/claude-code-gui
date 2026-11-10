@@ -98,6 +98,7 @@ it('过滤切换与旧数组 bridge兼容，初次错误可以重试', async () 
   await page.getByRole('alert').waitFor();
   failure = false;
   await page.getByRole('button', { name: '重试', exact: true }).click();
+  await page.getByLabel('文件显示选项', { exact: true }).click();
   await page.getByLabel('显示隐藏文件').check();
   await page.getByLabel('显示忽略目录').check();
   await expect.poll(() => calls.at(-1)?.options).toMatchObject({ showHidden: true, showIgnored: true });

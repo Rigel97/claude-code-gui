@@ -1,141 +1,62 @@
-import { useState, useEffect, useRef } from 'react';
-import type { ConversationRuntime, PermissionMode } from '../types';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Archive, Bell, Boxes, Cpu, Info, Search, Shield, Terminal, X } from 'lucide-react';
+import type { ConversationRuntime } from '../types';
 import { useStore } from '../store';
-import { RuntimeSettings, getSettingsAPI } from './RuntimeSettings';
-import { X, Cpu, Info, Shield, Bell, Archive, Trash2, RotateCcw, Gauge, Boxes, DollarSign, Film, FolderOpen } from 'lucide-react';
+import { getSettingsAPI } from './RuntimeSettings';
+import { useDialogBehavior } from './useDialogBehavior';
+import { confirmAction } from './ConfirmDialog';
+import {
+  SETTINGS_INDEX,
+  VIEW_LABELS,
+  parseBudget,
+  type SettingsDraft,
+  type ViewId,
+} from './settings/settingsMeta';
+import { StatusPill } from './settings/SettingsControls';
+import { BUTTON, BUTTON_DANGER, BUTTON_GHOST, BUTTON_PRIMARY } from './controls';
+import {
+  AboutView,
+  AppearanceView,
+  ContextView,
+  ModelView,
+  PermissionView,
+  RuntimeView,
+  SessionsView,
+  type SettingsViewProps,
+} from './settings/SettingsViews';
 
-type EffortLevel = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-type Autocompact = '' | 'auto' | '100k' | '200k' | '400k' | '800k' | '1M';
-
-const EFFORT_OPTIONS: { id: EffortLevel; label: string; desc: string }[] = [
-  { id: '', label: '默认', desc: 'CLI 自动决定' },
-  { id: 'low', label: '低', desc: '快速响应' },
-  { id: 'medium', label: '中', desc: '均衡' },
-  { id: 'high', label: '高', desc: '更多思考' },
-  { id: 'xhigh', label: '超高', desc: '深度推理' },
-  { id: 'max', label: '最大', desc: '最强思考预算' },
+const NAV_ITEMS: { id: ViewId; label: string; icon: ReactNode }[] = [
+  { id: 'model', label: '模型与推理', icon: <Cpu className="h-4 w-4" /> },
+  { id: 'context', label: '上下文与成本', icon: <Boxes className="h-4 w-4" /> },
+  { id: 'permission', label: '权限与安全', icon: <Shield className="h-4 w-4" /> },
+  { id: 'appearance', label: '外观与通知', icon: <Bell className="h-4 w-4" /> },
+  { id: 'sessions', label: '会话与数据', icon: <Archive className="h-4 w-4" /> },
 ];
 
-const AUTOCOMPACT_OPTIONS: { id: Autocompact; label: string; desc: string }[] = [
-  { id: '', label: '默认', desc: 'CLI 自动管理' },
-  { id: 'auto', label: 'Auto', desc: '自动选时机' },
-  { id: '200k', label: '200k', desc: '更早压缩' },
-  { id: '400k', label: '400k', desc: '中等' },
-  { id: '800k', label: '800k', desc: '尽量保留' },
-  { id: '1M', label: '1M', desc: '压缩阈值，不扩大模型上下文窗口' },
+const ADVANCED_ITEMS: { id: ViewId; label: string; icon: ReactNode }[] = [
+  { id: 'runtime', label: '运行环境', icon: <Terminal className="h-4 w-4" /> },
 ];
 
-const PERMISSION_MODES: { id: PermissionMode; label: string; desc: string }[] = [
-  { id: 'default', label: '逐次审批', desc: '默认模式：需要权限的工具调用逐次审批，已有允许规则仍适用。' },
-  { id: 'acceptEdits', label: '仅自动接受文件编辑', desc: '自动接受文件编辑，命令执行等其他工具仍按规则请求审批。' },
-  { id: 'plan', label: '只读规划', desc: '只读分析和规划，不执行修改。' },
-  { id: 'auto', label: '自动审批（依赖 CLI 可用）', desc: '由 CLI 自动判断审批；依赖安装的 CLI 支持，失败会明确提示。' },
-  { id: 'dontAsk', label: '仅规则、不弹问', desc: '只遵循允许规则，不弹出权限询问；未获允许的操作拒绝。' },
-  { id: 'bypassPermissions', label: '全部放行（危险）', desc: '跳过权限检查，可能执行危险命令；必须明确确认，CLI 可能要求重新连接。' },
-];
-
-const SESSION_LIMIT_OPTIONS = [20, 50, 100, 200];
-function VideoBgSettings() {
-  const videoBg = useStore((s) => s.videoBg);
-  const setVideoBg = useStore((s) => s.setVideoBg);
-
-  // 选择本机视频文件：主进程弹原生选框并登记 bgmedia:// 白名单，选中即生效
-  const pickVideo = async () => {
-    const api = (window as any).api?.videoBg;
-    if (!api) return;
-    const filePath: string | null = await api.pick();
-    if (filePath) setVideoBg({ path: filePath, enabled: true });
-  };
-
-  const fileName = videoBg.path ? videoBg.path.split(/[\\/]/).pop() : null;
-
-  return (
-    <section className="space-y-2">
-      <div className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider">
-        <Film className="w-3.5 h-3.5" />
-        动态视频背景
-      </div>
-      <Toggle
-        on={videoBg.enabled && !!videoBg.path}
-        color="purple"
-        label="启用视频背景"
-        onClick={() => {
-          // 未选视频时开关无效（需先选择文件）
-          if (!videoBg.path) return;
-          setVideoBg({ enabled: !videoBg.enabled });
-        }}
-      />
-      <div className="flex gap-1.5">
-        <button
-          onClick={pickVideo}
-          className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg text-xs text-text-muted hover:text-accent-cyan bg-bg-light border border-border hover:border-accent-cyan/40 transition-all"
-        >
-          <FolderOpen className="w-3.5 h-3.5" />
-          选择视频文件…
-        </button>
-        <button
-          onClick={() => setVideoBg({ path: null, enabled: false })}
-          disabled={!videoBg.path}
-          title="移除视频文件并恢复默认背景"
-          className="px-2.5 py-2 rounded-lg text-xs text-text-muted hover:text-red-400 bg-bg-light border border-border hover:border-red-500/30 transition-all disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-        >
-          清除
-        </button>
-      </div>
-      {fileName && (
-        <div
-          className="text-[10px] text-text-dim truncate font-mono"
-          title={videoBg.path ?? undefined}
-        >
-          {fileName}
-        </div>
-      )}
-      <p className="text-[10px] text-text-dim leading-relaxed">
-        支持 mp4 / webm / mov / m4v / ogv。建议选择低码率、可无缝循环的短视频以降低功耗；
-        视频经本机 bgmedia 协议直读，不联网，路径仅保存在本机。
-      </p>
-    </section>
-  );
-}
-
-function Toggle({ on, color, label, onClick }: {
-  on: boolean;
-  color: 'purple' | 'blue';
-  label: string;
-  onClick: () => void;
-}) {
-  const active = color === 'purple'
-    ? 'bg-accent-purple/10 border border-accent-purple/40 text-accent-purple'
-    : 'bg-accent-blue/10 border border-accent-blue/40 text-accent-blue';
-  const knob = color === 'purple' ? 'bg-accent-purple/40' : 'bg-accent-blue/40';
-  return (
-    <button
-      onClick={onClick}
-      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-all ${
-        on ? active : 'bg-bg-light border border-border text-text-secondary'
-      }`}
-    >
-      <span>{label}</span>
-      <div className={`w-9 h-5 rounded-full relative transition-colors ${on ? knob : 'bg-bg-lighter'}`}>
-        <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-text-primary transition-all ${on ? 'left-4' : 'left-0.5'}`} />
-      </div>
-    </button>
-  );
-}
+const PERMISSION_LABELS: Record<string, string> = {
+  default: '逐次审批',
+  acceptEdits: '仅自动接受编辑',
+  plan: '只读规划',
+  auto: '自动审批',
+  dontAsk: '仅规则、不弹问',
+  bypassPermissions: '全部放行（危险）',
+};
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const model = useStore((s) => s.model);
   const setModel = useStore((s) => s.setModel);
-  // 当前实际使用：活跃标签页的 CLI init 回显（各标签页可能不同）
-  const currentModel = useStore(
-    (s) => s.conversations.find((c) => c.id === s.activeConversationId)?.currentModel || ''
-  );
   const permissionMode = useStore((s) => s.permissionMode);
   const setPermissionMode = useStore((s) => s.setPermissionMode);
   const showThinking = useStore((s) => s.showThinking);
   const setShowThinking = useStore((s) => s.setShowThinking);
   const notifyOnComplete = useStore((s) => s.notifyOnComplete);
   const setNotifyOnComplete = useStore((s) => s.setNotifyOnComplete);
+  const particlesEnabled = useStore((s) => s.particlesEnabled);
+  const setParticlesEnabled = useStore((s) => s.setParticlesEnabled);
   const maxSessions = useStore((s) => s.maxSessions);
   const setMaxSessions = useStore((s) => s.setMaxSessions);
   const effortLevel = useStore((s) => s.effortLevel);
@@ -144,25 +65,27 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const setAutocompact = useStore((s) => s.setAutocompact);
   const maxBudgetUsd = useStore((s) => s.maxBudgetUsd);
   const setMaxBudgetUsd = useStore((s) => s.setMaxBudgetUsd);
-  const clearAllSessions = useStore((s) => s.clearAllSessions);
-  const sessions = useStore((s) => s.sessions);
+  const activeConversationId = useStore((s) => s.activeConversationId);
+  const activeConversation = useStore((s) => s.conversations.find((c) => c.id === s.activeConversationId));
 
-  // 模型 ID 直接作为 --model 传给 CLI；留空表示跟随 CLI 默认配置。
-  // 不提供预设别名：非官方端点（如 GLM 中转）上 sonnet/opus/haiku 等别名无效
-  const [localModel, setLocalModel] = useState(model);
-  const [localPermissionMode, setLocalPermissionMode] = useState(permissionMode);
-  const [localShowThinking, setLocalShowThinking] = useState(showThinking);
-  const [localNotify, setLocalNotify] = useState(notifyOnComplete);
-  const [localMaxSessions, setLocalMaxSessions] = useState(maxSessions);
-  const [localEffort, setLocalEffort] = useState<EffortLevel>(effortLevel);
-  const [localAutocompact, setLocalAutocompact] = useState<Autocompact>(autocompact);
-  const [localBudget, setLocalBudget] = useState(maxBudgetUsd > 0 ? String(maxBudgetUsd) : '');
-  const [confirmClear, setConfirmClear] = useState(false);
-  const activeConversationId = useStore(s => s.activeConversationId);
-  const activeConversation = useStore(s => s.conversations.find(c => c.id === s.activeConversationId));
+  const [view, setView] = useState<ViewId>('model');
+  const [search, setSearch] = useState('');
+  const [draft, setDraft] = useState<SettingsDraft>(() => ({
+    model,
+    permissionMode,
+    showThinking,
+    notifyOnComplete,
+    particlesEnabled,
+    maxSessions,
+    effortLevel,
+    autocompact,
+    maxBudget: maxBudgetUsd > 0 ? String(maxBudgetUsd) : '',
+  }));
   const [settingsError, setSettingsError] = useState('');
   const [settingsNote, setSettingsNote] = useState('');
   const [saving, setSaving] = useState(false);
+  const [closePrompt, setClosePrompt] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const settingsLock = useRef(false);
   const bypassConfirmed = useRef(false);
 
@@ -170,84 +93,193 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     let cancelled = false;
     const api = getSettingsAPI()?.claude;
     if (activeConversationId && typeof api?.runtimeState === 'function') {
-      void api.runtimeState(activeConversationId).then(runtime => {
+      void api.runtimeState(activeConversationId).then((runtime) => {
         if (!cancelled) useStore.getState().setRuntime(activeConversationId, runtime);
-      }).catch(() => { if (!cancelled) setSettingsError('当前对话运行状态读取失败；请重试，不会伪造本地状态。'); });
+      }).catch(() => {
+        if (!cancelled) setSettingsError('当前对话运行状态读取失败；请重试，不会伪造本地状态。');
+      });
     }
     return () => { cancelled = true; };
   }, [activeConversationId]);
 
-  const saveGlobal = () => {
-    setModel(localModel.trim());
-    setPermissionMode(localPermissionMode);
-    setShowThinking(localShowThinking);
-    setNotifyOnComplete(localNotify);
-    setMaxSessions(localMaxSessions);
-    setEffortLevel(localEffort);
-    setAutocompact(localAutocompact);
-    const budget = parseFloat(localBudget);
-    setMaxBudgetUsd(Number.isFinite(budget) && budget > 0 ? budget : 0);
+  const runtimeInfo = activeConversation?.runtime?.info as Record<string, unknown> | null | undefined;
+  const actualModel = activeConversation?.currentModel || (typeof runtimeInfo?.model === 'string' ? runtimeInfo.model : '') || '';
+  const cliVersion = typeof runtimeInfo?.version === 'string' ? runtimeInfo.version : '';
+  const actualPermission = String(runtimeInfo?.permissionMode || activeConversation?.permissionMode || permissionMode || '');
+  const actualPermissionLabel = PERMISSION_LABELS[actualPermission] || actualPermission || '未连接';
+
+  const normalizedModel = draft.model.trim();
+  const budgetValue = parseBudget(draft.maxBudget);
+  const dirty = {
+    model: normalizedModel !== model,
+    permission: draft.permissionMode !== permissionMode,
+    showThinking: draft.showThinking !== showThinking,
+    notify: draft.notifyOnComplete !== notifyOnComplete,
+    particles: draft.particlesEnabled !== particlesEnabled,
+    maxSessions: draft.maxSessions !== maxSessions,
+    effort: draft.effortLevel !== effortLevel,
+    autocompact: draft.autocompact !== autocompact,
+    budget: budgetValue !== maxBudgetUsd,
   };
+  const dirtyCount = Object.values(dirty).filter(Boolean).length;
+  const dirtyByView: Record<ViewId, number> = {
+    model: Number(dirty.model) + Number(dirty.effort),
+    context: Number(dirty.autocompact) + Number(dirty.budget),
+    permission: Number(dirty.permission),
+    appearance: Number(dirty.showThinking) + Number(dirty.notify) + Number(dirty.particles),
+    sessions: Number(dirty.maxSessions),
+    runtime: 0,
+    about: 0,
+  };
+
+  const patchDraft = (next: Partial<SettingsDraft>) => {
+    if (next.permissionMode !== undefined && next.permissionMode !== 'bypassPermissions') bypassConfirmed.current = false;
+    setDraft((current) => ({ ...current, ...next }));
+  };
+
+  const resetDraft = () => {
+    bypassConfirmed.current = false;
+    setDraft({
+      model,
+      permissionMode,
+      showThinking,
+      notifyOnComplete,
+      particlesEnabled,
+      maxSessions,
+      effortLevel,
+      autocompact,
+      maxBudget: maxBudgetUsd > 0 ? String(maxBudgetUsd) : '',
+    });
+    setSettingsError('');
+    setSettingsNote('');
+  };
+
+  const saveDraftToStore = () => {
+    setModel(normalizedModel);
+    setPermissionMode(draft.permissionMode);
+    setShowThinking(draft.showThinking);
+    setNotifyOnComplete(draft.notifyOnComplete);
+    setParticlesEnabled(draft.particlesEnabled);
+    setMaxSessions(draft.maxSessions);
+    setEffortLevel(draft.effortLevel);
+    setAutocompact(draft.autocompact);
+    setMaxBudgetUsd(budgetValue);
+  };
+
   const isBusy = (runtime: ConversationRuntime) => runtime.busy || runtime.state !== 'ready'
     || runtime.pendingApprovals?.length || runtime.pendingUserMessageIds?.length;
   const cannotReconnect = (runtime: ConversationRuntime) => runtime.busy
     || !['ready', 'closed'].includes(runtime.state ?? '')
     || runtime.pendingApprovals?.length || runtime.pendingUserMessageIds?.length;
   const locallyBusy = (id: string) => {
-    const conv = useStore.getState().conversations.find(c => c.id === id);
+    const conv = useStore.getState().conversations.find((item) => item.id === id);
     return !conv || ['starting', 'streaming'].includes(conv.status) || conv.pendingApprovals?.length || conv.queue?.length;
   };
-  const confirmBypass = () => localPermissionMode !== 'bypassPermissions' || bypassConfirmed.current
-    || (bypassConfirmed.current = window.confirm('危险：全部放行将跳过权限检查，可能执行任意命令。确认启用 bypassPermissions？'));
-
-  const handleSave = async () => {
-    if (settingsLock.current || !confirmBypass()) return;
-    settingsLock.current = true; setSaving(true); setSettingsError('');
-    saveGlobal();
-    setSettingsNote('全局设置已保存；现有 CLI 不随全局设置热更新。模型、思考深度、压缩阈值、预算及运行时配置应用于下次连接；请空闲时显式重新连接当前对话。');
-    try {
-      const state = useStore.getState();
-      const conv = state.conversations.find(c => c.id === state.activeConversationId);
-      if (!conv || !(conv.protocolConnected || conv.runtime)) return;
-      const api = getSettingsAPI()?.claude;
-      if (typeof api?.runtimeState !== 'function') { setSettingsError('全局已保存，但当前对话运行状态 API 不可用；权限模式未确认应用。'); return; }
-      const runtime = await api.runtimeState(conv.id);
-      state.setRuntime(conv.id, runtime);
-      if (runtime.info?.permissionMode === localPermissionMode || runtime.state === 'closed') return;
-      if (isBusy(runtime) || locallyBusy(conv.id)) { setSettingsNote('全局设置已保存；当前对话忙碌，权限模式也仅用于下次连接。不会自动关闭正在运行的任务。'); return; }
-      if (typeof api.mode !== 'function') { setSettingsError('全局已保存，但权限模式 API 不可用；当前对话模式未改变。'); return; }
-      const result = await api.mode({ conversationId: conv.id, mode: localPermissionMode });
-      if (result?.success !== true) { setSettingsError('权限模式更新失败；当前对话模式未确认改变。CLI 可能不支持该模式或要求显式重新连接。'); return; }
-      const fresh = await api.runtimeState(conv.id);
-      useStore.getState().setRuntime(conv.id, fresh);
-      if (fresh.info?.permissionMode !== localPermissionMode) {
-        setSettingsError('权限模式请求已成功，但刷新状态未确认目标模式；保留 CLI 实际回显，请重试。'); return;
-      }
-      setSettingsNote('全局设置已保存，当前权限模式已由 CLI 确认；其余运行配置仍需下次连接或空闲时显式重新连接。');
-    } catch { setSettingsError('保存全局后当前 CLI 操作失败；未伪造权限模式。请重试或显式重新连接。'); }
-    finally { settingsLock.current = false; setSaving(false); }
+  const confirmBypass = async () => {
+    if (draft.permissionMode !== 'bypassPermissions' || bypassConfirmed.current) return true;
+    const accepted = await confirmAction({ title: '启用全部放行', message: '危险：全部放行将跳过权限检查，可能执行任意命令。确认启用 bypassPermissions？', confirmLabel: '启用全部放行', tone: 'danger' });
+    if (accepted) bypassConfirmed.current = true;
+    return accepted;
   };
 
-  const reconnect = async () => {
+  // 关闭、Esc、点击遮罩都走同一保护：有未保存更改时先确认，避免静默丢失。
+  const requestClose = useCallback(() => {
+    if (saving) return;
+    if (dirtyCount > 0) { setClosePrompt(true); return; }
+    onClose();
+  }, [dirtyCount, saving, onClose]);
+
+  useDialogBehavior({
+    open: true,
+    dialogRef,
+    onRequestClose: closePrompt ? () => setClosePrompt(false) : requestClose,
+    initialFocusSelector: 'input[aria-label="搜索设置"]',
+  });
+
+  const handleSave = async (): Promise<boolean> => {
+    if (settingsLock.current) return false;
+    settingsLock.current = true;
+    setSaving(true);
+    setSettingsError('');
+    let globalSaved = false;
+    try {
+      if (!(await confirmBypass())) return false;
+      saveDraftToStore();
+      globalSaved = true;
+      setSettingsNote('已保存全局设置：模型、思考深度、压缩阈值、预算、权限模式、通知与会话保留数量。当前 CLI 不随保存热更新；运行环境（CLI 路径与环境变量）在“运行环境”中单独保存。');
+      const state = useStore.getState();
+      const conv = state.conversations.find((c) => c.id === state.activeConversationId);
+      if (!conv || !(conv.protocolConnected || conv.runtime)) return true;
+      const api = getSettingsAPI()?.claude;
+      if (typeof api?.runtimeState !== 'function') {
+        setSettingsError('全局已保存，但当前对话运行状态 API 不可用；权限模式未确认应用。');
+        return false;
+      }
+      const runtime = await api.runtimeState(conv.id);
+      state.setRuntime(conv.id, runtime);
+      if (runtime.info?.permissionMode === draft.permissionMode || runtime.state === 'closed') return true;
+      if (isBusy(runtime) || locallyBusy(conv.id)) {
+        setSettingsNote('全局设置已保存；当前对话忙碌，权限模式也仅用于下次连接。不会自动关闭正在运行的任务。');
+        return true;
+      }
+      if (typeof api.mode !== 'function') {
+        setSettingsError('全局已保存，但权限模式 API 不可用；当前对话模式未改变。');
+        return false;
+      }
+      const result = await api.mode({ conversationId: conv.id, mode: draft.permissionMode });
+      if (result?.success !== true) {
+        setSettingsError('权限模式更新失败；当前对话模式未确认改变。CLI 可能不支持该模式或要求显式重新连接。');
+        return false;
+      }
+      const fresh = await api.runtimeState(conv.id);
+      useStore.getState().setRuntime(conv.id, fresh);
+      if (fresh.info?.permissionMode !== draft.permissionMode) {
+        setSettingsError('权限模式请求已成功，但刷新状态未确认目标模式；保留 CLI 实际回显，请重试。');
+        return false;
+      }
+      setSettingsNote('全局设置已保存，当前权限模式已由 CLI 确认；其余运行配置仍需下次连接或空闲时显式重新连接。');
+      return true;
+    } catch {
+      setSettingsError(globalSaved
+        ? '保存全局后当前 CLI 操作失败；未伪造权限模式。请重试或显式重新连接。'
+        : '保存全局设置失败；请检查已保存值后重试，当前 CLI 未更新。');
+      return false;
+    } finally {
+      settingsLock.current = false;
+      setSaving(false);
+    }
+  };
+
+  const handleReconnect = async () => {
     if (settingsLock.current) return;
     setSettingsError('');
     const state = useStore.getState();
-    const conv = state.conversations.find(c => c.id === state.activeConversationId);
+    const conv = state.conversations.find((c) => c.id === state.activeConversationId);
     const api = getSettingsAPI()?.claude;
     if (!conv) { setSettingsError('没有当前对话可重新连接。'); return; }
     if (typeof api?.runtimeState !== 'function' || typeof api.close !== 'function' || typeof api.start !== 'function') {
-      setSettingsError('重新连接 API 不可用；不会关闭当前对话。'); return;
+      setSettingsError('重新连接 API 不可用；不会关闭当前对话。');
+      return;
     }
-    settingsLock.current = true; setSaving(true);
+    settingsLock.current = true;
+    setSaving(true);
     try {
       const runtime = await api.runtimeState(conv.id);
       useStore.getState().setRuntime(conv.id, runtime);
-      if (cannotReconnect(runtime) || locallyBusy(conv.id)) { setSettingsError('当前对话忙碌、等待审批或未就绪；不能重新连接，不会中断任务。'); return; }
-      if (!confirmBypass() || !window.confirm('重新连接当前对话？将关闭空闲 CLI 并按当前设置重新启动；累计进程预算重新计。')) return;
-      if (locallyBusy(conv.id)) { setSettingsError('当前对话已变为忙碌；取消重新连接。'); return; }
+      if (cannotReconnect(runtime) || locallyBusy(conv.id)) {
+        setSettingsError('当前对话忙碌、等待审批或未就绪；不能重新连接，不会中断任务。');
+        return;
+      }
+      if (!(await confirmBypass()) || !(await confirmAction({ title: '重新连接当前对话', message: '重新连接当前对话？将关闭空闲 CLI 并按当前设置重新启动；累计进程预算重新计。', confirmLabel: '重新连接', tone: 'danger' }))) return;
+      if (locallyBusy(conv.id)) {
+        setSettingsError('当前对话已变为忙碌；取消重新连接。');
+        return;
+      }
       const checked = await api.runtimeState(conv.id);
-      if (cannotReconnect(checked) || locallyBusy(conv.id)) { setSettingsError('当前对话已变为忙碌；取消重新连接。'); return; }
-      saveGlobal();
+      if (cannotReconnect(checked) || locallyBusy(conv.id)) {
+        setSettingsError('当前对话已变为忙碌；取消重新连接。');
+        return;
+      }
       const saved = useStore.getState();
       const options = {
         ...((checked.sessionId || conv.sessionId) ? { sessionId: checked.sessionId || conv.sessionId } : {}),
@@ -259,293 +291,248 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
       };
       if (checked.state !== 'closed') {
         const closed = await api.close(conv.id);
-        if (closed?.success !== true) { setSettingsError('主进程拒绝关闭当前对话（可能忙碌或所有权冲突）；未启动新 CLI。'); return; }
+        if (closed?.success !== true) {
+          setSettingsError('主进程拒绝关闭当前对话（可能忙碌或所有权冲突）；未启动新 CLI。');
+          return;
+        }
         useStore.getState().setRuntime(conv.id, { state: 'closed', busy: false });
       }
       const started = await api.start({ conversationId: conv.id, cwd: conv.cwd, options });
-      if (started?.success !== true) { setSettingsError('旧 CLI 已关闭，但重新启动失败；请重试连接，不会显示虚假成功。'); return; }
-      // The returned runtime is authoritative; no locally invented mode/runId.
+      if (started?.success !== true) {
+        setSettingsError('旧 CLI 已关闭，但重新启动失败；请重试连接，不会显示虚假成功。');
+        return;
+      }
       const fresh = await api.runtimeState(conv.id);
       useStore.getState().setRuntime(conv.id, fresh);
       if (fresh.state !== 'ready' && fresh.state !== 'busy') {
-        setSettingsError('启动请求已返回成功，但当前运行状态未确认连接；请重新读取状态后重试。'); return;
+        setSettingsError('启动请求已返回成功，但当前运行状态未确认连接；请重新读取状态后重试。');
+        return;
       }
       setSettingsNote('当前对话已按配置快照重新连接；累计预算从新常驻进程重新计。');
-    } catch { setSettingsError('重新连接失败；请检查当前 CLI 状态并重试。不会伪造连接成功。'); }
-    finally { settingsLock.current = false; setSaving(false); }
+    } catch {
+      setSettingsError('重新连接失败；请检查当前 CLI 状态并重试。不会伪造连接成功。');
+    } finally {
+      settingsLock.current = false;
+      setSaving(false);
+    }
+  };
+
+  /** 保存并重连直接提交草稿；独立重连只使用已保存配置，不走权限热切换。 */
+  const saveAndReconnect = async () => {
+    if (settingsLock.current || !(await confirmBypass())) return;
+    saveDraftToStore();
+    await handleReconnect();
+  };
+
+  const searchResults = search.trim()
+    ? SETTINGS_INDEX.filter((entry) => {
+        const haystack = `${entry.label} ${entry.keywords.join(' ')} ${VIEW_LABELS[entry.view]}`.toLowerCase();
+        return haystack.includes(search.trim().toLowerCase());
+      })
+    : [];
+
+  const viewProps: SettingsViewProps = {
+    draft,
+    patch: patchDraft,
+    activeConversation,
+    actualModel,
+    cliVersion,
+    actualPermission,
+    savedBudget: maxBudgetUsd,
+    saved: { model, permissionMode, showThinking, notifyOnComplete, particlesEnabled, maxSessions, effortLevel, autocompact, maxBudget: maxBudgetUsd > 0 ? String(maxBudgetUsd) : '' },
+  };
+
+  const renderView = () => {
+    switch (view) {
+      case 'model': return <ModelView {...viewProps} />;
+      case 'context': return <ContextView {...viewProps} />;
+      case 'permission': return <PermissionView {...viewProps} />;
+      case 'appearance': return <AppearanceView {...viewProps} />;
+      case 'sessions': return <SessionsView {...viewProps} />;
+      case 'runtime': return (
+        <RuntimeView
+          cliVersion={cliVersion}
+          actualModel={actualModel}
+          onChanged={() => setSettingsNote('运行时配置已改变；当前 CLI 不热更新，请空闲时显式重新连接当前对话。')}
+          onOpenNative={onClose}
+        />
+      );
+      case 'about': return <AboutView cliVersion={cliVersion} actualModel={actualModel} />;
+      default: return <ModelView {...viewProps} />;
+    }
+  };
+
+  const navButton = (item: { id: ViewId; label: string; icon: ReactNode }) => {
+    const active = view === item.id;
+    const count = dirtyByView[item.id];
+    return (
+      <button
+        key={item.id}
+        type="button"
+        aria-label={item.label}
+        aria-current={active ? 'page' : undefined}
+        onClick={() => { setView(item.id); setSearch(''); }}
+        className={`flex min-h-8 w-auto items-center sm:w-full gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${
+          active ? 'bg-bg-light text-text-primary' : 'text-text-secondary hover:bg-bg-light/60 hover:text-text-primary'
+        }`}
+      >
+        <span className={active ? 'text-text-primary' : 'text-text-muted'}>{item.icon}</span>
+        <span className="min-w-0 flex-1 truncate">{item.label}</span>
+        {count > 0 && (
+          <span className="rounded-full border border-accent-yellow/30 bg-accent-yellow/10 px-1.5 py-0.5 text-2xs text-accent-yellow">
+            {count}
+          </span>
+        )}
+      </button>
+    );
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
-      <div className="w-full max-w-md glass-panel rounded-2xl border border-border light overflow-hidden">
-        {/* 头部 */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-border/50">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-fade-in"
+      onClick={(event) => { if (event.target === event.currentTarget) requestClose(); }}
+    >
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="设置" className="flex h-[min(760px,calc(100dvh-32px))] w-[min(980px,96vw)] flex-col overflow-hidden rounded-2xl border border-border bg-bg-deep/95 shadow-2xl">
+        <div className="flex shrink-0 items-center gap-3 border-b border-border/50 px-5 py-3">
           <h2 className="text-sm font-semibold gradient-text-cyan">设置</h2>
-          <button onClick={onClose} className="text-text-muted hover:text-text-primary">
-            <X className="w-4 h-4" />
+          <div className="relative ml-auto w-64 max-w-[45vw]">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-muted" />
+            <input
+              type="text"
+              aria-label="搜索设置"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="搜索设置（模型、压缩、权限…）"
+              className="h-8 w-full rounded-lg border border-border bg-bg-light pl-8 pr-2 text-xs text-text-primary placeholder-text-dim focus:border-accent-cyan/50 focus:outline-none"
+            />
+          </div>
+          <button type="button" aria-label="关闭设置" onClick={requestClose} className={`${BUTTON_GHOST} h-8 w-8 shrink-0 justify-center !p-0`}>
+            <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* 内容（滚动区） */}
-        <div className="p-5 space-y-5 max-h-[65vh] overflow-y-auto">
-          {settingsError && <div role="alert" className="text-xs text-red-400">{settingsError}<button onClick={() => setSettingsError('')} className="ml-2 underline">清除错误</button></div>}
-          {settingsNote && <p role="status" className="text-xs text-text-secondary">{settingsNote}</p>}
-          <p className="text-xs text-text-muted">当前对话权限：{activeConversation?.runtime?.info?.permissionMode || activeConversation?.permissionMode || '未连接'}。保存不会自动关闭任务；继续发送不保证改变现有 CLI 配置。</p>
-          <button disabled={saving} onClick={reconnect} className="px-3 py-2 rounded-lg text-xs border border-border disabled:opacity-40">重新连接当前对话</button>
-          <RuntimeSettings onChanged={() => setSettingsNote('运行时配置已改变；当前 CLI 不热更新，请空闲时显式重新连接当前对话。')} onOpenNative={onClose} />
-          {/* 模型设置 */}
-          <div>
-            <label className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider mb-2">
-              <Cpu className="w-3.5 h-3.5" />
-              模型
-            </label>
-            {currentModel && (
-              <div className="mb-2 px-3 py-1.5 rounded-lg bg-accent-green/5 border border-accent-green/20 text-xs text-accent-green font-mono">
-                当前实际使用：{currentModel}
-              </div>
-            )}
-            <div className="flex gap-1.5">
-              <input
-                type="text"
-                value={localModel}
-                onChange={(e) => setLocalModel(e.target.value)}
-                placeholder="填写模型 ID，如 glm-5.3-m17"
-                spellCheck={false}
-                className="flex-1 px-3 py-2 rounded-lg bg-bg-light border border-border text-sm text-text-primary placeholder-text-dim font-mono focus:border-accent-cyan/50 transition-colors"
-              />
+        {closePrompt && (
+          <div role="alertdialog" aria-label="有未保存的设置更改" className="shrink-0 border-b border-accent-yellow/30 bg-accent-yellow/5 px-5 py-3">
+            <p className="text-xs text-accent-yellow">{dirtyCount > 0 ? `有 ${dirtyCount} 项更改尚未保存。直接关闭会丢失这些修改。` : '全局草稿已保存，但当前 CLI 应用尚未确认成功。请检查下方反馈后重试或继续编辑。'}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
               <button
-                onClick={() => setLocalModel('')}
-                disabled={!localModel}
-                title="清空，跟随 CLI 默认模型"
-                className="flex items-center gap-1 px-2.5 py-2 rounded-lg text-xs text-text-muted hover:text-accent-cyan bg-bg-light border border-border hover:border-accent-cyan/40 transition-all disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+                type="button"
+                disabled={saving}
+                onClick={() => { void handleSave().then((success) => { if (success) { setClosePrompt(false); onClose(); } }); }}
+                className={BUTTON_PRIMARY}
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-                默认
+                保存并关闭
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => { setClosePrompt(false); onClose(); }}
+                className={BUTTON_DANGER}
+              >
+                放弃更改并关闭
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => setClosePrompt(false)}
+                className={BUTTON_GHOST}
+              >
+                继续编辑
               </button>
             </div>
-            <div className="text-[10px] text-text-dim mt-1.5 leading-relaxed">
-              填写完整模型 ID，作为 <code className="text-accent-cyan">--model</code> 传给 claude CLI，
-              保存后用于下次连接；当前常驻 CLI 需空闲时显式重新连接。留空则跟随 CLI 默认配置。
-            </div>
           </div>
+        )}
 
-          {/* 思考深度 */}
-          <div>
-            <label className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider mb-2">
-              <Gauge className="w-3.5 h-3.5" />
-              思考深度
-            </label>
-            <div className="grid grid-cols-6 gap-1">
-              {EFFORT_OPTIONS.map((o) => (
-                <button
-                  key={o.id || 'default'}
-                  onClick={() => setLocalEffort(o.id)}
-                  title={o.desc}
-                  className={`px-1 py-1.5 rounded-lg text-xs font-mono transition-all ${
-                    localEffort === o.id
-                      ? 'bg-accent-purple/10 border border-accent-purple/40 text-accent-purple'
-                      : 'bg-bg-light border border-border text-text-secondary hover:bg-bg-lighter'
-                  }`}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-            <div className="text-[10px] text-text-dim mt-1.5 leading-relaxed">
-              作为 <code className="text-accent-cyan">--effort</code> 传给 CLI，控制思考 token 预算。
-              简单任务选低更省钱，复杂任务选高/超高。
-            </div>
-          </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-x-6 gap-y-2 border-b border-border/40 bg-bg-light/20 px-5 py-2.5">
+          <StatusPill label="实际模型" value={actualModel || '未连接'} />
+          <StatusPill label="CLI" value={cliVersion || '未读取'} />
+          <StatusPill label="实际权限" value={actualPermissionLabel} tone={actualPermission === 'bypassPermissions' ? 'warn' : 'neutral'} />
+          <span className="ml-auto text-2xs text-text-dim">保存不会热更新当前 CLI</span>
+        </div>
 
-          {/* 上下文压缩窗口与预算 */}
-          <div>
-            <label className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider mb-2">
-              <Boxes className="w-3.5 h-3.5" />
-              上下文与预算
-            </label>
-            <div className="grid grid-cols-6 gap-1 mb-2">
-              {AUTOCOMPACT_OPTIONS.map((o) => (
-                <button
-                  key={o.id || 'default'}
-                  onClick={() => setLocalAutocompact(o.id)}
-                  title={o.desc}
-                  className={`px-1 py-1.5 rounded-lg text-xs font-mono transition-all ${
-                    localAutocompact === o.id
-                      ? 'bg-accent-cyan/10 border border-accent-cyan/40 text-accent-cyan'
-                      : 'bg-bg-light border border-border text-text-secondary hover:bg-bg-lighter'
-                  }`}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-            <div className="text-[10px] text-text-dim mb-2 leading-relaxed">
-              自动压缩阈值（<code className="text-accent-cyan">--autocompact</code>）：上下文达到阈值时
-              CLI 自动把历史总结折叠。1M 也只是阈值，不会扩大模型上下文窗口；具体支持依赖 CLI。
-            </div>
-            <div className="flex items-center gap-1.5">
-              <DollarSign className="w-4 h-4 text-accent-green shrink-0" />
-              <input
-                type="number"
-                min="0"
-                step="0.5"
-                value={localBudget}
-                onChange={(e) => setLocalBudget(e.target.value)}
-                placeholder="0 = 不限制"
-                className="flex-1 px-3 py-1.5 rounded-lg bg-bg-light border border-border text-sm text-text-primary placeholder-text-dim font-mono focus:border-accent-cyan/50 transition-colors"
-              />
-              <span className="text-xs text-text-dim shrink-0">美元 / 常驻进程</span>
-            </div>
-            <div className="text-[10px] text-text-dim mt-1.5 leading-relaxed">
-              预算上限（<code className="text-accent-cyan">--max-budget-usd</code>）：单个常驻运行进程的累计预算；重连后重新计，不是会话总额。达到上限后停止，不是每轮预算。
-            </div>
-          </div>
+        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+            <nav aria-label="设置分类" className="flex max-h-32 shrink-0 flex-wrap gap-1 overflow-y-auto border-b border-border/40 p-2 sm:max-h-none sm:w-44 sm:flex-col sm:flex-nowrap sm:gap-0 sm:border-b-0 sm:border-r">
+              <p className="hidden px-2.5 pb-2 text-2xs leading-5 text-text-dim sm:block">生效方式以每项徽章为准；运行环境在该页单独保存。</p>
+            <div className="contents sm:block sm:space-y-0.5">{NAV_ITEMS.map(navButton)}</div>
+            <div className="hidden sm:mt-4 sm:block sm:px-2.5 text-2xs font-medium text-text-dim">高级</div>
+            <div className="contents sm:mt-1 sm:block sm:space-y-0.5">{ADVANCED_ITEMS.map(navButton)}</div>
+            <div className="contents sm:mt-auto sm:block sm:pt-3">{navButton({ id: 'about', label: '关于', icon: <Info className="h-4 w-4" /> })}</div>
+          </nav>
 
-          {/* 权限模式 */}
-          <div>
-            <label className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider mb-2">
-              <Shield className="w-3.5 h-3.5" />
-              权限模式
-            </label>
-            <div className="space-y-1.5">
-              {PERMISSION_MODES.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => {
-                    if (m.id === 'bypassPermissions') {
-                      if (!window.confirm('危险：全部放行将跳过权限检查，可能执行任意命令。确认启用 bypassPermissions？')) return;
-                      bypassConfirmed.current = true;
-                    } else bypassConfirmed.current = false;
-                    setLocalPermissionMode(m.id);
-                  }}
-                  className={`w-full flex items-start gap-2 px-3 py-2 rounded-lg text-sm transition-all text-left ${
-                    localPermissionMode === m.id
-                      ? 'bg-accent-orange/10 border border-accent-orange/40 text-accent-orange'
-                      : 'bg-bg-light border border-border text-text-secondary hover:bg-bg-lighter'
-                  }`}
-                >
-                  <div className={`w-3 h-3 rounded-full border-2 mt-1 shrink-0 ${
-                    localPermissionMode === m.id ? 'border-accent-orange bg-accent-orange' : 'border-text-dim'
-                  }`} />
-                  <div>
-                    <div>{m.label}</div>
-                    <div className="text-[10px] text-text-dim mt-0.5">{m.desc}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
+          <main className="min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-4">
+            {settingsError && (
+              <div role="alert" className="mb-3 flex items-start justify-between gap-2 rounded-lg border border-accent-red/35 bg-accent-red/10 px-3 py-2 text-xs text-accent-red">
+                <span>{settingsError}</span>
+                <button type="button" onClick={() => setSettingsError('')} className="shrink-0 underline">清除错误</button>
+              </div>
+            )}
+            {settingsNote && <p role="status" className="mb-3 rounded-lg border border-border/40 bg-bg-light/40 px-3 py-2 text-2xs text-text-secondary">{settingsNote}</p>}
 
-          {/* 显示与通知 */}
-          <div>
-            <label className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider mb-2">
-              <Bell className="w-3.5 h-3.5" />
-              显示与通知
-            </label>
-            <div className="space-y-1.5">
-              <Toggle
-                on={localShowThinking}
-                color="purple"
-                label="显示 Claude 的思考过程"
-                onClick={() => setLocalShowThinking(!localShowThinking)}
-              />
-              <Toggle
-                on={localNotify}
-                color="blue"
-                label="任务完成时发送系统通知"
-                onClick={() => setLocalNotify(!localNotify)}
-              />
-            </div>
-          </div>
-
-          <p className="text-[10px] text-text-dim">显示思考过程仅控制界面显示，不影响模型思考、token 预算或计费。</p>
-          <VideoBgSettings />
-
-          {/* 历史会话 */}
-          <div>
-            <label className="flex items-center gap-2 text-xs text-text-secondary font-mono uppercase tracking-wider mb-2">
-              <Archive className="w-3.5 h-3.5" />
-              历史会话
-            </label>
-            <div className="flex gap-1">
-              {SESSION_LIMIT_OPTIONS.map((n) => (
-                <button
-                  key={n}
-                  onClick={() => setLocalMaxSessions(n)}
-                  className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-mono transition-all ${
-                    localMaxSessions === n
-                      ? 'bg-accent-green/10 border border-accent-green/40 text-accent-green'
-                      : 'bg-bg-light border border-border text-text-secondary hover:bg-bg-lighter'
-                  }`}
-                >
-                  {n} 条
-                </button>
-              ))}
-            </div>
-            <div className="text-[10px] text-text-dim mt-1.5 leading-relaxed">
-              历史会话超出上限时自动丢弃最旧的（当前共 {sessions.length} 条）。
-            </div>
-
-            {/* 清空历史（危险操作，行内二次确认） */}
-            {confirmClear ? (
-              <div className="mt-2 flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/40">
-                <span className="text-xs text-red-300">清空全部 {sessions.length} 条历史？不可恢复</span>
-                <div className="flex gap-2 shrink-0">
-                  <button
-                    onClick={() => { setConfirmClear(false); clearAllSessions(); }}
-                    className="px-2.5 py-1 rounded-md text-[11px] bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 text-red-300 transition-all"
-                  >
-                    确认清空
-                  </button>
-                  <button
-                    onClick={() => setConfirmClear(false)}
-                    className="px-2.5 py-1 rounded-md text-[11px] text-text-muted hover:text-text-primary transition-colors"
-                  >
-                    取消
-                  </button>
+            {search.trim() ? (
+              <div>
+                <h1 className="text-xl font-semibold text-text-primary">搜索结果</h1>
+                <p className="mt-1 text-sm text-text-secondary">找到 {searchResults.length} 项与“{search.trim()}”相关的设置。</p>
+                <div className="mt-4 space-y-1">
+                  {searchResults.map((entry) => (
+                    <button
+                      key={`${entry.view}:${entry.id}`}
+                      type="button"
+                      onClick={() => {
+                        setView(entry.view);
+                        setSearch('');
+                        requestAnimationFrame(() => {
+                          const target = document.getElementById(`setting-${entry.id}`);
+                          if (!target) {
+                            setSettingsNote(`已切换到“${VIEW_LABELS[entry.view]}”；该项没有独立锚点，请在当前分类中查看。`);
+                            return;
+                          }
+                          target.scrollIntoView({ block: 'center' });
+                          // 短暂高亮目标，避免用户误以为搜索没有生效。
+                          target.classList.add('rounded-xl', 'ring-2', 'ring-accent-cyan/60');
+                          window.setTimeout(() => target.classList.remove('rounded-xl', 'ring-2', 'ring-accent-cyan/60'), 1600);
+                        });
+                      }}
+                      className="flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-bg-light/50 px-3 py-2 text-left hover:border-accent-cyan/35"
+                    >
+                      <span className="text-sm text-text-primary">{entry.label}</span>
+                      <span className="text-2xs text-text-muted">{VIEW_LABELS[entry.view]}</span>
+                    </button>
+                  ))}
+                  {searchResults.length === 0 && <p className="text-xs text-text-muted">没有匹配的设置，试试“模型”“压缩”“权限”或“通知”。</p>}
                 </div>
               </div>
-            ) : (
-              <button
-                onClick={() => setConfirmClear(true)}
-                disabled={sessions.length === 0}
-                className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs text-text-muted hover:text-red-400 bg-bg-light border border-border hover:border-red-500/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                清空全部历史会话
-              </button>
-            )}
-          </div>
-
-          {/* 关于 */}
-          <div className="rounded-lg bg-bg-deep/50 border border-border/30 p-3">
-            <div className="flex items-start gap-2">
-              <Info className="w-3.5 h-3.5 text-accent-blue shrink-0 mt-0.5" />
-              <div className="text-[11px] text-text-muted leading-relaxed">
-                Claude GUI 通过套壳 Claude Code CLI 实现，
-                使用 <code className="text-accent-cyan">stream-json</code> 输出格式进行结构化通信。
-                确保 <code className="text-accent-cyan">claude</code> 命令已在 PATH 中。
-              </div>
-            </div>
-          </div>
+            ) : renderView()}
+          </main>
         </div>
 
-        {/* 底部按钮 */}
-        <div className="flex justify-end gap-2 px-5 py-3 border-t border-border/50">
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-lg text-sm text-text-muted hover:text-text-primary hover:bg-bg-lighter transition-colors"
-          >
-            取消
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="px-4 py-1.5 rounded-lg text-sm bg-accent-cyan/20 hover:bg-accent-cyan/30 border border-accent-cyan/40 text-accent-cyan transition-all"
-          >
-            保存
-          </button>
-        </div>
+        <footer className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/50 px-5 py-3">
+          <div className="min-w-0 flex-1 basis-40">
+            <span role="status" className={`text-xs ${dirtyCount ? 'text-accent-yellow' : 'text-text-muted'}`}>
+              {dirtyCount ? `${dirtyCount} 项更改未保存` : '所有更改已保存'}
+            </span>
+            <p className="mt-0.5 text-2xs text-text-dim">重连使用已保存配置；运行环境逐项保存。</p>
+          </div>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            <button type="button" onClick={handleReconnect} disabled={saving} title="仅使用已保存配置重新连接当前对话；不保存草稿，累计预算重新计" className={BUTTON_GHOST}>
+              重新连接当前对话
+            </button>
+            <button type="button" onClick={resetDraft} disabled={!dirtyCount || saving} className={BUTTON_GHOST}>
+              放弃更改
+            </button>
+            <button type="button" onClick={() => void handleSave()} disabled={saving} className={BUTTON_PRIMARY}>
+              保存
+            </button>
+            <button
+              type="button"
+              onClick={saveAndReconnect}
+              disabled={saving}
+              title="保存上方草稿并重新连接当前会话；累计预算从新进程重新计"
+              className={BUTTON}
+            >
+              保存并重新连接
+            </button>
+          </div>
+        </footer>
       </div>
     </div>
   );

@@ -15,7 +15,7 @@ export function ThinkingView({ text }: { text: string }) {
         {expanded ? <ChevronDown className="w-3.5 h-3.5 text-accent-purple" /> : <ChevronRight className="w-3.5 h-3.5 text-accent-purple" />}
         <Brain className="w-4 h-4 text-accent-purple" />
         <span className="text-xs font-mono text-accent-purple uppercase tracking-wider">思考过程</span>
-        <span className="text-[10px] text-text-dim ml-auto font-mono">{text.length} chars</span>
+        <span className="text-2xs text-text-dim ml-auto font-mono">{text.length} chars</span>
       </button>
 
       {expanded && (

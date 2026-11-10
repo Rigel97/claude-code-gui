@@ -72,6 +72,17 @@ describe('可选与取消任务', () => {
   it('手动项目新增任务不会仅因没有历史来源而成为待整理', () => {
     expect(projectHealth(project([task('a')]), 100).issues).toEqual([]);
   });
+  it('下一步摘要从真实必要任务与依赖派生，不把取消、可选或未知关系当作完成', async () => {
+    const { projectWorkState } = await import('../src/renderer/projectModel');
+    const tasks = [task('blocked', ['unfinished']), task('ready', ['finished']), task('unfinished'), task('finished', [], 'completed'), { ...task('optional', [], 'in_progress'), optional: true }];
+    expect(projectWorkState(project(tasks))).toMatchObject({ nextTask: { id: 'ready' }, active: [], blocked: [{ id: 'blocked' }] });
+    expect(projectWorkState(project([task('running', [], 'in_progress'), task('pending')])).nextTask?.id).toBe('running');
+    expect(projectWorkState(project([task('cancelled', [], 'cancelled')]))).toMatchObject({ nextTask: null, label: '添加必要任务' });
+    expect(projectWorkState(project([task('finished', [], 'completed')]))).toMatchObject({ nextTask: null, label: '核对交付并验收' });
+    expect(projectWorkState(project([task('finished', [], 'completed')], true)).label).toBe('项目已验收');
+    expect(projectWorkState(project([task('unknown')])).note).toContain('仅按已记录依赖');
+    expect(projectWorkState(project([task('a', ['missing'])])).blocked).toHaveLength(1);
+  });
   it('归档和回收站项目不进入活动项目计数', () => {
     const active = project([task('a')]);
     expect(projectCounts([active, { ...active, id: 'archived', archivedAt: 1 }, { ...active, id: 'deleted', deletedAt: 1 }])).toEqual({

@@ -319,8 +319,10 @@ async function fixture(body: (f: DesktopFixture) => Promise<void>) {
         await page.getByRole('button', { name: '原生终端', exact: true }).click();
         const panel = page.getByRole('region', { name: '官方原生终端', exact: true });
         await wait(() => panel.isVisible(), 'App NativeTerminalHost mounted');
-        await panel.getByRole('combobox', { name: '模式', exact: true }).selectOption('shell');
-        await panel.getByRole('button', { name: '创建终端', exact: true }).click();
+        const form = page.getByRole('dialog', { name: '新终端', exact: true });
+        if (!await form.isVisible()) await panel.getByRole('button', { name: '新终端', exact: true }).click();
+        await form.getByRole('combobox', { name: '模式', exact: true }).selectOption('shell');
+        await form.getByRole('button', { name: '创建终端', exact: true }).click();
         await wait(async () => (await page.evaluate(() => window.api.terminal.list())).length === 1, 'real node-pty create');
         const [terminal] = await page.evaluate(() => window.api.terminal.list());
         await wait(() => panel.locator('.xterm-helper-textarea').count().then(count => count === 1), 'official xterm input mounted');
@@ -462,7 +464,7 @@ desktop('production App → preload → main → native/SDK, Electron 33, local 
       await f.ready();
       await f.wait(() => f.page.getByText('Desktop Bash completed', { exact: true }).isVisible(), 'completed assistant UI');
       await f.wait(async () => (await f.saved()).totalInputTokens > 0, 'persisted real SDK token metrics');
-      expect(await f.page.getByText('Turns', { exact: true }).count()).toBeGreaterThan(0);
+      expect(await f.page.getByText('轮次', { exact: true }).count()).toBeGreaterThan(0);
       expect(f.modelRequests()).toHaveLength(2);
       await f.send('askfixture');
       await f.wait(() => approval.getByRole('button', { name: '提交回答', exact: true }).isVisible(), 'real AskUserQuestion UI');
@@ -564,7 +566,7 @@ desktop('production App → preload → main → native/SDK, Electron 33, local 
       expect(transcript).toContain('historyfixture'); expect(transcript).toContain('Desktop history completed');
       expect(await f.page.getByText('Desktop history completed', { exact: true }).count(), 'One actual model response must render exactly once').toBe(1);
       expect(transcript.split('\n').filter(Boolean).map(line => JSON.parse(line)).some(row => row.type === 'user' && typeof row.uuid === 'string')).toBe(true);
-      await f.wait(() => f.page.getByRole('region', { name: '会话操作', exact: true }).isVisible(), 'ChatArea SessionActions mounted');
+      await f.wait(() => f.page.getByRole('button', { name: '会话操作', exact: true }).isVisible(), 'ChatArea SessionActions trigger mounted');
       // A live tab's title appends the real session prefix; match the stable
       // prefix and hover so the opacity-0 close control becomes actionable.
       const firstTab = f.page.getByTitle(/^Desktop first(?: · |$)/);
@@ -574,6 +576,7 @@ desktop('production App → preload → main → native/SDK, Electron 33, local 
       const history = f.page.getByRole('dialog', { name: 'CLI 历史', exact: true });
       await f.wait(() => history.getByText(sid, { exact: false }).isVisible(), 'worker SDK historyList sees generated SID');
       await history.getByRole('button', { name: /^导入 / }).click();
+      await f.page.getByRole('button', { name: '会话操作', exact: true }).click();
       await f.wait(() => f.page.getByRole('region', { name: '会话操作', exact: true }).getByText(`Session ID: ${sid}`, { exact: true }).isVisible(), 'real imported full history session');
       expect(await f.page.getByText('Desktop history completed', { exact: true }).isVisible()).toBe(true);
       await f.page.getByRole('button', { name: '分叉会话', exact: true }).click();

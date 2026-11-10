@@ -3,6 +3,7 @@ import { useStore } from './store';
 import type { Conversation, Session } from './types';
 import type { ManagedProject, ProjectChanges, ProjectConversationLink, ProjectCreateInput, ProjectReview, ProjectReviewDraft, ProjectScan, ProjectScanJob, ProjectScanOptions, ProjectScanPlan, ProjectScanProgress, ProjectScanScope, ProjectStorageInfo, ProjectsAPI, RecognitionMode } from './projectTypes';
 import { acceptanceInvalidationReason, dependencyError, patchProject, projectSummary, unresolvedUncertainties } from './projectModel';
+import { confirmAction } from './utils/confirm';
 
 export type CandidateReview = ProjectReview & { selected: boolean };
 type WriteOperation = 'confirm' | 'save' | 'mutate';
@@ -33,11 +34,11 @@ interface ProjectsState {
   error: string | null;
   notice: string | null;
   showProjects: () => void;
-  showChat: () => boolean;
-  confirmDiscard: (action: string, keys?: string[]) => boolean;
+  showChat: () => Promise<boolean>;
+  confirmDiscard: (action: string, keys?: string[]) => Promise<boolean>;
   setDirty: (dirty: boolean, key?: string) => void;
   clearDirty: () => void;
-  selectProject: (id: string | null) => boolean;
+  selectProject: (id: string | null) => Promise<boolean>;
   clearError: () => void;
   load: () => Promise<void>;
   setRecognitionMode: (mode: RecognitionMode) => void;
@@ -49,7 +50,7 @@ interface ProjectsState {
   associate: (id: string, projectId: string) => void;
   pauseReview: () => void;
   resumeReview: () => void;
-  cancelReview: () => void;
+  cancelReview: () => Promise<void>;
   confirm: () => Promise<boolean>;
   save: (id: string, changes: ProjectChanges) => Promise<boolean>;
   create: (input: ProjectCreateInput) => Promise<boolean>;
@@ -90,7 +91,7 @@ function projectBrief(project: ManagedProject, taskId?: string) {
   const task = project.tasks.find(item => item.id === taskId);
   const pending = unresolvedUncertainties(project);
   return [
-    `# 继续项目：${project.name}`, `项目目标：${project.goal}`, `工作目录：${project.workingDirectory}`,
+    `# 项目工作草稿：${project.name}`, `项目目标：${project.goal}`, `工作目录：${project.workingDirectory}`,
     project.background && `需求背景：${project.background}`, project.constraints && `约束：${project.constraints}`,
     project.decisions && `关键决策：${project.decisions}`, project.deliverables && `交付标准：${project.deliverables}`,
     task ? `本次任务：${task.name}\n${task.description}\n输入：${task.inputs.join('、') || '待确认'}\n输出：${task.outputs.join('、') || '待确认'}`
@@ -228,26 +229,28 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       set({ dirtyReasons, dirty: Object.values(dirtyReasons).some(Boolean) });
     },
     clearDirty: () => set({ dirty: false, dirtyReasons: {} }),
-    confirmDiscard: (action, keys) => {
+    confirmDiscard: async (action, keys) => {
       const state = get();
       if (state.writeOperation) { set({ error: '正在保存，请等待完成后再离开。' }); return false; }
       const affected = keys || Object.keys(state.dirtyReasons);
       const dirty = keys ? affected.some(key => state.dirtyReasons[key]) : state.dirty;
-      if (dirty && !window.confirm(`有未保存的修改。确定放弃修改并${action}吗？选择取消可继续编辑。`)) return false;
-      const dirtyReasons = { ...state.dirtyReasons };
+      if (dirty && !(await confirmAction({ title: '放弃未保存修改', message: `有未保存的修改。确定放弃修改并${action}吗？选择取消可继续编辑。`, confirmLabel: '放弃修改', tone: 'danger' }))) return false;
+      const latest = get();
+      if (latest.writeOperation) { set({ error: '正在保存，请等待完成后再离开。' }); return false; }
+      const dirtyReasons = { ...latest.dirtyReasons };
       affected.forEach(key => { delete dirtyReasons[key]; });
       set({ dirtyReasons, dirty: Object.values(dirtyReasons).some(Boolean) });
       return true;
     },
-    showChat: () => {
-      if (!get().confirmDiscard('离开项目管理中心')) return false;
+    showChat: async () => {
+      if (!(await get().confirmDiscard('离开项目管理中心'))) return false;
       if (get().scanResult) get().pauseReview();
       set({ open: false, dirty: false, dirtyReasons: {} });
       return true;
     },
-    selectProject: selectedProjectId => {
+    selectProject: async selectedProjectId => {
       if (selectedProjectId === get().selectedProjectId) return true;
-      if (!get().confirmDiscard(selectedProjectId ? '切换项目' : '返回项目总览')) return false;
+      if (!(await get().confirmDiscard(selectedProjectId ? '切换项目' : '返回项目总览'))) return false;
       set({ selectedProjectId }); return true;
     },
     clearError: () => set({ error: null }),
@@ -339,9 +342,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       // unsaved project edits or their beforeunload protection.
       if (!get().writeOperation && get().scanResult) set({ reviewOpen: true });
     },
-    cancelReview: () => {
+    cancelReview: async () => {
       if (get().writeOperation) return;
-      if (get().scanResult && !window.confirm('确定放弃本次识别结果和审核草稿吗？模型费用不会退回，之后可能需要重新识别。')) return;
+      if (get().scanResult && !(await confirmAction({ title: '放弃识别结果', message: '确定放弃本次识别结果和审核草稿吗？模型费用不会退回，之后可能需要重新识别。', confirmLabel: '放弃识别', tone: 'danger' }))) return;
       const sequence = ++draftSequence;
       set({ scanResult: null, reviews: {}, reviewOpen: false, reviewDirty: false, error: null });
       draftWrites = draftWrites.catch(() => {}).then(async () => { await api().saveReviewDraft?.(null); }).catch(error => {
@@ -449,7 +452,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
         const conversation = chat.conversations.find(item => item.id === resumeConversationId || (!!link?.sessionId && item.sessionId === link.sessionId));
         const session = chat.sessions.find(item => !!link?.sessionId && item.sessionId === link.sessionId);
         if (!link || (!conversation && !session)) { set({ error: '关联对话已不在本地会话中，请查看保留摘要或新建项目对话。' }); return false; }
-        if (!get().showChat()) return false;
+        if (!(await get().showChat())) return false;
         if (conversation) chat.setActiveConversation(conversation.id);
         else chat.newConversation({ fromSession: session!, id: link.conversationId });
         return true;
@@ -473,7 +476,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       if (!bridge.linkConversation) { set({ error: '请重新启动更新后的桌面应用以保存项目对话关联。' }); return false; }
       const linked = await mutate(() => bridge.linkConversation!(projectId, { conversationId, cwd, title, ...(taskId ? { taskId } : {}) }), '项目对话关联已保存，简报为草稿，尚未发送。');
       if (!linked) return false;
-      if (!get().showChat()) return false;
+      if (!(await get().showChat())) return false;
       chat.newConversation({ id: conversationId, cwd, title, draft: projectBrief(project, taskId) });
       return true;
     },
@@ -523,11 +526,13 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       catch { /* The operation that failed retains its actionable error. */ }
     },
     reload: async () => {
-      if (get().scanOperation || !get().confirmDiscard('从磁盘重新加载')) return false;
+      if (get().scanOperation || !(await get().confirmDiscard('从磁盘重新加载'))) return false;
       return mutate(async () => { const reload = api().reload; if (!reload) throw new Error('请重启桌面应用启用重载。'); const projects = await reload(); set({ selectedProjectId: null }); return projects; }, '已从磁盘重新加载，现有文件未被覆盖。', true);
     },
     restoreBackup: async () => {
-      if (get().scanOperation || !window.confirm('确定从最近的有效备份恢复项目吗？当前文件将另存保留，尚未备份的变化可能回退。') || !get().confirmDiscard('恢复项目备份')) return false;
+      if (get().scanOperation) return false;
+      if (!(await confirmAction({ title: '恢复最近备份', message: '确定从最近的有效备份恢复项目吗？当前文件将另存保留，尚未备份的变化可能回退。', confirmLabel: '恢复备份', tone: 'danger' }))) return false;
+      if (!(await get().confirmDiscard('恢复项目备份'))) return false;
       return mutate(async () => { const restore = api().restoreBackup; if (!restore) throw new Error('请重启桌面应用启用恢复。'); const projects = await restore(); set({ selectedProjectId: null }); return projects; }, '有效备份已恢复，恢复前文件已另存保留。', true);
     },
     purge: async id => {

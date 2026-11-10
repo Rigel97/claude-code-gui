@@ -2,6 +2,7 @@ import { useStore } from '../store';
 import { Circle, Loader, CheckCircle, XCircle, Pause, Activity, Zap, Database, Archive } from 'lucide-react';
 import { useState } from 'react';
 import type { RunStatus, ContextUsage, Conversation } from '../types';
+import { formatTokens, TOKEN_LABELS } from '../utils/format';
 
 const STATUS_CONFIG: Record<RunStatus, { icon: React.ReactNode; label: string; color: string }> = {
   idle: { icon: <Circle className="w-3 h-3" />, label: '就绪', color: 'text-text-muted' },
@@ -31,8 +32,9 @@ export function StatusBar() {
   const contextUsage = conv?.contextUsage ?? null;
   const sessionId = conv?.sessionId ?? null;
   const convCwd = conv?.cwd ?? cwd;
-  const currentModel = conv?.currentModel || '';
-  const displayModel = model || currentModel;
+  const currentModel = conv?.currentModel || conv?.runtime?.info?.model || '';
+  // 状态栏优先展示实际运行模型；全局草稿模型仅作为“待用”次级信息。
+  const pendingModel = model && model !== currentModel ? model : '';
 
   const config = STATUS_CONFIG[status];
   const isBusy = status === 'streaming' || status === 'starting';
@@ -57,7 +59,7 @@ export function StatusBar() {
   };
 
   return (
-    <div className="flex items-center justify-between h-7 px-4 bg-bg-deep border-t border-border/30 text-[10px] font-mono shrink-0">
+    <div className="flex items-center justify-between h-7 px-4 bg-bg-deep border-t border-border/30 text-2xs font-mono shrink-0">
       {/* 左侧：状态 */}
       <div className="flex items-center gap-4">
         <div className={`flex items-center gap-1.5 ${config.color}`}>
@@ -99,24 +101,29 @@ export function StatusBar() {
         )}
       </div>
 
-      {/* 右侧：统计 */}
-      <div className="flex items-center gap-4 text-text-muted">
-        {displayModel && (
-          <span className="text-accent-purple">{displayModel}</span>
+      {/* 右侧：当前模型优先，其次是目录与累计 token；窄窗口只保留关键信息 */}
+      <div className="flex min-w-0 items-center gap-3 text-text-muted">
+        <span className="max-w-[160px] truncate text-accent-purple" title={currentModel ? `当前实际模型：${currentModel}` : '尚未连接模型'}>
+          {currentModel || '未连接'}
+        </span>
+        {pendingModel && (
+          <span className="hidden max-w-[140px] truncate text-text-muted lg:inline" title="已保存但需下次连接才生效">
+            待用 {pendingModel}
+          </span>
         )}
 
         {convCwd && (
-          <span className="text-text-dim truncate max-w-xs">{convCwd}</span>
+          <span className="hidden max-w-[220px] truncate text-text-secondary xl:inline" title={convCwd}>{convCwd}</span>
         )}
 
-        <div className="flex items-center gap-1 text-accent-blue">
-          <Zap className="w-3 h-3" />
-          <span>in: {formatTokens(totalInputTokens)}</span>
+        <div className="flex items-center gap-1 text-accent-blue" title="当前累计输入 Token">
+          <Zap className="h-3 w-3" />
+          <span>{TOKEN_LABELS.input} {formatTokens(totalInputTokens)}</span>
         </div>
 
-        <div className="flex items-center gap-1 text-accent-cyan">
-          <Zap className="w-3 h-3" />
-          <span>out: {formatTokens(totalOutputTokens)}</span>
+        <div className="flex items-center gap-1 text-accent-cyan" title="当前累计输出 Token">
+          <Zap className="h-3 w-3" />
+          <span>{TOKEN_LABELS.output} {formatTokens(totalOutputTokens)}</span>
         </div>
       </div>
     </div>
@@ -162,10 +169,4 @@ function ContextMeter({ usage }: { usage: ContextUsage }) {
       </span>
     </div>
   );
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1000000) return `${+(n / 1000000).toFixed(1)}M`;
-  if (n >= 1000) return `${+(n / 1000).toFixed(1)}K`;
-  return String(n);
 }

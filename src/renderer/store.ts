@@ -43,6 +43,10 @@ interface AppState {
   setShowThinking: (show: boolean) => void;
   sidebarWidth: number;
   setSidebarWidth: (w: number) => void;
+  sidebarCollapsed: boolean;
+  setSidebarCollapsed: (collapsed: boolean) => void;
+  particlesEnabled: boolean;
+  setParticlesEnabled: (enabled: boolean) => void;
   notifyOnComplete: boolean;
   setNotifyOnComplete: (on: boolean) => void;
 maxSessions: number;
@@ -58,6 +62,8 @@ maxBudgetUsd: number;
 setMaxBudgetUsd: (n: number) => void;
 // 动态视频背景：path 为本机绝对路径，经主进程 bgmedia:// 协议流式播放
 videoBg: { enabled: boolean; path: string | null };
+videoBgError: string | null;
+setVideoBgError: (error: string | null) => void;
 setVideoBg: (patch: { enabled?: boolean; path?: string | null }) => void;
   clearAllSessions: () => void;
   renameSession: (index: number, title: string) => void;
@@ -102,6 +108,8 @@ setVideoBg: (patch: { enabled?: boolean; path?: string | null }) => void;
     notifyOnComplete?: boolean;
 maxSessions?: number;
 sidebarWidth?: number;
+sidebarCollapsed?: boolean;
+particlesEnabled?: boolean;
 effortLevel?: string;
 autocompact?: string;
     maxBudgetUsd?: number;
@@ -987,6 +995,10 @@ export const useStore = create<AppState>((set, get) => {
     setShowThinking: (showThinking) => set({ showThinking }),
     sidebarWidth: 256,
     setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: Math.round(sidebarWidth) }),
+    sidebarCollapsed: false,
+    setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
+    particlesEnabled: true,
+    setParticlesEnabled: (particlesEnabled) => set({ particlesEnabled }),
     notifyOnComplete: true,
     setNotifyOnComplete: (notifyOnComplete) => set({ notifyOnComplete }),
     maxSessions: DEFAULT_MAX_SESSIONS,
@@ -1001,6 +1013,8 @@ setMaxBudgetUsd: (maxBudgetUsd) => set({
 maxBudgetUsd: !Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 ? 0 : Math.round(maxBudgetUsd * 100) / 100,
 }),
 videoBg: { enabled: false, path: null },
+videoBgError: null,
+setVideoBgError: (videoBgError) => set({ videoBgError }),
 setVideoBg: (patch) => set({ videoBg: { ...get().videoBg, ...patch } }),
 
     clearAllSessions: () => {
@@ -1824,6 +1838,8 @@ restored.messages = [...restored.messages, { ...c.streamingMessage, status: 'com
 sidebarWidth: typeof data.sidebarWidth === 'number' && data.sidebarWidth >= 200 && data.sidebarWidth <= 480
 ? data.sidebarWidth
 : 256,
+sidebarCollapsed: data.sidebarCollapsed === true,
+particlesEnabled: data.particlesEnabled !== false,
 effortLevel: ['', 'low', 'medium', 'high', 'xhigh', 'max'].includes(data.effortLevel as any)
 ? (data.effortLevel as any)
 : '',

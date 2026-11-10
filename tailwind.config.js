@@ -28,10 +28,15 @@ export default {
         },
         text: {
           primary: '#e2e8f0',
-          secondary: '#94a3b8',
-          muted: '#64748b',
-          dim: '#475569',
+          secondary: '#a7b4c6',
+          muted: '#8290a6',
+          // 辅助文字仍需达到 4.5:1；更暗的颜色只用于装饰。
+          dim: '#7d8b9f',
         },
+      },
+      fontSize: {
+        // 元数据/角标专用下限；正文最低使用 text-xs，不得再新增 <11px 的文本。
+        '2xs': '11px',
       },
       fontFamily: {
         mono: ['JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', 'monospace'],

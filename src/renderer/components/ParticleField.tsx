@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
 
 interface Particle {
@@ -22,6 +22,14 @@ const BASE_LINK_DIST = 110;
 export function ParticleField() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const statusRef = useRef<string>('idle');
+  const [reducedMotion, setReducedMotion] = useState(() => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReducedMotion(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
   // 多标签页：任一标签页生成中即加速（活跃与否不影响视觉效果）
   const status = useStore((s) =>
     s.conversations.some((c) => c.status === 'streaming' || c.status === 'starting') ? 'streaming' : 'idle'
@@ -33,6 +41,7 @@ export function ParticleField() {
   }, [status]);
 
   useEffect(() => {
+    if (reducedMotion) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -187,12 +196,14 @@ export function ParticleField() {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseleave', onMouseLeave);
     };
-  }, []);
+  }, [reducedMotion]);
+
+  if (reducedMotion) return null;
 
   return (
     <canvas
       ref={canvasRef}
-      className="fixed inset-0 pointer-events-none"
+      className="particle-canvas fixed inset-0 pointer-events-none"
       style={{ zIndex: 0 }}
       aria-hidden="true"
     />

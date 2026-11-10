@@ -3,6 +3,7 @@ import { useStore } from '../store';
 import { useProjectsStore } from '../projectStore';
 import { Search, X, User, Bot } from 'lucide-react';
 import type { ChatMessage, Session, UIBlock } from '../types';
+import { useDialogBehavior } from './useDialogBehavior';
 
 interface SearchHit {
   /** 展示用标题（标签页/会话标题） */
@@ -56,30 +57,31 @@ export function SearchPanel() {
   const setHighlightMessage = useStore((s) => s.setHighlightMessage);
 
   const [query, setQuery] = useState('');
+  const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   // 输入法组合状态：组合中的 Enter 是确认上屏而非跳转
   const isComposingRef = useRef(false);
+  const closeSearch = () => setOpen(false);
 
   useEffect(() => {
     if (open) {
       setQuery('');
+      setActiveIndex(0);
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open]);
 
-  // 搜索位于审核弹层之上；即便自动聚焦尚未完成，Esc 也只关闭搜索。
-  useEffect(() => {
-    if (!open) return;
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        setOpen(false);
-      }
-    };
-    window.addEventListener('keydown', onEscape, true);
-    return () => window.removeEventListener('keydown', onEscape, true);
-  }, [open, setOpen]);
+  useEffect(() => { setActiveIndex(0); }, [query]);
+
+  // 统一弹层契约：Esc 只关闭最上层，焦点限制在搜索面板内，关闭后归还。
+  useDialogBehavior({
+    open,
+    dialogRef,
+    onRequestClose: closeSearch,
+    initialFocusSelector: 'input',
+  });
 
   // 跨会话搜索：所有打开的标签页（含活跃）+ 全部归档会话，按消息 id 去重
   const hits = useMemo(() => {
@@ -120,10 +122,16 @@ export function SearchPanel() {
     return results.slice(0, MAX_RESULTS);
   }, [query, sessions, conversations]);
 
+  useEffect(() => {
+    if (!open || !hits.length) return;
+    const element = listRef.current?.querySelector<HTMLElement>(`[data-hit-index="${activeIndex}"]`);
+    element?.scrollIntoView({ block: 'nearest' });
+  }, [activeIndex, hits.length, open]);
+
   if (!open) return null;
 
-  const jumpTo = (hit: SearchHit) => {
-    if (!useProjectsStore.getState().showChat()) return;
+  const jumpTo = async (hit: SearchHit) => {
+    if (!(await useProjectsStore.getState().showChat())) return;
     // 先切到目标标签页（多标签页下跳转不受生成中限制）
     if (hit.conversationId) {
       setActiveConversation(hit.conversationId);
@@ -136,17 +144,21 @@ export function SearchPanel() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-24 bg-black/50 backdrop-blur-sm animate-fade-in"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-24 backdrop-blur-sm animate-fade-in"
       data-search-panel="true"
-      onClick={() => setOpen(false)}
+      onClick={closeSearch}
     >
       <div
-        className="w-full max-w-xl glass-panel rounded-2xl border border-border overflow-hidden"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="搜索消息"
+        className="w-full max-w-xl overflow-hidden rounded-2xl border border-border glass-panel"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 搜索输入 */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-border/50">
-          <Search className="w-4 h-4 text-accent-cyan shrink-0" />
+        <div className="flex items-center gap-2 border-b border-border/50 px-4 py-3">
+          <Search className="h-4 w-4 shrink-0 text-accent-cyan" />
           <input
             ref={inputRef}
             value={query}
@@ -154,41 +166,48 @@ export function SearchPanel() {
             onKeyDown={(e) => {
               // 输入法组合中不响应快捷键（Enter 属于输入法确认）
               if (isComposingRef.current || e.nativeEvent.isComposing) return;
-              if (e.key === 'Escape') setOpen(false);
-              if (e.key === 'Enter' && hits.length > 0) jumpTo(hits[0]);
+              if (e.key === 'Escape') { e.preventDefault(); closeSearch(); }
+              if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIndex(index => Math.min(hits.length - 1, index + 1)); }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIndex(index => Math.max(0, index - 1)); }
+              if (e.key === 'Enter' && hits.length > 0) jumpTo(hits[Math.min(activeIndex, hits.length - 1)]);
             }}
             onCompositionStart={() => { isComposingRef.current = true; }}
             onCompositionEnd={() => { isComposingRef.current = false; }}
+            aria-label="搜索所有会话的消息内容"
             placeholder="搜索所有会话的消息内容…"
             className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-dim"
           />
-          <button onClick={() => setOpen(false)} className="text-text-muted hover:text-text-primary">
-            <X className="w-4 h-4" />
+          <button onClick={closeSearch} aria-label="关闭搜索" className="text-text-muted hover:text-text-primary">
+            <X className="h-4 w-4" />
           </button>
         </div>
 
         {/* 结果列表 */}
-        <div className="max-h-96 overflow-y-auto">
+        <div ref={listRef} className="max-h-96 overflow-y-auto" role="listbox" aria-label="搜索结果">
           {query.trim().length >= 2 && hits.length === 0 && (
-            <div className="text-xs text-text-dim text-center py-8">无匹配结果</div>
+            <div className="py-8 text-center text-xs text-text-secondary">无匹配结果</div>
           )}
           {query.trim().length < 2 && (
-            <div className="text-xs text-text-dim text-center py-8">输入至少 2 个字符开始搜索</div>
+            <div className="py-8 text-center text-xs text-text-secondary">输入至少 2 个字符开始搜索</div>
           )}
           {hits.map((hit, i) => (
             <button
               key={`${hit.message.id}-${i}`}
+              role="option"
+              aria-selected={i === activeIndex}
+              data-hit-index={i}
+              onMouseEnter={() => setActiveIndex(i)}
               onClick={() => jumpTo(hit)}
-              className="w-full flex items-start gap-2.5 px-4 py-2.5 text-left hover:bg-bg-light transition-colors border-b border-border/20 last:border-0"
+              className={`flex w-full items-start gap-2.5 border-b border-border/20 px-4 py-2.5 text-left transition-colors last:border-0 ${i === activeIndex ? 'bg-accent-cyan/10' : 'hover:bg-bg-light'}`}
             >
               {hit.message.role === 'user' ? (
-                <User className="w-3.5 h-3.5 text-accent-blue shrink-0 mt-0.5" />
+                <User className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-blue" />
               ) : (
-                <Bot className="w-3.5 h-3.5 text-accent-cyan shrink-0 mt-0.5" />
+                <Bot className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-cyan" />
               )}
-              <div className="flex-1 min-w-0">
+              <div className="min-w-0 flex-1">
                 <HighlightedSnippet snippet={hit.snippet} query={query.trim()} />
-                <div className="text-[10px] text-text-dim font-mono mt-0.5 truncate">
+                <div className="mt-0.5 truncate font-mono text-2xs text-text-secondary">
                   {hit.title} · {new Date(hit.message.timestamp).toLocaleString()}
                 </div>
               </div>
@@ -196,11 +215,12 @@ export function SearchPanel() {
           ))}
         </div>
 
-        <div className="px-4 py-1.5 border-t border-border/30 flex items-center justify-between">
-          <span className="text-[10px] text-text-dim font-mono">
+        <div className="flex items-center justify-between border-t border-border/30 px-4 py-1.5">
+          <span className="font-mono text-2xs text-text-secondary">
             {hits.length > 0 ? `${hits.length} 条结果` : ''}
+            {hits.length >= 50 && ' · 仅显示前 50 条，请缩小关键词范围'}
           </span>
-          <span className="text-[10px] text-text-dim font-mono">ESC 关闭 · ⏎ 跳转第一条</span>
+          <span className="font-mono text-2xs text-text-muted">Esc 关闭 · ↑↓ 选择 · Enter 跳转</span>
         </div>
       </div>
     </div>

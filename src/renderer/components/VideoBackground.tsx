@@ -10,6 +10,7 @@ import { useStore } from '../store';
  */
 export function VideoBackground() {
   const videoBg = useStore((s) => s.videoBg);
+  const setVideoBgError = useStore((s) => s.setVideoBgError);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [failed, setFailed] = useState(false);
 
@@ -32,7 +33,8 @@ export function VideoBackground() {
   // 切换视频源时重置失败态
   useEffect(() => {
     setFailed(false);
-  }, [src]);
+    setVideoBgError(null);
+  }, [src, setVideoBgError]);
 
   // 窗口最小化/隐藏时暂停解码，恢复可见时续播
   useEffect(() => {
@@ -65,7 +67,8 @@ export function VideoBackground() {
         playsInline
         preload="auto"
         disablePictureInPicture
-        onError={() => setFailed(true)}
+        onLoadedData={() => { setFailed(false); setVideoBgError(null); }}
+        onError={() => { setFailed(true); setVideoBgError('当前视频文件无法播放，已回退默认背景。请重新选择或清除。'); }}
         aria-hidden="true"
       />
       {/* 压暗层：保住深色主题下的正文可读性，上下更暗与原背景渐变衔接 */}

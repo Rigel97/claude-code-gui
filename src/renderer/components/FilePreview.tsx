@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { X, FileText, Loader2, AlertCircle } from 'lucide-react';
+import { useDialogBehavior } from './useDialogBehavior';
 // PrismLight + 按需注册：与 MarkdownRenderer 同款策略，避免全量语言打包
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -153,17 +154,9 @@ export function FilePreview({ path, onClose }: { path: string; onClose: () => vo
     } finally { if (token === generation.current) setOpening(false); }
   };
 
-  // Esc 关闭（capture 阶段拦截：避免同时触发输入框的「Esc 中断生成」）
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  // Esc 关闭（统一弹层契约：只关闭最上层，并管理焦点陷阱与归还）
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogBehavior({ open: true, dialogRef, onRequestClose: onClose, initialFocusSelector: '[aria-label="关闭文件预览"]' });
 
   const fileName = path.split(/[\\/]/).pop() || path;
   const ext = fileName.includes('.') ? fileName.split('.').pop()!.toLowerCase() : '';
@@ -176,6 +169,10 @@ export function FilePreview({ path, onClose }: { path: string; onClose: () => vo
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="文件预览"
         className="w-[85vw] max-w-4xl h-[80vh] glass-panel rounded-2xl border border-border light overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
@@ -185,11 +182,11 @@ export function FilePreview({ path, onClose }: { path: string; onClose: () => vo
           <span className="text-sm font-mono text-text-primary truncate flex-1" title={path}>
             {fileName}
           </span>
-          <span className="text-[10px] font-mono text-text-dim shrink-0">
+          <span className="text-2xs font-mono text-text-dim shrink-0">
             {typeof data?.size === 'number' ? formatSize(data.size) : ''}
           </span>
           <button disabled={!safeExternalPath(path) || opening} onClick={() => void openExternal()} title={safeExternalPath(path) ? '使用本地默认应用打开' : '仅允许安全的本地文本或图片路径，主进程还会校验文件类型'} className="text-xs text-accent-cyan disabled:opacity-40">在外部打开</button>
-          <button onClick={onClose} className="text-text-muted hover:text-text-primary shrink-0 ml-1" title="关闭 (Esc)">
+          <button onClick={onClose} aria-label="关闭文件预览" className="text-text-muted hover:text-text-primary shrink-0 ml-1" title="关闭 (Esc)">
             <X className="w-4 h-4" />
           </button>
         </div>

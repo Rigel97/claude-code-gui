@@ -11,6 +11,8 @@ import { SearchPanel } from './components/SearchPanel';
 import { ProjectCenter } from './components/ProjectCenter';
 import { useProjectsStore } from './projectStore';
 import { NativeTerminalHost } from './components/NativeTerminal';
+import { ConfirmDialogHost } from './components/ConfirmDialog';
+import { confirmAction } from './components/ConfirmDialog';
 import { useTerminalStore } from './terminalStore';
 import type { ConversationRuntime, RunStatus } from './types';
 
@@ -25,12 +27,12 @@ export default function App() {
   const initialStateRef = useRef(useStore.getState());
   const [recovering, setRecovering] = useState(false);
 
-  const restoreConfig = useCallback((saved: unknown, retry: boolean) => {
+  const restoreConfig = useCallback(async (saved: unknown, retry: boolean) => {
     const current = useStore.getState();
     const initial = initialStateRef.current;
     const memoryChanged = JSON.stringify(current) !== JSON.stringify(initial);
     const keepMemory = current.conversations.length > 0 || memoryChanged;
-    if (keepMemory && !window.confirm('将从磁盘重新读取配置，并合并当前内存中尚未保存的会话与草稿；同名会话以内存版本为准，内存设置保持不变，合并后将恢复自动保存。取消则保留内存并继续禁止覆盖配置。是否继续？')) {
+    if (keepMemory && !(await confirmAction({ title: '重新读取配置', message: '将从磁盘重新读取配置，并合并当前内存中尚未保存的会话与草稿；同名会话以内存版本为准，内存设置保持不变，合并后将恢复自动保存。取消则保留内存并继续禁止覆盖配置。是否继续？', confirmLabel: '读取并合并', tone: 'danger' }))) {
       setPersistenceError('已取消恢复读取；内存会话与草稿已保留，配置仍禁止覆盖。修复文件后可再次读取并确认合并。');
       return;
     }
@@ -56,6 +58,7 @@ export default function App() {
   const handleStream = useStore((s) => s.handleStream);
   const setStatus = useStore((s) => s.setStatus);
   const activeConversationId = useStore((s) => s.activeConversationId);
+  const particlesEnabled = useStore((s) => s.particlesEnabled);
 
   // 启动时恢复持久化状态
   useEffect(() => {
@@ -63,7 +66,7 @@ export default function App() {
     const load = async () => {
       try {
         const saved: unknown = await (window as any).api?.store?.get('appState');
-        if (!disposed) restoreConfig(saved, false);
+        if (!disposed) void restoreConfig(saved, false);
       } catch (error) {
         if (!disposed) setPersistenceError(`会话配置读取失败，原文件已保留且禁止覆盖：${error instanceof Error ? error.message : String(error)}`);
       }
@@ -106,6 +109,8 @@ export default function App() {
       notifyOnComplete: state.notifyOnComplete,
       maxSessions: state.maxSessions,
       sidebarWidth: state.sidebarWidth,
+      sidebarCollapsed: state.sidebarCollapsed,
+      particlesEnabled: state.particlesEnabled,
       effortLevel: state.effortLevel,
       autocompact: state.autocompact,
       maxBudgetUsd: state.maxBudgetUsd,
@@ -314,6 +319,8 @@ export default function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         e.preventDefault();
+        // 阻止全局搜索在高层原生表单背后打开并抢走键盘焦点。
+        if (document.querySelector('[data-block-global-shortcuts="true"]')) return;
         useStore.getState().setSearchOpen(true);
       }
     };
@@ -327,13 +334,13 @@ export default function App() {
       <VideoBackground />
 
       {/* 粒子网络背景 */}
-      <ParticleField />
+      {particlesEnabled && <ParticleField />}
 
-      {/* 噪点纹理 */}
-      <div className="noise-overlay" />
+      {/* 噪点纹理（关闭装饰背景时一并隐藏） */}
+      {particlesEnabled && <div className="noise-overlay" />}
 
-      {/* 扫描线特效 */}
-      <div className="scan-overlay" />
+      {/* 扫描线特效（关闭装饰背景时一并隐藏） */}
+      {particlesEnabled && <div className="scan-overlay" />}
 
       {/* 主内容（位于粒子层之上） */}
       <div className="relative z-10 flex flex-col flex-1 overflow-hidden">
@@ -346,7 +353,7 @@ export default function App() {
           setRecovering(true);
           try {
             const saved: unknown = await bridge.reload();
-            if (!configReadyRef.current) restoreConfig(saved, true);
+            if (!configReadyRef.current) void restoreConfig(saved, true);
             // 已读过配置时只解除磁盘安全 hold；失败的 pending 仍由原订阅重试。
             else setPersistenceError('已从磁盘重新读取配置；内存未保存内容保持不变，正在重试保存。');
           } catch (error) {
@@ -354,17 +361,15 @@ export default function App() {
           } finally { setRecovering(false); }
         }}>{configReady ? '重新读磁盘并重试保存（保留内存）' : '修复后重新读磁盘（确认合并内存）'}</button></div>}
         {/* 主体 */}
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
           <Sidebar />
-          <div className="flex flex-col flex-1 overflow-hidden">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {/* key 按标签页切换重挂载：滚动位置/草稿各自独立 */}
             <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
               {projectsOpen ? <ProjectCenter /> : activeCwd ? <ChatArea key={activeConversationId} /> : <WelcomeScreen />}
             </div>
             {/* Stable sibling: switching chat/project views never destroys a PTY or xterm. */}
-            <div className="shrink-0">
-              <NativeTerminalHost />
-            </div>
+            <NativeTerminalHost />
           </div>
         </div>
 
@@ -374,6 +379,7 @@ export default function App() {
 
       {/* 消息搜索面板 */}
       <SearchPanel />
+      <ConfirmDialogHost />
     </div>
   );
 }

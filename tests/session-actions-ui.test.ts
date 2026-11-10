@@ -104,6 +104,10 @@ async function open() {
   await page.goto(url);
   await page.getByRole('heading', { name: 'Original', exact: true }).waitFor();
 }
+async function openRewind() {
+  const menu = page.getByLabel('危险操作', { exact: true });
+  if (await menu.locator('..').getAttribute('open') === null) await menu.click();
+}
 it('StrictMode 下 CLI 历史仅显式打开，全分页读取后导入，不自动分叉或发送', async () => {
   await open();
   expect(await calls('historyList')).toEqual([]);
@@ -145,6 +149,7 @@ it('文件回退先预览再原生确认，提交授权 token，跳过链接不�
   await open();
   let prompt = '';
   page.once('dialog', async dialog => { prompt = dialog.message(); await dialog.accept(); });
+  await openRewind();
   await page.getByRole('button', {name:'回退文件',exact:true}).click();
   await page.getByRole('status').filter({hasText:'跳过'}).waitFor();
   expect(prompt).toContain('src/example.ts');
@@ -180,6 +185,7 @@ it('冷会话回退接续本次 dryRun bootstrap 的真实 runId，消息数组�
   });
   let confirmations = 0;
   page.on('dialog', async dialog => { confirmations++; await dialog.accept(); });
+  await openRewind();
   await page.getByRole('button', { name: '回退文件', exact: true }).click();
   await page.getByRole('status').filter({ hasText: '文件回退已执行' }).waitFor();
   expect(confirmations).toBe(1);
@@ -200,7 +206,8 @@ it('终端恢复仅打开显式 resume 表单，完整 JSON 与原生 JSONL 使�
   await page.getByRole('button', {name:'原生终端恢复',exact:true}).click();
   expect(await page.evaluate(()=>(window as any).terminalStore.getState().formSpec)).toEqual({mode:'interactive',cwd:'/project',sessionId:'original-sid',resume:true});
   expect(await calls('close')).toEqual([]);
-  await page.getByTitle('导出完整 GUI JSON').click();
+  await page.getByRole('button', {name:/^会话操作 /}).first().click();
+  await page.getByRole('menuitem', {name:'导出 JSON', exact:true}).click();
   const exported = JSON.parse((await calls('exportJson'))[0].payload.content);
   expect(exported.messages[1].blocks).toEqual([{kind:'thinking',text:'private thinking'},{kind:'stderr',text:'failed turn'}]);
   await page.getByRole('button', {name:'导出原生 JSONL',exact:true}).click();
@@ -299,6 +306,7 @@ it('待审批和未知运行上下文禁止分叉/移交，后端失败保留原
     const w = window as any;
     w.chatStore.setState((s:any)=>({conversations:s.conversations.map((c:any)=>({...c,pendingApprovals:[{requestId:'pending',kind:'tool',status:'pending'}]}))}));
   });
+  await openRewind();
   for (const name of ['分叉会话','原生终端恢复','编辑并分叉','回退文件']) {
     expect(await page.getByRole('button',{name,exact:true}).isDisabled()).toBe(true);
   }
@@ -435,13 +443,16 @@ it('关闭历史面板取消待完成导入；中途分页失败不导入残缺�
 it('回退取消、不可用检查点或缺 token 都不提交实际回退', async () => {
   await open();
   page.once('dialog',dialog=>dialog.dismiss());
+  await openRewind();
   await page.getByRole('button',{name:'回退文件',exact:true}).click();
-  await expect.poll(()=>page.getByRole('button',{name:'回退文件',exact:true}).isEnabled()).toBe(true);
+  await expect.poll(() => page.getByRole('button', { name: '分叉会话', exact: true }).isEnabled()).toBe(true);
   expect((await calls('rewind')).map(c=>c.payload.dryRun)).toEqual([true]);
   await page.evaluate(()=>{(window as any).fixture.responses.rewind={success:true,canRewind:false};});
+  await openRewind();
   await page.getByRole('button',{name:'回退文件',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'没有可用'}).waitFor();
   await page.evaluate(()=>{(window as any).fixture.responses.rewind={success:true,canRewind:true,filesChanged:['src/example.ts']};});
+  await openRewind();
   await page.getByRole('button',{name:'回退文件',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'没有可用'}).waitFor();
   expect((await calls('rewind')).every(c=>c.payload.dryRun)).toBe(true);

@@ -64,7 +64,20 @@ const names = ['接口阶段', '列表阶段', '详情阶段', '验收阶段'];
 const projects = async (): Promise<ManagedProject[]> => backend.list();
 
 async function clickButton(name: string) {
+  if (name === '返回对话' && !(await page.getByRole('button', { name, exact: true }).isVisible())) {
+    await page.locator('summary[aria-label="更多"]').click();
+  }
   await page.getByRole('button', { name, exact: true }).click();
+  if (name === '识别项目') {
+    const setup = page.getByRole('dialog', { name: '从历史识别项目', exact: true });
+    await setup.getByRole('button', { name: /^(准备历史范围|开始本地识别)$/ }).click();
+  }
+}
+async function setRecognition(mode: 'llm' | 'rules') {
+  await page.getByRole('button', { name: '识别项目', exact: true }).click();
+  const setup = page.getByRole('dialog', { name: '从历史识别项目', exact: true });
+  await setup.getByRole('combobox', { name: '项目识别方式' }).selectOption(mode);
+  await setup.getByRole('button', { name: '关闭识别设置', exact: true }).click();
 }
 async function openProject() {
   await page.getByRole('button', { name: '会员长期项目', exact: false }).click();
@@ -185,7 +198,7 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(baseURL);
     await page.getByRole('button', { name: '项目管理中心', exact: false }).click();
-    await page.getByRole('combobox', { name: '项目识别方式' }).selectOption('rules');
+    await setRecognition('rules');
   }, 60000);
 
   afterEach(async ({ task }) => {
@@ -221,8 +234,8 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     await page.keyboard.press('Escape');
     expect(await review.isVisible()).toBe(true);
     expect(await nameField.inputValue()).toBe('会员长期项目');
-    page.once('dialog', dialog => void dialog.accept());
     await review.getByRole('button', { name: '取消，不创建', exact: true }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: '放弃识别', exact: true }).click();
     expect(await projects()).toEqual([]);
     expect(fs.existsSync(backend.filePath)).toBe(false);
 
@@ -299,17 +312,21 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     backend = new ProjectsBackend({ home: directory, userData: path.join(directory, 'userData'), env: {}, analyzer: modelFixture });
     await page.reload();
     await page.getByRole('button', { name: '项目管理中心', exact: false }).click();
-    await page.getByRole('combobox', { name: '项目识别方式' }).selectOption('rules');
+    await setRecognition('rules');
     await openProject();
     expect((await currentTask()).description).toBe('经过用户确认的接口说明');
     expect(JSON.parse(await fs.promises.readFile(backend.filePath, 'utf8')).version).toBe(1);
-    await page.setViewportSize({ width: 900, height: 600 });
-    await clickButton('工作流');
-    await canvas.scrollIntoViewIfNeeded();
-    const bounds = await canvas.boundingBox();
-    expect(bounds && bounds.height).toBeGreaterThan(100);
-    expect(bounds && bounds.y).toBeLessThan(600);
-    expect(await canvas.getByRole('button').count()).toBeGreaterThan(0);
+    for (const [width, height] of [[900, 600], [1024, 768], [1400, 900], [1920, 1080]] as const) {
+      await page.setViewportSize({ width, height });
+      await clickButton('工作流');
+      await canvas.scrollIntoViewIfNeeded();
+      const bounds = await canvas.boundingBox();
+      expect(bounds && bounds.height, `${width}x${height} 画布高度`).toBeGreaterThan(100);
+      expect(bounds && bounds.y, `${width}x${height} 画布顶部`).toBeLessThan(height);
+      expect(await canvas.getByRole('button').count(), `${width}x${height} 节点可见`).toBeGreaterThan(0);
+      // 页面本身不允许出现横向溢出；工作流只在画布内部滚动。
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), `${width}x${height} 无页面横向溢出`).toBe(true);
+    }
   }, 60000);
 
   it('保存失败保留草稿、循环依赖阻止保存、缺失文件明确反馈', async () => {
@@ -325,7 +342,7 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     await page.setViewportSize({ width: 1400, height: 900 });
     await page.reload();
     await page.getByRole('button', { name: '项目管理中心', exact: false }).click();
-    await page.getByRole('combobox', { name: '项目识别方式' }).selectOption('rules');
+    await setRecognition('rules');
     await openProject();
     await clickButton('任务列表');
     await page.getByRole('button', { name: /^接口阶段/ }).click();
@@ -393,11 +410,11 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     const panel = page.getByRole('complementary').filter({ has: page.getByRole('heading', { name: '接口阶段', exact: true }) });
     await panel.getByRole('button', { name: '编辑任务' }).click();
     await panel.getByRole('textbox', { name: '说明', exact: true }).fill('切换前的任务草稿');
-    page.once('dialog', dialog => void dialog.dismiss());
     await page.getByRole('button', { name: /^列表阶段/ }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).click();
     expect(await panel.getByRole('textbox', { name: '说明', exact: true }).inputValue()).toBe('切换前的任务草稿');
-    page.once('dialog', dialog => void dialog.dismiss());
     await panel.getByRole('textbox', { name: '说明', exact: true }).press('Escape');
+    await page.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).click();
     expect(await panel.getByRole('textbox', { name: '说明', exact: true }).inputValue()).toBe('切换前的任务草稿');
     await panel.getByRole('button', { name: '取消', exact: true }).click();
     await panel.getByRole('button', { name: '关闭任务详情' }).click();
@@ -414,8 +431,7 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     }
     await page.reload();
     await page.getByRole('button', { name: '项目管理中心', exact: false }).click();
-    const mode = page.getByRole('combobox', { name: '项目识别方式' });
-    await mode.selectOption('llm');
+    await setRecognition('llm');
     await clickButton('识别项目');
     const consent = page.getByRole('dialog', { name: '确认 LLM 识别范围与费用' });
     await consent.waitFor();
@@ -518,8 +534,8 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     await page.getByRole('button').filter({ has: page.getByRole('heading', { name: '归档计数项目', exact: true }) }).click();
     expect(await page.getByText('只读，恢复后可编辑', { exact: true }).count()).toBe(1);
     expect(await page.getByRole('button', { name: '编辑背景', exact: true }).isEnabled()).toBe(false);
-    expect(await page.getByRole('button', { name: '继续项目', exact: true }).isEnabled()).toBe(false);
-    await page.getByText('更多', { exact: true }).click();
+    expect(await page.getByRole('button', { name: '新建项目对话', exact: true }).isEnabled()).toBe(false);
+    await page.locator('summary[aria-label="更多"]').click();
     await clickButton('恢复归档');
     await expect.poll(async () => (await projects()).find(item => item.id === archived.id)?.archivedAt).toBeUndefined();
     await expect.poll(() => page.getByRole('button', { name: '编辑背景', exact: true }).isEnabled()).toBe(true);
@@ -531,7 +547,7 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     expect(await page.getByRole('checkbox', { name: /我已核对交付物/ }).isEnabled()).toBe(false);
     await clickButton('任务列表');
     expect(await page.getByRole('button', { name: '新增任务', exact: true }).isEnabled()).toBe(false);
-    await page.getByText('更多', { exact: true }).click();
+    await page.locator('summary[aria-label="更多"]').click();
     await clickButton('恢复');
     await expect.poll(async () => (await projects()).find(item => item.id === deleted.id)?.deletedAt).toBeUndefined();
     await clickButton('项目总览');
@@ -553,10 +569,10 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     await page.reload();
     await page.getByRole('button', { name: /^项目管理中心/ }).click();
     await page.getByRole('button').filter({ has: page.getByRole('heading', { name: '会话进展项目', exact: true }) }).click();
-    await clickButton('继续项目');
+    await clickButton('新建项目对话');
     const draft = page.getByPlaceholder('输入指令，/ 唤起快捷命令，Enter 发送');
     await draft.waitFor();
-    expect(await draft.inputValue()).toContain('# 继续项目：会话进展项目');
+    expect(await draft.inputValue()).toContain('# 项目工作草稿：会话进展项目');
     expect(await draft.inputValue()).toContain('待核实任务');
     expect(sendCalls).toEqual([]);
     await expect.poll(async () => (await projects())[0].conversations?.length).toBe(1);
@@ -568,7 +584,9 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     await clickButton('关联当前对话');
     expect((await projects())[0].conversations).toHaveLength(1);
     await expect.poll(() => page.getByRole('button', { name: '编辑背景', exact: true }).isEnabled()).toBe(true);
-    await page.getByRole('combobox', { name: '项目识别方式' }).selectOption('llm');
+    // 详情页不再保留列表级识别工具栏：改为回到项目总览后发起识别。
+    await clickButton('项目总览');
+    await setRecognition('llm');
     await clickButton('识别项目');
     const consent = page.getByRole('dialog', { name: '确认 LLM 识别范围与费用' });
     await consent.waitFor();
@@ -576,6 +594,7 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     await consent.getByRole('checkbox', { name: /我确认可以将上述历史摘录发送/ }).check();
     await consent.getByRole('button', { name: '同意并开始 LLM 识别' }).click();
     await expect.poll(() => page.getByRole('status').filter({ hasText: /等待模型|模型处理/ }).count()).toBeGreaterThan(0);
+    await page.getByRole('button').filter({ has: page.getByRole('heading', { name: '会话进展项目', exact: true }) }).click();
     await clickButton('编辑背景');
     await page.getByRole('textbox', { name: '需求背景', exact: true }).fill('扫描进行时仍可保存背景');
     await clickButton('保存背景');
@@ -606,10 +625,10 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     await expect.poll(async () => (await projects())[0].conversations![0].reviewedAt).toBeGreaterThan(0);
     expect((await projects())[0].tasks[0].status).toBe('pending');
     expect((await projects())[0].goalConfirmed).toBe(false);
-    await expect.poll(() => page.getByRole('button', { name: '继续最近对话', exact: true }).isEnabled()).toBe(true);
-    await clickButton('继续最近对话');
+    await expect.poll(() => page.getByRole('button', { name: '打开最近对话', exact: true }).isEnabled()).toBe(true);
+    await clickButton('打开最近对话');
     await draft.waitFor({ timeout: 5000 });
-    expect(await draft.inputValue()).toContain('# 继续项目：会话进展项目');
+    expect(await draft.inputValue()).toContain('# 项目工作草稿：会话进展项目');
     expect((await projects())[0].conversations).toHaveLength(1);
     await expect.poll(() => configFixture?.cwd).toBe(path.join(directory, 'global-default'));
     expect(sendCalls).toEqual([]);
@@ -619,7 +638,7 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     await freshCase('PROJECT_UI_REVIEW', true);
     llmFieldReview = true;
     const callsBefore = llmCalls;
-    await page.getByRole('combobox', { name: '项目识别方式' }).selectOption('llm');
+    await setRecognition('llm');
     await clickButton('识别项目');
     const consent = page.getByRole('dialog', { name: '确认 LLM 识别范围与费用' });
     await consent.waitFor();
@@ -701,16 +720,16 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     const dialog = page.getByRole('dialog', { name: '新建项目', exact: true });
     const name = dialog.getByRole('textbox', { name: '项目名称', exact: true });
     await name.fill('尚未创建的项目');
-    page.once('dialog', prompt => void prompt.dismiss());
     await dialog.getByRole('button', { name: '取消', exact: true }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).click();
     expect(await name.inputValue()).toBe('尚未创建的项目');
-    page.once('dialog', prompt => void prompt.dismiss());
     await name.press('Escape');
+    await page.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).click();
     expect(await dialog.isVisible()).toBe(true);
     expect(await name.inputValue()).toBe('尚未创建的项目');
     expect(await projects()).toEqual([]);
-    page.once('dialog', prompt => void prompt.accept());
     await dialog.getByRole('button', { name: '取消', exact: true }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: '放弃修改', exact: true }).click();
     await dialog.waitFor({ state: 'hidden' });
     expect(await projects()).toEqual([]);
     await backend.create({ name: '任务草稿保护项目', goal: '不丢弃未保存任务' });
@@ -721,20 +740,105 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     await clickButton('新增任务');
     const taskName = page.getByRole('textbox', { name: '新任务名称' });
     await taskName.fill('离开前未保存的新任务');
-    page.once('dialog', prompt => void prompt.dismiss());
     await clickButton('背景与文件');
+    await page.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).click();
     expect(await taskName.inputValue()).toBe('离开前未保存的新任务');
-    page.once('dialog', prompt => void prompt.dismiss());
     await clickButton('项目总览');
+    await page.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).click();
     expect(await taskName.inputValue()).toBe('离开前未保存的新任务');
-    page.once('dialog', prompt => void prompt.dismiss());
     await clickButton('返回对话');
+    await page.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).click();
     expect(await taskName.inputValue()).toBe('离开前未保存的新任务');
     expect((await projects())[0].tasks).toEqual([]);
-    page.once('dialog', prompt => void prompt.accept());
     await clickButton('项目总览');
+    await page.getByRole('alertdialog').getByRole('button', { name: '放弃修改', exact: true }).click();
     await page.getByRole('textbox', { name: '搜索项目' }).waitFor();
     expect((await projects())[0].tasks).toEqual([]);
+  }, 60000);
+
+  it('工作流全图定位、直接关系高亮与搜索可达，大图缩放限制透明提示', async () => {
+    await freshCase('PROJECT_UI_WORKFLOW_NAV');
+    await backend.create({ name: '工作流导航项目', goal: '可追踪的真实任务关系', workingDirectory: path.join(directory, 'workspace') });
+    const project = (await projects())[0];
+    project.tasks = Array.from({ length: 30 }, (_, i) => ({ id: `manual:workflow-${i}`, name: `工作流任务 ${i + 1}`, description: '独立可定位任务', status: i < 2 ? 'completed' as const : 'pending' as const,
+      inputs: ['已有需求'], outputs: ['预期交付'], dependsOn: i > 0 && i < 6 ? [`manual:workflow-${i - 1}`] : [], dependencyNote: '只有前六项存在已记录连线，其余关系待核对', sourceIds: [], records: [] }));
+    await backend.update(project);
+    await page.reload();
+    await page.getByRole('button', { name: '项目管理中心', exact: true }).click();
+    await page.getByRole('button', { name: '工作流导航项目', exact: true }).click();
+    await clickButton('工作流');
+    const graph = page.getByRole('region', { name: '可滚动工作流画布', exact: true });
+    const minimap = page.getByRole('group', { name: '工作流缩略图', exact: true });
+    await minimap.waitFor();
+    expect(await minimap.getByRole('button').count()).toBe(30);
+    await minimap.getByRole('button', { name: /^在缩略图定位任务：工作流任务 30，/ }).focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => graph.getByRole('button', { name: /^工作流任务 30，/ }).isVisible()).toBe(true);
+    await page.getByRole('button', { name: '搜索并选择任务（含视野外任务）', exact: true }).click();
+    await page.getByPlaceholder('搜索任务', { exact: true }).fill('工作流任务 3');
+    await page.getByRole('region', { name: '搜索任务列表', exact: true }).getByRole('button', { name: '工作流任务 3 未开始', exact: true }).click();
+    expect(await graph.locator('[data-workflow-relation="selected"]').count()).toBe(1);
+    expect(await graph.locator('[data-workflow-relation="upstream"]').count()).toBe(1);
+    expect(await graph.locator('[data-workflow-relation="downstream"]').count()).toBe(1);
+    await page.getByRole('button', { name: '关闭任务详情', exact: true }).click();
+    await page.setViewportSize({ width: 900, height: 600 });
+    await page.getByRole('button', { name: '适应窗口显示全部节点', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: '已到最小缩放 40%' }).waitFor();
+    expect((await graph.boundingBox())!.height).toBeGreaterThan(150);
+    expect(sendCalls).toEqual([]);
+    expect(errors).toEqual([]);
+  }, 60000);
+
+  it('背景草稿从下一步工作定位任务前受保护，取消后内容与页面都不改变', async () => {
+    await freshCase('PROJECT_UI_NEXT_TASK_DRAFT');
+    await backend.create({ name: '下一步草稿保护', goal: '导航不丢未保存背景' });
+    const project = (await projects())[0];
+    project.tasks = [{ id: 'manual:next-task', name: '必要任务', description: '可通过摘要定位', status: 'pending',
+      inputs: [], outputs: [], dependsOn: [], dependencyNote: '待核对', sourceIds: [], records: [] }];
+    await backend.update(project);
+    await page.reload();
+    await page.getByRole('button', { name: '项目管理中心', exact: true }).click();
+    await page.getByRole('button', { name: '下一步草稿保护', exact: true }).click();
+    await clickButton('编辑背景');
+    const background = page.getByRole('textbox', { name: '需求背景', exact: true });
+    await background.fill('下一步跳转前未保存的内容');
+    await clickButton('查看任务');
+    await page.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).click();
+    expect(await background.inputValue()).toBe('下一步跳转前未保存的内容');
+    expect(await page.getByRole('button', { name: '关闭任务详情', exact: true }).count()).toBe(0);
+    await clickButton('查看任务');
+    await page.getByRole('alertdialog').getByRole('button', { name: '放弃修改', exact: true }).click();
+    await page.getByRole('complementary').getByRole('heading', { name: '必要任务', exact: true }).waitFor();
+    expect((await projects())[0].background).toBe('');
+    expect(sendCalls).toEqual([]);
+    expect(errors).toEqual([]);
+  }, 60000);
+
+  it('列表末行任务菜单不受滚动容器裁切，Esc 关闭菜单且任务不变', async () => {
+    await freshCase('PROJECT_UI_MENU_LAYOUT');
+    await backend.create({ name: '列表菜单项目', goal: '末行操作可达' });
+    const project = (await projects())[0];
+    project.tasks = Array.from({ length: 12 }, (_, i) => ({ id: `manual:menu-${i}`, name: `列表任务 ${i + 1}`, description: '检查列表末行', status: 'pending' as const,
+      inputs: [], outputs: [], dependsOn: [], dependencyNote: '待确认', sourceIds: [], records: [] }));
+    await backend.update(project);
+    await page.reload();
+    await page.getByRole('button', { name: '项目管理中心', exact: true }).click();
+    await page.getByRole('button', { name: '列表菜单项目', exact: true }).click();
+    await clickButton('任务列表');
+    await page.setViewportSize({ width: 900, height: 600 });
+    const trigger = page.locator('summary[aria-label="任务操作 列表任务 12"]');
+    await trigger.scrollIntoViewIfNeeded();
+    await trigger.click();
+    const deletion = page.getByRole('button', { name: '删除任务 列表任务 12', exact: true });
+    await deletion.click({ trial: true });
+    const bounds = (await deletion.boundingBox())!;
+    expect(bounds.y).toBeGreaterThanOrEqual(8);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(592);
+    await page.keyboard.press('Escape');
+    expect(await deletion.isVisible()).toBe(false);
+    expect((await projects())[0].tasks).toHaveLength(12);
+    expect(sendCalls).toEqual([]);
+    expect(errors).toEqual([]);
   }, 60000);
 
   it('PROJECT_UI_LIFECYCLE_FAILURE：删除写入失败保留背景草稿与关闭保护，成功后才读只读', async () => {
@@ -747,15 +851,13 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     const background = page.getByRole('textbox', { name: '需求背景', exact: true });
     await background.fill('失败后仍应保留的草稿');
     uiFailLifecycle = true;
-    await page.getByText('更多', { exact: true }).click();
-    // Deletion and the unsaved-draft confirmation are two sequential native dialogs.
-    const acceptDialogs = (prompt: import('playwright').Dialog) => void prompt.accept();
-    page.on('dialog', acceptDialogs);
-    try {
-      await clickButton('移入回收站');
-      await expect.poll(async () => (await projects())[0].deletedAt).toBeUndefined();
-    } finally { page.off('dialog', acceptDialogs); }
-    expect(await page.getByRole('alert').filter({ hasText: /原有数据未改变/ }).count()).toBeGreaterThan(0);
+    await page.locator('summary[aria-label="更多"]').click();
+    await clickButton('移入回收站');
+    // 生命周期确认与草稿丢弃确认均已主题化，需要依次确认。
+    await page.getByRole('alertdialog').getByRole('button', { name: '确认', exact: true }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: '放弃修改', exact: true }).click();
+    await expect.poll(async () => (await projects())[0].deletedAt).toBeUndefined();
+    await expect.poll(async () => page.getByRole('alert').filter({ hasText: /原有数据未改变/ }).count()).toBeGreaterThan(0);
     expect(await background.isVisible()).toBe(true);
     expect(await background.inputValue()).toBe('失败后仍应保留的草稿');
     expect(await page.evaluate(() => {
@@ -766,9 +868,9 @@ describe.skipIf(!RUN_UI)('项目中心真实扫描与浏览器端到端', () => 
     uiFailLifecycle = false;
     await clickButton('取消编辑');
     await expect.poll(() => background.isVisible()).toBe(false);
-    await page.getByText('更多', { exact: true }).click();
-    page.once('dialog', prompt => void prompt.accept());
+    await page.locator('summary[aria-label="更多"]').click();
     await clickButton('移入回收站');
+    await page.getByRole('alertdialog').getByRole('button', { name: '确认', exact: true }).click();
     await expect.poll(async () => (await projects())[0].deletedAt).toBeDefined();
   }, 60000);
 });

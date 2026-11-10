@@ -37,7 +37,7 @@ function MessageCopyButton({ getText }: { getText: () => string }) {
       <button
         onClick={handleCopy}
         title="复制消息正文"
-        className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono transition-colors ${
+        className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-2xs font-mono transition-colors ${
           copied ? 'text-accent-green' : 'text-text-dim hover:text-accent-cyan'
         }`}
       >
@@ -73,7 +73,7 @@ function RetryButton({ conversationId }: { conversationId: string }) {
         onClick={handleRetry}
         disabled={pending || unavailable}
         title="保留失败历史再次发送，不自动撤销文件/外部操作"
-        className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-mono text-accent-red/80 hover:text-accent-red border border-accent-red/20 hover:border-accent-red/40 transition-colors"
+        className="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-2xs font-mono text-accent-red/80 hover:text-accent-red border border-accent-red/20 hover:border-accent-red/40 transition-colors"
       >
         <RotateCcw className="w-3 h-3" />
         <span>{pending ? '重试中…' : '重试'}</span>
