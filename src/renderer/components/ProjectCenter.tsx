@@ -1,12 +1,12 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Archive, Check, FolderKanban, FolderPlus, Loader2, Pin, ScanSearch, Search, Trash2, X, AlertTriangle, RefreshCw, Pencil, Database, SlidersHorizontal, CheckCircle2, CircleDot } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Archive, Check, FolderKanban, FolderPlus, Loader2, Pin, ScanSearch, Search, Trash2, X, AlertTriangle, RefreshCw, Pencil, Database, SlidersHorizontal } from 'lucide-react';
 import { useStore } from '../store';
 import { useProjectsStore } from '../projectStore';
 import { PROJECT_LABELS, PROJECT_STATUS_STYLE, progressLabel, projectHealth, projectSummary, projectWorkState, TASK_LABELS } from '../projectModel';
 import type { ManagedProject, ProjectEvidenceField, ProjectSource, ProjectStatus, RecognitionMode } from '../projectTypes';
 import { ProjectDetail } from './ProjectDetail';
 import { FilePreview } from './FilePreview';
-import { BUTTON as button, BUTTON_PRIMARY, BUTTON_GHOST, BUTTON_SM, BUTTON_GROUP, SEGMENT, SEGMENT_ACTIVE, INPUT as input, SELECT, POPOVER_PANEL, ICON_BUTTON, MENU_ITEM } from './controls';
+import { BUTTON as button, BUTTON_PRIMARY, BUTTON_GHOST, BUTTON_SM, BUTTON_SM_GHOST, BUTTON_GROUP, SEGMENT, SEGMENT_ACTIVE, INPUT as input, SELECT, POPOVER_PANEL, ICON_BUTTON, MENU_ITEM } from './controls';
 import { useDialogBehavior, usePopoverBehavior } from './useDialogBehavior';
 const PAGE_SIZE = 24;
 const REVIEW_FIELDS: Array<[ProjectEvidenceField, string]> = [['background', '背景'], ['constraints', '约束'], ['decisions', '决策'], ['deliverables', '交付物']];
@@ -154,14 +154,15 @@ export function ProjectCenter() {
   return (
     <main ref={centerRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-bg-deepest/80" aria-label="项目管理中心">
       {/* 列表级工具栏只在项目列表出现；详情自带一层页头，避免双层工具栏挤压首屏 */}
-      {!selected && <header className="relative z-20 flex shrink-0 items-center gap-3 border-b border-border/60 bg-bg-deep/70 px-4 py-3 xl:px-6">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-accent-cyan/30 bg-accent-cyan/10"><FolderKanban className="h-4 w-4 text-accent-cyan" /></div>
-          <div className="min-w-0"><h1 className="text-base font-semibold text-text-primary">项目管理中心</h1><p className="hidden text-2xs text-text-secondary sm:block">审核后创建 · 任务与工作流同步</p></div>
+      {!selected && <header className="relative z-20 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/50 bg-bg-deep/70 px-4 py-2 xl:px-6">
+        <div className="flex min-w-0 items-center gap-2">
+          <FolderKanban className="h-4 w-4 shrink-0 text-accent-cyan" />
+          <h1 className="shrink-0 text-sm font-semibold text-text-primary">项目管理中心</h1>
+          <span className="shrink-0 text-xs tabular-nums text-text-muted">{scopedProjects.length} 个项目</span>
         </div>
-        <div role="group" aria-label="项目主操作" className="ml-auto flex shrink-0 items-center gap-2">
+        <div role="group" aria-label="项目主操作" className="ml-auto flex shrink-0 items-center gap-1.5">
           {scanResult && !reviewOpen && <button className={BUTTON_SM} disabled={busy} onClick={resumeReview}>继续审核 {scanResult.candidates.length}</button>}
-          <button className={button} title={lockReason || '选择范围和整理方式，再从历史创建项目'} onClick={() => setRecognitionOpen(true)} disabled={scopeLocked || !loaded}><ScanSearch className="h-4 w-4" />识别项目</button>
+          <button className={BUTTON_SM} title={lockReason || '选择范围和整理方式，再从历史创建项目'} onClick={() => setRecognitionOpen(true)} disabled={scopeLocked || !loaded}><ScanSearch className="h-4 w-4" />识别项目</button>
           <button className={BUTTON_PRIMARY} title={lockReason} onClick={() => { if (useProjectsStore.getState().dirty) { setLocalError('请先保存或取消当前编辑，再新建项目。'); return; } setCreating(true); }} disabled={scopeLocked || !loaded}><FolderPlus className="h-4 w-4" />新建项目</button>
           <details data-popover className="relative text-xs" onToggle={event => { if (event.currentTarget.open) void refreshStorage(); }}>
             <summary aria-label="数据管理" title="项目数据管理" className={`${ICON_BUTTON} list-none cursor-pointer [&::-webkit-details-marker]:hidden`}><Database className="h-4 w-4" /></summary>
@@ -190,64 +191,86 @@ export function ProjectCenter() {
       {loading ? <div className="flex-1 flex items-center justify-center gap-2 text-sm text-text-secondary"><Loader2 className="w-5 h-5 animate-spin text-accent-cyan" />恢复项目数据…</div>
         : !loaded ? <div className="flex-1 flex flex-col items-center justify-center gap-4 text-sm text-text-secondary"><p>项目数据尚未加载。请检查上方错误并重试，不会覆盖已有文件。</p><div className="flex gap-2"><button className={button} disabled={busy || !!scanOperation} onClick={() => void reload()}><RefreshCw className="w-4 h-4" />从磁盘重新加载</button><button className={button} disabled={busy || !!scanOperation || !storageInfo?.backupAvailable} onClick={() => void restoreBackup()}>恢复备份</button></div></div>
         : selected ? <ProjectDetail key={selected.id} project={selected} onBack={() => void selectProject(null)} onSource={openSource} onPreview={setPreview} onReveal={reveal} />
-        : <div className="flex-1 min-h-0 overflow-y-auto p-3 xl:p-6">
-          <div className="mx-auto w-full max-w-[1120px] space-y-4">
-          <div className="flex items-center justify-between gap-2">
-            <div className={BUTTON_GROUP} role="group" aria-label="项目生命周期">
-              <button className={`${SEGMENT} ${lifecycle === 'active' ? SEGMENT_ACTIVE : ''}`} aria-pressed={lifecycle === 'active'} disabled={busy} onClick={() => void changeLifecycle('active')}><FolderKanban className="h-3.5 w-3.5" />活跃项目 {activeCount}</button>
-              <button className={`${SEGMENT} ${lifecycle === 'archived' ? SEGMENT_ACTIVE : ''}`} aria-pressed={lifecycle === 'archived'} disabled={busy} onClick={() => void changeLifecycle('archived')}><Archive className="h-3.5 w-3.5" />归档 {archivedCount}</button>
-              <button className={`${SEGMENT} ${lifecycle === 'deleted' ? SEGMENT_ACTIVE : ''}`} aria-pressed={lifecycle === 'deleted'} disabled={busy} onClick={() => void changeLifecycle('deleted')}><Trash2 className="h-3.5 w-3.5" />回收站 {deletedCount}</button>
-            </div>
-            <button className={BUTTON_GHOST} disabled={busy} onClick={() => void showChat()}><ArrowLeft className="h-3.5 w-3.5" />返回对话</button>
-          </div>
-          <div className="grid grid-cols-4 divide-x divide-border/40 overflow-hidden rounded-xl border border-border/50 bg-bg-light/30" role="group" aria-label="项目状态筛选">
-            {(['all', 'not_started', 'in_progress', 'completed'] as const).map(status => (
-              <button key={status} aria-pressed={filter === status} onClick={() => setFilter(status)} className={`min-w-0 px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-cyan ${filter === status ? 'bg-bg-lighter' : 'hover:bg-bg-light'}`}>
-                <div className="truncate text-xs text-text-secondary">{status === 'all' ? `${lifecycle === 'active' ? '活跃' : lifecycle === 'archived' ? '归档' : '回收站'}全部项目` : PROJECT_LABELS[status]}</div><div className={`mt-0.5 font-mono text-lg ${filter === status ? 'text-text-primary' : 'text-text-secondary'}`}>{counts[status]}</div>
-              </button>
-            ))}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative min-w-[180px] flex-1"><Search className="pointer-events-none absolute left-3 top-2 h-4 w-4 text-text-muted" /><input aria-label="搜索项目" placeholder="搜索项目、任务或来源…" value={search} onChange={event => setSearch(event.target.value)} className={`${input} h-8 pl-9 text-xs leading-none`} /></div>
-            <details data-popover className="relative">
-              <summary className={`${button} list-none cursor-pointer [&::-webkit-details-marker]:hidden`}><SlidersHorizontal className="h-3.5 w-3.5" />筛选与排序{onlyAttention || tagFilter || sortBy !== 'updated' ? ' · 已启用' : ''}</summary>
-              <div className={`${POPOVER_PANEL} absolute right-0 top-full mt-2 w-64 space-y-3 p-3`}>
-                <label className="block text-2xs text-text-secondary">排序<select aria-label="项目排序" value={sortBy} onChange={event => setSortBy(event.target.value as typeof sortBy)} className={`${SELECT} mt-1 w-full`}><option value="updated">最近更新</option><option value="created">创建时间</option><option value="name">名称</option><option value="attention">待整理优先</option></select></label>
-                <label className="block text-2xs text-text-secondary">标签<select aria-label="标签筛选" value={tagFilter} onChange={event => setTagFilter(event.target.value)} className={`${SELECT} mt-1 w-full`}><option value="">全部标签</option>{allTags.map(tag => <option key={tag} value={tag}>{tag}</option>)}</select></label>
-                <button className={`${button} w-full justify-center ${onlyAttention ? 'border-accent-orange/40 text-accent-orange bg-accent-orange/5' : ''}`} aria-pressed={onlyAttention} onClick={() => setOnlyAttention(value => !value)}>仅看待整理 {attentionCount}</button>
+        : <div className="flex-1 min-h-0 overflow-y-auto">
+          {/* 一套筛选：生命周期 + 状态计数同排，搜索与筛选同排，不再使用统计卡与重复计数。 */}
+          <div className="sticky top-0 z-10 border-b border-border/40 bg-bg-deepest/95 px-3 py-2 backdrop-blur xl:px-6">
+            <div className="mx-auto flex w-full max-w-[1120px] flex-wrap items-center gap-2">
+              <div className={BUTTON_GROUP} role="group" aria-label="项目生命周期">
+                <button className={`${SEGMENT} h-7 px-2 ${lifecycle === 'active' ? SEGMENT_ACTIVE : ''}`} aria-pressed={lifecycle === 'active'} disabled={busy} onClick={() => void changeLifecycle('active')}><FolderKanban className="h-3.5 w-3.5" />活跃项目 {activeCount}</button>
+                <button className={`${SEGMENT} h-7 px-2 ${lifecycle === 'archived' ? SEGMENT_ACTIVE : ''}`} aria-pressed={lifecycle === 'archived'} disabled={busy} onClick={() => void changeLifecycle('archived')}><Archive className="h-3.5 w-3.5" />归档 {archivedCount}</button>
+                <button className={`${SEGMENT} h-7 px-2 ${lifecycle === 'deleted' ? SEGMENT_ACTIVE : ''}`} aria-pressed={lifecycle === 'deleted'} disabled={busy} onClick={() => void changeLifecycle('deleted')}><Trash2 className="h-3.5 w-3.5" />回收站 {deletedCount}</button>
               </div>
-            </details>
-            {(filter !== 'all' || search || tagFilter || onlyAttention) && <button type="button" className={BUTTON_GHOST} onClick={() => { setFilter('all'); setSearch(''); setTagFilter(''); setOnlyAttention(false); setPage(0); }}>清除筛选</button>}
-            <span className="w-full text-xs text-text-muted">当前视图 {counts.all} 个 · 筛选后 {filtered.length} 个项目</span>
-          </div>
-          {filtered.length === 0 ? <section className="py-16 px-6 rounded-xl border border-dashed border-border text-center">
-            <FolderKanban className="w-10 h-10 text-accent-cyan/60 mx-auto mb-4" /><h2 className="text-base text-text-primary mb-2">{projects.length ? '没有匹配的项目' : '把零散工作整理成可追踪的项目'}</h2><p className="text-sm text-text-secondary max-w-xl mx-auto leading-6">{projects.length ? '调整状态筛选或搜索关键词。' : '新建项目记录目标与任务，或从本地历史整理已有工作。识别结果只作为候选，需你审核后创建。'}</p>
-            {!projects.length && <button className={`${BUTTON_GHOST} mt-4`} onClick={() => setRecognitionOpen(true)} disabled={scopeLocked}><ScanSearch className="h-4 w-4" />从历史整理项目</button>}
-          </section> : <div className="space-y-2.5">
-            {filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE).map(project => {
-              const summary = projectSummary(project);
-              const health = healthMap.get(project.id) || projectHealth(project, now);
-              const work = projectWorkState(project);
-              const lifecycle = project.deletedAt ? '已删除' : project.archivedAt ? '已归档' : null;
-              return <button key={project.id} disabled={busy} onClick={() => void selectProject(project.id)} aria-labelledby={`project-name-${project.id}`} className="w-full text-left glass-panel glass-panel-hover rounded-xl p-4 transition-colors group">
-                <span id={`project-name-${project.id}`} className="sr-only">{project.name}</span>
-                <div className="flex items-start justify-between gap-4"><h2 className="text-base font-medium text-text-primary group-hover:text-accent-cyan break-words">{project.pinned && <Pin className="inline w-3.5 h-3.5 mr-1 text-accent-cyan" aria-label="置顶" />}{project.name}</h2><span className={`shrink-0 text-xs rounded-md px-2 py-1 ${lifecycle === '已删除' ? 'bg-accent-red/10 text-accent-red' : lifecycle === '已归档' ? 'bg-bg-lighter text-text-secondary' : PROJECT_STATUS_STYLE[summary.status]}`}>{lifecycle || PROJECT_LABELS[summary.status]}</span></div>
-                <p className="text-sm text-text-secondary mt-2 line-clamp-2 leading-6">{project.description || project.goal}</p>
-                {!!project.tags?.length && <div className="flex flex-wrap gap-1.5 mt-2">{project.tags.map(tag => <span key={tag} className="rounded bg-bg-lighter px-1.5 py-0.5 text-2xs text-text-secondary">{tag}</span>)}</div>}
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-text-secondary"><span title={work.note} className="min-w-0 truncate">{work.label}{work.nextTask ? ` · ${work.nextTask.name}` : ''}</span><ArrowRight className="h-4 w-4 shrink-0 text-text-muted transition-transform group-hover:translate-x-1" /></div>
-                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-                  <div className="flex h-1.5 min-w-[100px] flex-1 overflow-hidden rounded-full bg-bg-lighter" role="progressbar" aria-label={`${project.name}必要任务进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={summary.requiredTotal ? summary.progress : undefined} aria-valuetext={progressLabel(summary)}>
-                    <div className="h-full bg-accent-green" style={{ width: `${summary.requiredTotal ? summary.requiredCompleted / summary.requiredTotal * 100 : 0}%` }} />
-                    <div className="h-full bg-accent-blue" style={{ width: `${summary.requiredTotal ? project.tasks.filter(task => !task.optional && task.status === 'in_progress').length / summary.requiredTotal * 100 : 0}%` }} />
-                  </div>
-                  <span className="text-xs tabular-nums text-text-secondary">{progressLabel(summary)}</span>
+              <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto" role="group" aria-label="项目状态筛选">
+                {(['all', 'not_started', 'in_progress', 'completed'] as const).map(status => (
+                  <button key={status} aria-pressed={filter === status} onClick={() => setFilter(status)} className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan ${filter === status ? 'bg-bg-lighter text-text-primary' : 'text-text-secondary hover:bg-bg-light hover:text-text-primary'}`}>
+                    <span className="truncate">{status === 'all' ? `${lifecycle === 'active' ? '活跃' : lifecycle === 'archived' ? '归档' : '回收站'}全部项目` : PROJECT_LABELS[status]}</span>
+                    <span className={`tabular-nums ${filter === status ? 'text-text-primary' : 'text-text-muted'}`}>{counts[status]}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="relative ml-auto w-full min-w-[180px] max-w-[280px] sm:w-auto"><Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-text-muted" /><input aria-label="搜索项目" placeholder="搜索项目、任务或来源…" value={search} onChange={event => setSearch(event.target.value)} className={`${input} h-7 pl-8 text-xs leading-none`} /></div>
+              <details data-popover className="relative">
+                <summary className={`${BUTTON_SM} list-none cursor-pointer [&::-webkit-details-marker]:hidden`}><SlidersHorizontal className="h-3.5 w-3.5" />筛选{onlyAttention || tagFilter || sortBy !== 'updated' ? ' · 已启用' : ''}</summary>
+                <div className={`${POPOVER_PANEL} absolute right-0 top-full mt-2 w-64 space-y-3 p-3`}>
+                  <label className="block text-2xs text-text-secondary">排序<select aria-label="项目排序" value={sortBy} onChange={event => setSortBy(event.target.value as typeof sortBy)} className={`${SELECT} mt-1 w-full`}><option value="updated">最近更新</option><option value="created">创建时间</option><option value="name">名称</option><option value="attention">待整理优先</option></select></label>
+                  <label className="block text-2xs text-text-secondary">标签<select aria-label="标签筛选" value={tagFilter} onChange={event => setTagFilter(event.target.value)} className={`${SELECT} mt-1 w-full`}><option value="">全部标签</option>{allTags.map(tag => <option key={tag} value={tag}>{tag}</option>)}</select></label>
+                  <button className={`${button} w-full justify-center ${onlyAttention ? 'border-accent-orange/40 text-accent-orange bg-accent-orange/5' : ''}`} aria-pressed={onlyAttention} onClick={() => setOnlyAttention(value => !value)}>仅看待整理 {attentionCount}</button>
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-2 mt-3 text-2xs text-text-secondary"><span>{project.sources.length} 条来源 · {project.files.length} 个文件{summary.allTasksComplete && !project.goalConfirmed ? ' · 等待目标验收' : ''}{health.needsAttention ? ` · 待整理 ${health.issues.length}` : ''}</span><span>更新于 {new Date(project.updatedAt).toLocaleDateString()}</span></div>
-              </button>;
-            })}
-            <Pagination page={safePage} total={filtered.length} size={PAGE_SIZE} onChange={setPage} />
-          </div>}
-          <div className="flex flex-wrap items-center gap-4 text-xs text-text-muted" aria-label="项目进度图例"><span className="flex items-center gap-1.5"><CheckCircle2 className="h-3.5 w-3.5 text-accent-green" />已完成必要任务</span><span className="flex items-center gap-1.5"><CircleDot className="h-3.5 w-3.5 text-accent-blue" />进行中</span><span>任务进度与项目验收分开记录</span></div>
+              </details>
+              {(filter !== 'all' || search || tagFilter || onlyAttention) && <button type="button" className={`${BUTTON_SM_GHOST} shrink-0`} onClick={() => { setFilter('all'); setSearch(''); setTagFilter(''); setOnlyAttention(false); setPage(0); }}>清除筛选</button>}
+              <button className={`${BUTTON_SM_GHOST} shrink-0`} disabled={busy} onClick={() => void showChat()}><ArrowLeft className="h-3.5 w-3.5" />返回对话</button>
+            </div>
+          </div>
+          <div className="mx-auto w-full max-w-[1120px] p-3 xl:p-6">
+          {filtered.length === 0 ? <section className="rounded-lg border border-dashed border-border px-6 py-12 text-center">
+            <FolderKanban className="mx-auto mb-3 h-8 w-8 text-accent-cyan/60" /><h2 className="mb-2 text-sm font-medium text-text-primary">{projects.length ? '没有匹配的项目' : '把零散工作整理成可追踪的项目'}</h2><p className="mx-auto max-w-xl text-xs leading-5 text-text-secondary">{projects.length ? '调整状态筛选或搜索关键词。' : '新建项目记录目标与任务，或从本地历史整理已有工作。识别结果只作为候选，需你审核后创建。'}</p>
+            {!projects.length && <button className={`${BUTTON_GHOST} mt-4`} onClick={() => setRecognitionOpen(true)} disabled={scopeLocked}><ScanSearch className="h-4 w-4" />从历史整理项目</button>}
+          </section> : <>
+            {/* 行式列表：名称、状态、下一步、进度、更新时间；标签与来源降级到悬浮信息。 */}
+            <div className="overflow-hidden rounded-lg border border-border/50 bg-bg-deep/20">
+              {filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE).map(project => {
+                const summary = projectSummary(project);
+                const health = healthMap.get(project.id) || projectHealth(project, now);
+                const work = projectWorkState(project);
+                const lifecycle = project.deletedAt ? '已删除' : project.archivedAt ? '已归档' : null;
+                const hint = [
+                  project.description || project.goal,
+                  project.tags?.length ? `标签：${project.tags.join('、')}` : '',
+                  `${project.sources.length} 条来源 · ${project.files.length} 个文件`,
+                  summary.allTasksComplete && !project.goalConfirmed ? '等待目标验收' : '',
+                  health.needsAttention ? `待整理 ${health.issues.length}` : '',
+                  work.note,
+                ].filter(Boolean).join('\n');
+                return <button
+                  key={project.id}
+                  disabled={busy}
+                  onClick={() => void selectProject(project.id)}
+                  aria-labelledby={`project-name-${project.id}`}
+                  title={hint}
+                  className="group flex w-full items-center gap-3 border-b border-border/30 px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-bg-light/60 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <h2 id={`project-name-${project.id}`} className="min-w-0 flex-[1.2] truncate text-sm font-medium text-text-primary group-hover:text-accent-cyan">
+                    {project.pinned && <Pin className="mr-1 inline h-3 w-3 text-accent-cyan" aria-label="置顶" />}
+                    {project.name}
+                  </h2>
+                  <span className={`hidden shrink-0 rounded px-1.5 py-0.5 text-2xs sm:inline ${lifecycle === '已删除' ? 'bg-accent-red/10 text-accent-red' : lifecycle === '已归档' ? 'bg-bg-lighter text-text-secondary' : PROJECT_STATUS_STYLE[summary.status]}`}>{lifecycle || PROJECT_LABELS[summary.status]}</span>
+                  <span className="hidden min-w-0 flex-1 truncate text-xs text-text-secondary md:block" title={work.note}>{work.label}{work.nextTask ? ` · ${work.nextTask.name}` : ''}</span>
+                  <span className="hidden w-24 shrink-0 items-center gap-2 lg:flex">
+                    <span className="flex h-1 flex-1 overflow-hidden rounded-full bg-bg-lighter" role="progressbar" aria-label={`${project.name}必要任务进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={summary.requiredTotal ? summary.progress : undefined} aria-valuetext={progressLabel(summary)}>
+                      <span className="h-full bg-accent-green" style={{ width: `${summary.requiredTotal ? summary.requiredCompleted / summary.requiredTotal * 100 : 0}%` }} />
+                      <span className="h-full bg-accent-blue" style={{ width: `${summary.requiredTotal ? project.tasks.filter(task => !task.optional && task.status === 'in_progress').length / summary.requiredTotal * 100 : 0}%` }} />
+                    </span>
+                  </span>
+                  <span className="w-24 shrink-0 text-right text-2xs tabular-nums text-text-secondary">
+                    <span className="block truncate">{progressLabel(summary)}</span>
+                    <span className="block text-text-muted">{new Date(project.updatedAt).toLocaleDateString()}</span>
+                  </span>
+                  <ArrowRight className="h-3.5 w-3.5 shrink-0 text-text-muted transition-transform group-hover:translate-x-0.5" />
+                </button>;
+              })}
+              <Pagination page={safePage} total={filtered.length} size={PAGE_SIZE} onChange={setPage} />
+            </div>
+          </>}
           </div>
         </div>}
       {recognitionOpen && <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onClick={event => { if (event.target === event.currentTarget) setRecognitionOpen(false); }}>

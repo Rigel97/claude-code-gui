@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Archive, Bell, Boxes, Cpu, Info, Search, Shield, Terminal, X } from 'lucide-react';
+import { Archive, Bell, Boxes, ChevronRight, Cpu, Info, MoreHorizontal, Search, Shield, Terminal, X } from 'lucide-react';
 import type { ConversationRuntime } from '../types';
 import { useStore } from '../store';
 import { getSettingsAPI } from './RuntimeSettings';
@@ -13,7 +13,7 @@ import {
   type ViewId,
 } from './settings/settingsMeta';
 import { StatusPill } from './settings/SettingsControls';
-import { BUTTON, BUTTON_DANGER, BUTTON_GHOST, BUTTON_PRIMARY } from './controls';
+import { BUTTON_DANGER, BUTTON_GHOST, BUTTON_PRIMARY, ICON_BUTTON, POPOVER_PANEL } from './controls';
 import {
   AboutView,
   AppearanceView,
@@ -443,16 +443,27 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        <div className="flex shrink-0 flex-wrap items-center gap-x-6 gap-y-2 border-b border-border/40 bg-bg-light/20 px-5 py-2.5">
-          <StatusPill label="实际模型" value={actualModel || '未连接'} />
-          <StatusPill label="CLI" value={cliVersion || '未读取'} />
-          <StatusPill label="实际权限" value={actualPermissionLabel} tone={actualPermission === 'bypassPermissions' ? 'warn' : 'neutral'} />
-          <span className="ml-auto text-2xs text-text-dim">保存不会热更新当前 CLI</span>
-        </div>
+        {/* 运行状态默认折叠为一行，展开才显示详细值 */}
+        <details className="group shrink-0 border-b border-border/40 bg-bg-light/20 px-5">
+          <summary className="flex h-7 cursor-pointer list-none items-center gap-2 text-2xs text-text-secondary [&::-webkit-details-marker]:hidden">
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${actualModel ? 'bg-accent-green' : 'bg-text-muted'}`} />
+            <span className="shrink-0">{actualModel ? '已连接' : '未连接'}</span>
+            <span className="shrink-0 text-text-dim">·</span>
+            <span className="max-w-[200px] truncate">{actualModel || '模型未读取'}</span>
+            <span className="shrink-0 text-text-dim">·</span>
+            <span className="max-w-[140px] truncate">{actualPermissionLabel}</span>
+            <ChevronRight className="ml-auto h-3 w-3 shrink-0 transition-transform group-open:rotate-90" />
+          </summary>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 pb-2">
+            <StatusPill label="实际模型" value={actualModel || '未连接'} />
+            <StatusPill label="CLI" value={cliVersion || '未读取'} />
+            <StatusPill label="实际权限" value={actualPermissionLabel} tone={actualPermission === 'bypassPermissions' ? 'warn' : 'neutral'} />
+          </div>
+        </details>
 
         <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
             <nav aria-label="设置分类" className="flex max-h-32 shrink-0 flex-wrap gap-1 overflow-y-auto border-b border-border/40 p-2 sm:max-h-none sm:w-44 sm:flex-col sm:flex-nowrap sm:gap-0 sm:border-b-0 sm:border-r">
-              <p className="hidden px-2.5 pb-2 text-2xs leading-5 text-text-dim sm:block">生效方式以每项徽章为准；运行环境在该页单独保存。</p>
+              <p className="hidden px-2.5 pb-2 text-2xs leading-5 text-text-dim sm:block">生效方式见每项徽章。</p>
             <div className="contents sm:block sm:space-y-0.5">{NAV_ITEMS.map(navButton)}</div>
             <div className="hidden sm:mt-4 sm:block sm:px-2.5 text-2xs font-medium text-text-dim">高级</div>
             <div className="contents sm:mt-1 sm:block sm:space-y-0.5">{ADVANCED_ITEMS.map(navButton)}</div>
@@ -510,26 +521,25 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             <span role="status" className={`text-xs ${dirtyCount ? 'text-accent-yellow' : 'text-text-muted'}`}>
               {dirtyCount ? `${dirtyCount} 项更改未保存` : '所有更改已保存'}
             </span>
-            <p className="mt-0.5 text-2xs text-text-dim">重连使用已保存配置；运行环境逐项保存。</p>
+            <p className="mt-0.5 text-2xs text-text-dim">保存只写入全局配置；当前 CLI 不热更新，重连使用已保存配置。</p>
           </div>
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-            <button type="button" onClick={handleReconnect} disabled={saving} title="仅使用已保存配置重新连接当前对话；不保存草稿，累计预算重新计" className={BUTTON_GHOST}>
-              重新连接当前对话
-            </button>
-            <button type="button" onClick={resetDraft} disabled={!dirtyCount || saving} className={BUTTON_GHOST}>
-              放弃更改
-            </button>
+            <details data-popover className="relative">
+              <summary aria-label="更多设置操作" title="更多设置操作" className={`${ICON_BUTTON} list-none cursor-pointer [&::-webkit-details-marker]:hidden`}><MoreHorizontal className="h-4 w-4" /></summary>
+              <div className={`${POPOVER_PANEL} absolute bottom-full right-0 mb-2 w-60 space-y-0.5`} onClick={event => { if ((event.target as HTMLElement).closest('button')) event.currentTarget.closest('details')?.removeAttribute('open'); }}>
+                <button type="button" onClick={resetDraft} disabled={!dirtyCount || saving} className="flex min-h-8 w-full items-center rounded-md px-3 py-1.5 text-left text-xs text-text-secondary transition-colors hover:bg-bg-light hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40">
+                  放弃更改
+                </button>
+                <button type="button" onClick={handleReconnect} disabled={saving} title="仅使用已保存配置重新连接当前对话；不保存草稿，累计预算重新计" className="flex min-h-8 w-full items-center rounded-md px-3 py-1.5 text-left text-xs text-text-secondary transition-colors hover:bg-bg-light hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40">
+                  重新连接当前对话
+                </button>
+                <button type="button" onClick={saveAndReconnect} disabled={saving} title="保存上方草稿并重新连接当前会话；累计预算从新进程重新计" className="flex min-h-8 w-full items-center rounded-md border-t border-border/40 px-3 py-1.5 text-left text-xs text-text-primary transition-colors hover:bg-bg-light">
+                  保存并重新连接
+                </button>
+              </div>
+            </details>
             <button type="button" onClick={() => void handleSave()} disabled={saving} className={BUTTON_PRIMARY}>
               保存
-            </button>
-            <button
-              type="button"
-              onClick={saveAndReconnect}
-              disabled={saving}
-              title="保存上方草稿并重新连接当前会话；累计预算从新进程重新计"
-              className={BUTTON}
-            >
-              保存并重新连接
             </button>
           </div>
         </footer>

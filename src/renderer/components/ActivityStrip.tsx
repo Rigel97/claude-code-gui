@@ -49,7 +49,7 @@ export function ActivityStrip({ conv }: { conv: Conversation }) {
   }
 
   return (
-    <div className="px-6 pb-1 animate-fade-in select-none">
+    <div className="mt-2 animate-fade-in select-none">
       <div className="flex items-center gap-2 text-2xs font-mono">
         <span className={`flex items-center gap-1.5 ${config.color}`}>
           <span className="flex gap-0.5">

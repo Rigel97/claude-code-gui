@@ -1,6 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useStore } from '../store';
-import { useProjectsStore } from '../projectStore';
 import { Send, Square, Sparkles, X, ListOrdered, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { abortConversation } from '../utils/deliver';
 import { BUTTON_DANGER, BUTTON_PRIMARY, BUTTON_SM_GHOST, SELECT, POPOVER_PANEL } from './controls';
@@ -66,7 +65,6 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
   );
   const globalCwd = useStore((s) => s.cwd);
   const cwd = conv ? conv.cwd : globalCwd;
-  const activeProject = useProjectsStore((s) => s.projects.find(project => project.conversations?.some(link => link.conversationId === (conv?.id ?? ''))));
   const model = useStore((s) => s.model);
   const injectedText = useStore((s) => s.injectedText);
   const injectText = useStore((s) => s.injectText);
@@ -436,16 +434,6 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
               <span className="font-mono text-xs text-accent-cyan">松开即可插入 @文件引用</span>
             </div>
           )}
-          {/* 作用域摘要：发送前可确认自己在哪个项目、哪个目录下工作 */}
-          <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border/30 px-3 text-xs text-text-secondary">
-            <span className="shrink-0 rounded bg-bg-deepest/60 px-1.5 py-0.5 text-text-dim">作用域</span>
-            <span className="min-w-0 truncate" title={activeProject ? `项目：${activeProject.name}` : `对话：${conv?.title || '新对话'}`}>
-              {activeProject ? `项目：${activeProject.name}` : `对话：${conv?.title || '新对话'}`}
-            </span>
-            <span className="ml-auto max-w-[45%] shrink-0 truncate font-mono text-text-dim" title={cwd || '未设置工作目录'}>
-              目录：{cwd ? cwd.split('/').pop() : '未设置'}
-            </span>
-          </div>
           <textarea
             ref={textareaRef}
             value={input}
@@ -504,8 +492,8 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
           </div>
         </div>
 
-        {/* 帮助是弹出层，不再随展开挤压输入和发送操作。 */}
-        <div className="mt-1 flex h-7 shrink-0 items-center gap-3 text-xs text-text-muted">
+        {/* 帮助收进单行说明入口，快捷键与参数在弹层内，不再常驻挤压消息区。 */}
+        <div className="mt-1 flex h-6 shrink-0 items-center gap-3 text-xs text-text-muted">
           {!showSlash && <button type="button" aria-label={readingCommands ? '读取中…' : '读取CLI命令（加载项目配置，不发送提示词）'} title="读取 CLI 命令，不发送提示词；可能执行项目 hooks，副作用及费用未知" onClick={() => void readCommands()} disabled={readingCommands} className={`${BUTTON_SM_GHOST} px-1`}><RefreshCw className={`h-3.5 w-3.5 ${readingCommands ? 'animate-spin' : ''}`} />{readingCommands ? '读取中…' : '读取命令'}</button>}
           {queue.length > 0 && <details data-popover data-popover-anchor="container" className="text-accent-yellow">
             <summary className={`${BUTTON_SM_GHOST} list-none cursor-pointer px-1 text-accent-yellow [&::-webkit-details-marker]:hidden`}><ListOrdered className="h-3.5 w-3.5" />排队中 · {queue.length} 条</summary>
@@ -514,9 +502,6 @@ export function InputBar({ initialDraft }: { initialDraft: string }) {
               {queue.map((text, i) => <div key={i} className="flex items-center gap-2 rounded-md px-2 py-1.5"><span className="text-text-muted">#{i + 1}</span><span className="min-w-0 flex-1 truncate text-text-primary" title={text}>{text}</span><button onClick={() => removeQueuedMessage(i)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-bg-lighter hover:text-accent-red" title="移出队列" aria-label={`移出队列 ${i + 1}`}><X className="h-3.5 w-3.5" /></button></div>)}
             </div>
           </details>}
-          <span className="hidden whitespace-nowrap sm:inline">Enter {isStreaming ? '排队' : '发送'}</span>
-          <span className="hidden whitespace-nowrap lg:inline">Shift+Enter 换行</span>
-          {isStreaming && <span className="hidden text-accent-red/80 md:inline">Esc 停止</span>}
           <details data-popover data-popover-anchor="container" className="ml-auto">
             <summary className={`${BUTTON_SM_GHOST} list-none cursor-pointer px-1 [&::-webkit-details-marker]:hidden`}><SlidersHorizontal className="h-3.5 w-3.5" />说明与参数</summary>
             <div className={`${POPOVER_PANEL} absolute bottom-full right-0 mb-2 max-h-[45vh] w-80 max-w-[70vw] space-y-2 overflow-y-auto p-3 text-xs leading-5 text-text-secondary`}>

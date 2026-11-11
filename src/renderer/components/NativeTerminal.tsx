@@ -374,11 +374,10 @@ export function NativeTerminalHost() {
         <button style={{ ...headerControl, width: 26, border: 0, borderLeft: '1px solid #2a3349', borderRadius: 0 }} disabled={state.loading} aria-label={`关闭 ${term.title}`} title={`关闭 ${term.title}（结束进程）`} onClick={() => { void state.close(term.id).catch(() => {}); }}><X size={12} /></button>
       </div>)}
     </div>
-    <div style={{ display: 'flex', gap: 8, padding: '0 12px 4px', color: '#7d8b9f', flexShrink: 0, fontSize: 12, minWidth: 0 }}>
-      <span title="官方终端不是聊天 trace；仅键盘输入发送至 PTY。隐藏面板不会结束进程。" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>官方终端不是聊天 trace · 隐藏不结束进程</span>
-      {state.terminals.some(term => term.id === state.activeTerminalId && term.status !== 'exited') && <span role="status" title={`原生 PTY 占用 · ${state.activeTerminalId}`} style={{ color: '#67e8f9', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>原生 PTY 占用 · {state.activeTerminalId}</span>}
+    {(state.loading || state.terminals.some(term => term.id === state.activeTerminalId && term.status !== 'exited')) && <div style={{ display: 'flex', gap: 8, padding: '0 12px 4px', color: '#7d8b9f', flexShrink: 0, fontSize: 12, minWidth: 0 }}>
+      {state.terminals.some(term => term.id === state.activeTerminalId && term.status !== 'exited') && <span role="status" title={`原生 PTY 占用 · ${state.activeTerminalId}；隐藏面板不会结束进程`} style={{ color: '#67e8f9', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>原生 PTY 占用 · {state.activeTerminalId}</span>}
       {state.loading && <span role="status">终端 IPC 处理中…</span>}
-    </div>
+    </div>}
     {state.terminals.map(term => <TerminalViewport key={term.id} id={term.id} visible={state.open && term.id === state.activeTerminalId} />)}
   </section>;
 }

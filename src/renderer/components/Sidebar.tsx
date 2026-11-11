@@ -43,9 +43,6 @@ export function Sidebar() {
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed);
   const setSidebarCollapsed = useStore((s) => s.setSidebarCollapsed);
   const conversations = useStore((s) => s.conversations);
-  const activeConversation = useStore((s) => s.conversations.find((c) => c.id === s.activeConversationId));
-  const selectedProject = useProjectsStore((s) => s.projects.find((p) => p.id === s.selectedProjectId));
-  const linkedProject = useProjectsStore((s) => s.projects.find((p) => !p.deletedAt && p.conversations?.some(link => link.conversationId === activeConversation?.id)));
   const collapsed = sidebarCollapsed;
   const sidebarRef = useRef<HTMLElement>(null);
   /** 删除限制：该会话是否有正在生成的标签页 */
@@ -184,9 +181,6 @@ export function Sidebar() {
             <FolderOpen className="h-4 w-4 shrink-0 text-accent-cyan" />
             {!collapsed && <span className="min-w-0 flex-1 truncate text-left text-sm text-text-primary">{cwd ? cwd.split('/').pop() : '选择工作目录'}</span>}
           </button>
-          {!collapsed && <p className="truncate px-3 py-1 text-xs text-text-muted" title={projectsOpen ? selectedProject?.name || '项目总览' : linkedProject?.name || activeConversation?.title || '未命名对话'}>
-            {projectsOpen ? `项目 · ${selectedProject?.name || '项目总览'}` : linkedProject ? `项目 · ${linkedProject.name}` : `对话 · ${activeConversation?.title || '未命名对话'}`}
-          </p>}
         </div>
 
         <nav aria-label="主导航" className="shrink-0 space-y-1 p-2">
@@ -413,28 +407,28 @@ export function Sidebar() {
             {!collapsed && <><span className="flex-1 text-left text-sm">搜索会话</span><kbd className="rounded border border-border px-1 font-mono text-2xs text-text-secondary">{modKey}F</kbd></>}
           </button>
 
-          <div className={collapsed ? 'grid gap-1' : 'grid grid-cols-2 gap-1'}>
-            <button
-              className={`${NAV_ITEM} h-8 gap-2 text-xs ${collapsed ? 'justify-center px-0' : 'px-2'}`}
-              aria-label="原生终端"
-              title="原生终端"
-              onClick={async () => { if (await showChat()) useTerminalStore.getState().show(); }}
-            >
-              <TerminalSquare className="h-4 w-4 shrink-0" />{!collapsed && '原生终端'}
-            </button>
-            <button
-              className={`${NAV_ITEM} h-8 gap-2 text-xs ${collapsed ? 'justify-center px-0' : 'px-2'}`}
-              aria-label="CLI 历史"
-              title="CLI 历史"
-              disabled={!cwd}
-              onClick={() => setHistoryCwd(cwd)}
-            >
-              <Activity className="h-4 w-4 shrink-0" />{!collapsed && 'CLI 历史'}
-            </button>
+          {/* 底部工具统一为单列同尺寸菜单，不再使用两列混合尺寸网格。 */}
+          <button
+            className={`${NAV_ITEM} ${collapsed ? 'justify-center px-0' : ''}`}
+            aria-label="原生终端"
+            title="原生终端"
+            onClick={async () => { if (await showChat()) useTerminalStore.getState().show(); }}
+          >
+            <TerminalSquare className="h-4 w-4 shrink-0" />{!collapsed && <span>原生终端</span>}
+          </button>
+          <button
+            className={`${NAV_ITEM} ${collapsed ? 'justify-center px-0' : ''}`}
+            aria-label="CLI 历史"
+            title="CLI 历史"
+            disabled={!cwd}
+            onClick={() => setHistoryCwd(cwd)}
+          >
+            <Activity className="h-4 w-4 shrink-0" />{!collapsed && <span>CLI 历史</span>}
+          </button>
           <button
             onClick={() => setShowDashboard(true)}
             aria-label="用量统计"
-            className={`${NAV_ITEM} h-8 gap-2 text-xs ${collapsed ? 'justify-center px-0' : 'px-2'}`}
+            className={`${NAV_ITEM} ${collapsed ? 'justify-center px-0' : ''}`}
             title={`查看用量统计：${formatTokens(totalInputTokens + totalOutputTokens)} tokens`}
           >
             <BarChart3 className="h-4 w-4 shrink-0" />
@@ -448,10 +442,9 @@ export function Sidebar() {
             className={`${NAV_ITEM} ${collapsed ? 'justify-center px-0' : ''}`}
             title="设置"
           >
-            <Settings className="h-4 w-4" />
-            {!collapsed && <span className="text-xs">设置</span>}
+            <Settings className="h-4 w-4 shrink-0" />
+            {!collapsed && <span>设置</span>}
           </button>
-          </div>
         </div>
 
         {/* 拖拽调宽手柄（折叠时不显示） */}

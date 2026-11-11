@@ -2,7 +2,7 @@
 
 [简体中文](README.md) · [English](README.en.md)
 
-A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/overview): multi-tab parallel conversations, image input, streaming chat, tool-call visualization, line-level diffs, a file tree, cross-session search, a token usage dashboard, AI session naming, a TodoWrite progress panel, a file previewer, a project management center, a unified control hierarchy with a responsive workspace, and an optional live video background.
+A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/overview): multi-tab parallel conversations, image input, streaming chat, tool-call visualization, line-level diffs, a file tree, cross-session search, a token usage dashboard, AI session naming, a TodoWrite progress panel, a file previewer, a project management center, a single-source scope hierarchy with row-based project views, a unified control hierarchy with a responsive workspace, and an optional live video background.
 
 ---
 
@@ -11,9 +11,12 @@ A futuristic desktop GUI for [Claude Code CLI](https://code.claude.com/docs/en/o
 ### Layout and interaction
 
 - **Consistent action hierarchy** — Page actions use a 32px control, toolbar and inline actions use 28px, and primary, secondary, danger, and navigation variants share the same box model, icon sizing, and focus ring. A page header keeps one filled primary action; lower-frequency or destructive actions move into “More” without removing capability.
-- **Responsive workspace** — Project center, project detail, settings, and chat toolbars collapse into compact layouts at 900×600. Filters, recognition setup, and the message queue open on demand; content uses a bounded reading column, workflow takes the full canvas, and an open terminal still preserves a minimum chat height.
+- **Single source of truth** — The active scope lives only in the title bar, with the working directory behind a tooltip. The sidebar, composer, and status bar no longer repeat the same context. The status bar keeps only connection state (including model), context meter, background conversations, and cumulative tokens.
+- **Focused chat workspace** — With one tab, the tab strip collapses into a slim session header. The task list defaults to one line and opens as an overlay; activity feedback lives at the end of the message flow; approval blockers compress into a single-line entry.
+- **Calm settings** — Runtime status collapses into one line (“connected · model · permission”), and the footer keeps a single filled Save button. Discard, reconnect, and save-and-reconnect move into a More menu, with save/unsaved confirmation logic unchanged.
+- **Responsive workspace** — Project center, project detail, settings, and chat toolbars collapse into compact layouts at 900×600. The project status rail folds into a one-line summary on narrow windows; filters, recognition setup, and the message queue open on demand; content uses a bounded reading column, workflow takes the full canvas, and an open terminal still preserves a minimum chat height.
 - **Consistent overlays and keyboard behavior** — Menus render in the browser top layer, flip automatically, and reposition on scroll so scroll containers cannot clip them. Dialogs share `Esc` dismissal, focus trapping and restoration, and unsaved-change confirmation. Charts, search, tabs, and task lists are keyboard-operable.
-- **Readable visualizations** — Project cards show required-task progress, active work, and the next action. The workflow adds a minimap, cross-viewport task search, upstream/downstream relation highlighting, canvas dragging, and fit-to-window. The usage panel combines a unified KPI strip, an exact-scale 14-day chart, an expandable data table, and Top-5 session share bars.
+- **Readable project views** — The project center is a row-based list showing only name, status, next action, progress, and update time; lifecycle and status filters share one toolbar. Project detail keeps four primary tabs (Background, Tasks, Workflow, Retrospective); acceptance, health, sources, and timing move to a right-hand project status rail, while sources and recognition audit open from a project archive drawer. The workflow adds a minimap, cross-viewport task search, upstream/downstream relation highlighting, canvas dragging, and fit-to-window. The usage panel combines a unified KPI strip, an exact-scale 14-day chart, an expandable data table, and Top-5 session share bars.
 
 ### Conversations and execution
 
@@ -139,13 +142,13 @@ npm run pack        # unpacked .app only, faster for debugging
 4. Messages typed during generation join the current tab's queue and auto-send when the turn completes.
 5. `⌘F` / `Ctrl+F` searches all tabs and archived sessions.
 6. Click a session in the sidebar to open it as a tab; already-open sessions just activate. Hover to rename, export, or delete.
-7. Click **TOKENS** in the lower-left to open usage; hover the context meter for details and click the archive icon to compact the session.
+7. Click **Usage** at the bottom of the sidebar to open the usage panel; hover the context meter for details and click the archive icon to compact the session.
 8. Click the eye icon in the file tree to preview a file.
 9. Open the **Project Management Center**:
    - Choose a recognition mode and scope; confirm the send scope, privacy, and budget before starting.
    - Review every field's evidence, edit name/goal/description, and create, associate, or skip each candidate.
    - Use “Later” when interrupted; drafts survive reloads and restarts.
-   - Inside a project, maintain background, working directory, tasks, workflow, linked conversations, and retrospectives. Goal acceptance always requires a manual confirmation.
+   - Inside a project, maintain background, working directory, tasks, workflow, linked conversations, and retrospectives. Use the right-hand project status rail for acceptance and pending items; open sources and recognition audit from the project archive drawer. Goal acceptance always requires a manual confirmation.
 10. For an animated backdrop, open **Settings → Dynamic Video Background**, pick a local video, and toggle it on or off. Low-bitrate loopable clips are recommended to keep power draw minimal.
 11. Permissions default to per-call approval: tool calls show an approval card for allow, deny, edited input, or always-allow in this conversation. Plan approval and structured questions use the same panel.
 12. Open **Native Terminal** when you need the native TUI, MCP/plugin management, or login. The terminal takes exclusive ownership of an idle session; closing it returns control to chat.

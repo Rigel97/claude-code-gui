@@ -23,7 +23,6 @@ export function StatusBar() {
   );
   const totalInputTokens = useStore((s) => s.totalInputTokens);
   const totalOutputTokens = useStore((s) => s.totalOutputTokens);
-  const cwd = useStore((s) => s.cwd);
   const model = useStore((s) => s.model);
   const setContextUsage = useStore((s) => s.setContextUsage);
 
@@ -31,7 +30,7 @@ export function StatusBar() {
   const thinkingTokens = conv?.thinkingTokens ?? 0;
   const contextUsage = conv?.contextUsage ?? null;
   const sessionId = conv?.sessionId ?? null;
-  const convCwd = conv?.cwd ?? cwd;
+  const convCwd = conv?.cwd ?? null;
   const currentModel = conv?.currentModel || conv?.runtime?.info?.model || '';
   // 状态栏优先展示实际运行模型；全局草稿模型仅作为“待用”次级信息。
   const pendingModel = model && model !== currentModel ? model : '';
@@ -59,12 +58,18 @@ export function StatusBar() {
   };
 
   return (
-    <div className="flex items-center justify-between h-7 px-4 bg-bg-deep border-t border-border/30 text-2xs font-mono shrink-0">
-      {/* 左侧：状态 */}
-      <div className="flex items-center gap-4">
-        <div className={`flex items-center gap-1.5 ${config.color}`}>
+    <div className="flex items-center justify-between gap-4 h-7 px-4 bg-bg-deep border-t border-border/30 text-2xs font-mono shrink-0">
+      {/* 左侧：连接状态与模型合并为一组，后台对话另计；目录不再常驻。 */}
+      <div className="flex min-w-0 items-center gap-4">
+        <div
+          className={`flex min-w-0 items-center gap-1.5 ${config.color}`}
+          title={currentModel ? `当前实际模型：${currentModel}` : '尚未连接模型'}
+        >
           {config.icon}
-          <span>{config.label}</span>
+          <span className="shrink-0">{config.label}</span>
+          <span className="shrink-0 text-text-dim">·</span>
+          <span className="max-w-[180px] truncate text-text-secondary">{currentModel || '未连接'}</span>
+          {pendingModel && <span className="shrink-0 text-text-dim" title={`已保存但需下次连接才生效：${pendingModel}`}>（待用）</span>}
         </div>
 
         {thinkingTokens > 0 && status === 'streaming' && (
@@ -80,8 +85,10 @@ export function StatusBar() {
             <span>{runningOthers} 个后台对话运行中</span>
           </div>
         )}
+      </div>
 
-        {/* 上下文水位计 + 压缩按钮（当前标签页的） */}
+      {/* 右侧：上下文水位 + 累计 token（当前标签页） */}
+      <div className="flex min-w-0 shrink-0 items-center gap-3 text-text-muted">
         {contextUsage && (
           <>
             <ContextMeter usage={contextUsage} />
@@ -99,30 +106,12 @@ export function StatusBar() {
             </button>
           </>
         )}
-      </div>
 
-      {/* 右侧：当前模型优先，其次是目录与累计 token；窄窗口只保留关键信息 */}
-      <div className="flex min-w-0 items-center gap-3 text-text-muted">
-        <span className="max-w-[160px] truncate text-accent-purple" title={currentModel ? `当前实际模型：${currentModel}` : '尚未连接模型'}>
-          {currentModel || '未连接'}
-        </span>
-        {pendingModel && (
-          <span className="hidden max-w-[140px] truncate text-text-muted lg:inline" title="已保存但需下次连接才生效">
-            待用 {pendingModel}
-          </span>
-        )}
-
-        {convCwd && (
-          <span className="hidden max-w-[220px] truncate text-text-secondary xl:inline" title={convCwd}>{convCwd}</span>
-        )}
-
-        <div className="flex items-center gap-1 text-accent-blue" title="当前累计输入 Token">
-          <Zap className="h-3 w-3" />
+        <div className="flex items-center gap-1 text-text-muted" title={`累计输入 Token：${totalInputTokens}；累计输出 Token：${totalOutputTokens}`}>
+          <Zap className="h-3 w-3 text-accent-blue" />
           <span>{TOKEN_LABELS.input} {formatTokens(totalInputTokens)}</span>
-        </div>
-
-        <div className="flex items-center gap-1 text-accent-cyan" title="当前累计输出 Token">
-          <Zap className="h-3 w-3" />
+          <span className="text-text-dim">·</span>
+          <Zap className="h-3 w-3 text-accent-cyan" />
           <span>{TOKEN_LABELS.output} {formatTokens(totalOutputTokens)}</span>
         </div>
       </div>

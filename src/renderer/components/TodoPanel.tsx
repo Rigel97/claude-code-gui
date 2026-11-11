@@ -3,9 +3,8 @@ import { ListTodo, ChevronDown, ChevronRight, Circle, CircleDot, CheckCircle2 } 
 import type { Conversation, TodoItem } from '../types';
 
 /**
- * TodoWrite 任务清单进度面板：显示在标签栏下方。
- * 数据由 store 从流中最新的 TodoWrite 调用同步（conv.todoList）。
- * 折叠态显示进度条 + 当前进行中的任务；展开显示全部条目。
+ * TodoWrite 任务清单：默认只占一行摘要，展开内容以浮层覆盖消息区，
+ * 不再把整段任务列表塞进常驻布局。
  */
 export function TodoPanel({ conv }: { conv: Conversation }) {
   const [expanded, setExpanded] = useState(false);
@@ -18,29 +17,28 @@ export function TodoPanel({ conv }: { conv: Conversation }) {
   const running = conv.status === 'streaming' || conv.status === 'starting';
 
   return (
-    <div className="mx-4 mt-2 rounded-xl border border-accent-purple/25 bg-accent-purple/5 overflow-hidden shrink-0 animate-fade-in">
-      {/* 头部：进度摘要 */}
+    <div className="relative shrink-0 border-t border-border/30 bg-bg-deep/50">
+      {/* 单行摘要 */}
       <button
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
-        className="flex h-9 w-full items-center gap-2 px-3 text-left transition-colors hover:bg-white/5"
+        aria-label="任务清单"
+        className="flex h-7 w-full items-center gap-2 px-4 text-left transition-colors hover:bg-bg-light/50"
       >
         {expanded
-          ? <ChevronDown className="w-3.5 h-3.5 text-text-dim shrink-0" />
-          : <ChevronRight className="w-3.5 h-3.5 text-text-dim shrink-0" />}
-        <ListTodo className={`w-3.5 h-3.5 shrink-0 ${running ? 'text-accent-purple animate-pulse' : 'text-accent-purple/70'}`} />
-        <span className="text-2xs font-mono text-text-secondary shrink-0">
-          任务清单 {done}/{items.length}
+          ? <ChevronDown className="w-3 h-3 text-text-dim shrink-0" />
+          : <ChevronRight className="w-3 h-3 text-text-dim shrink-0" />}
+        <ListTodo className={`w-3 h-3 shrink-0 ${running ? 'text-accent-purple animate-pulse' : 'text-accent-purple/70'}`} />
+        <span className="shrink-0 text-2xs font-mono text-text-secondary">
+          {done}/{items.length}
         </span>
-        {/* 当前任务与进度合并为一行，避免折叠态长期占用两行高度 */}
         {current && (
           <span className="min-w-0 flex-1 truncate text-2xs text-text-muted">
             {current.activeForm || current.content}
           </span>
         )}
         {!current && <span className="flex-1" />}
-        {/* 进度条 */}
-        <div role="progressbar" aria-label="会话任务进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-bg-deepest">
+        <div role="progressbar" aria-label="会话任务进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-bg-deepest">
           <div
             className={`h-full rounded-full transition-all duration-500 ${
               done === items.length ? 'bg-accent-green' : 'bg-accent-purple'
@@ -48,14 +46,14 @@ export function TodoPanel({ conv }: { conv: Conversation }) {
             style={{ width: `${pct}%` }}
           />
         </div>
-        <span className={`text-2xs font-mono shrink-0 ${done === items.length ? 'text-accent-green' : 'text-text-dim'}`}>
+        <span className={`shrink-0 text-2xs font-mono ${done === items.length ? 'text-accent-green' : 'text-text-dim'}`}>
           {pct}%
         </span>
       </button>
 
-      {/* 展开态：全部条目 */}
+      {/* 展开态：浮层，不挤压消息区 */}
       {expanded && (
-        <div className="max-h-[min(180px,20vh)] space-y-1 overflow-y-auto border-t border-accent-purple/15 px-3 pb-2 pt-2">
+        <div className="absolute bottom-full left-0 right-0 z-20 max-h-[min(240px,40vh)] space-y-1 overflow-y-auto border-t border-border/40 bg-bg-deep/95 px-4 py-2 shadow-xl backdrop-blur-sm">
           {items.map((t, i) => (
             <TodoRow key={i} item={t} />
           ))}

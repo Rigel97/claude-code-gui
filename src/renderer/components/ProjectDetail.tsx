@@ -1,21 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Archive, ArchiveRestore, CheckCircle2, CircleDot, Download, FileText, GitBranch, GitMerge, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, NotebookPen, Pencil, Pin, PinOff, Plus, Save, Search, ShieldCheck, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Archive, ArchiveRestore, CheckCircle2, ChevronRight, Download, FileText, GitBranch, GitMerge, ListTodo, MessageSquare, MessageSquarePlus, MoreHorizontal, NotebookPen, Pencil, Pin, PinOff, Plus, Save, Search, ShieldCheck, Trash2, X } from 'lucide-react';
 import { useStore } from '../store';
 import { useProjectsStore } from '../projectStore';
 import { PROVENANCE_LABELS, PROJECT_LABELS, PROJECT_STATUS_STYLE, TASK_LABELS, TASK_STATUSES, isRecognitionGuidance, progressLabel, projectEditChanges, projectHealth, projectSummary, projectTimeRange, projectWorkState, unresolvedUncertainties } from '../projectModel';
 import type { ManagedProject, ProjectChanges, ProjectEvidenceField, ProjectSource, ProjectTask, TaskStatus } from '../projectTypes';
 import { ProjectWorkflow } from './ProjectWorkflow';
 import { ProjectTaskDetail } from './ProjectTaskDetail';
-import { BUTTON as button, BUTTON_PRIMARY, BUTTON_GHOST, BUTTON_SM, INPUT as input, SELECT, ICON_BUTTON, MENU_ITEM, MENU_ITEM_DANGER, MENU_LABEL, POPOVER_PANEL, PAGE_TAB, PAGE_TAB_ACTIVE, PAGE_TAB_IDLE, SEGMENT, SEGMENT_ACTIVE } from './controls';
+import { BUTTON as button, BUTTON_PRIMARY, BUTTON_GHOST, BUTTON_SM, BUTTON_SM_GHOST, INPUT as input, SELECT, ICON_BUTTON, MENU_ITEM, MENU_ITEM_DANGER, MENU_LABEL, POPOVER_PANEL, PAGE_TAB, PAGE_TAB_ACTIVE, PAGE_TAB_IDLE, SEGMENT, SEGMENT_ACTIVE } from './controls';
 import { useDialogBehavior, usePopoverBehavior } from './useDialogBehavior';
 import { confirmAction } from './ConfirmDialog';
+// 4 个主页签只保留当前工作；历史来源与识别审计进入右侧项目档案。
 const tabs = [
-  { id: 'background', label: '背景与文件', icon: FileText },
-  { id: 'tasks', label: '任务列表', icon: ListTodo },
-  { id: 'workflow', label: '工作流', icon: GitBranch },
-  { id: 'sources', label: '历史来源', icon: Search },
-  { id: 'audit', label: '识别审计', icon: ShieldCheck },
-  { id: 'retrospective', label: '复盘', icon: NotebookPen },
+  { id: 'background', label: '背景', ariaLabel: '背景与文件', icon: FileText },
+  { id: 'tasks', label: '任务', ariaLabel: '任务列表', icon: ListTodo },
+  { id: 'workflow', label: '工作流', ariaLabel: '工作流', icon: GitBranch },
+  { id: 'retrospective', label: '复盘', ariaLabel: '复盘', icon: NotebookPen },
 ] as const;
 type Tab = typeof tabs[number]['id'];
 type ProjectDesktopAPI = {
@@ -75,6 +74,19 @@ export function ProjectDetail({ project, onBack, onSource, onPreview, onReveal }
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeTarget, setMergeTarget] = useState('');
   useDialogBehavior({ open: mergeOpen, dialogRef: mergeDialog, onRequestClose: () => { if (!busy) setMergeOpen(false); } });
+  // 项目档案（历史来源 / 识别审计）抽屉：一次交互可达，不再占主页签。
+  const [archiveView, setArchiveView] = useState<'sources' | 'audit' | null>(null);
+  const archiveDialog = useRef<HTMLElement>(null);
+  useDialogBehavior({ open: !!archiveView, dialogRef: archiveDialog, onRequestClose: () => setArchiveView(null) });
+  // 宽屏展开为右侧状态栏；窄屏折叠成一行摘要，避免挤压工作流画布。
+  const [wideRail, setWideRail] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches);
+  useEffect(() => {
+    const query = window.matchMedia('(min-width: 1280px)');
+    const sync = () => setWideRail(query.matches);
+    sync();
+    query.addEventListener('change', sync);
+    return () => query.removeEventListener('change', sync);
+  }, []);
   const [draft, setDraft] = useState(() => backgroundDraft(project));
   const [baseline, setBaseline] = useState(project);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -267,9 +279,9 @@ export function ProjectDetail({ project, onBack, onSource, onPreview, onReveal }
   }, []);
 
   const focusIssue = (code: string) => {
-    if (code === 'no-sources') changeTab('sources');
+    if (code === 'no-sources') setArchiveView('sources');
     else if (code === 'no-tasks') changeTab('tasks');
-    else if (code === 'uncertainties') changeTab('audit');
+    else if (code === 'uncertainties') setArchiveView('audit');
     else changeTab('background');
   };
   const pendingHeaderCount = incompleteRequired.length + health.issues.length;
@@ -303,40 +315,23 @@ export function ProjectDetail({ project, onBack, onSource, onPreview, onReveal }
           </details>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-2 text-xs text-text-secondary">
-        <div className="flex h-1.5 w-24 overflow-hidden rounded-full bg-bg-lighter" role="progressbar" aria-label="必要任务进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={summary.requiredTotal ? summary.progress : undefined} aria-valuetext={progressLabel(summary)}><div className="h-full bg-accent-green transition-[width]" style={{ width: `${summary.requiredTotal ? summary.requiredCompleted / summary.requiredTotal * 100 : 0}%` }} /><div className="h-full bg-accent-blue transition-[width]" style={{ width: `${summary.requiredTotal ? work.active.length / summary.requiredTotal * 100 : 0}%` }} /></div>
-        <span className="tabular-nums">{progressLabel(summary)}</span>
-        <label className={`ml-auto flex h-7 items-center gap-2 rounded-md border px-2.5 ${summary.allTasksComplete ? 'cursor-pointer border-accent-green/35 bg-accent-green/5 text-accent-green' : 'border-border/60 text-text-muted'}`} title={!summary.allTasksComplete ? `先完成必要任务；还差 ${incompleteRequired.length} 项。确认后记录验收时间与任务范围。` : '我已核对交付物，确认项目目标达成；确认后记录验收时间与当前必要任务范围'}>
-          <input type="checkbox" aria-label="我已核对交付物，确认项目目标达成" checked={project.goalConfirmed} disabled={editBusy || (!summary.allTasksComplete && !project.goalConfirmed)} onChange={event => { const goalConfirmed = event.target.checked; void runAction(() => save(project.id, { goalConfirmed }), '目标验收更改未保存。'); }} className="accent-accent-green" /><CheckCircle2 className="h-3.5 w-3.5" />{project.goalConfirmed ? '交付已验收' : '确认交付验收'}
-        </label>
-        {pendingHeaderCount > 0 && <details data-popover className="relative text-accent-yellow"><summary className={`${BUTTON_SM} list-none cursor-pointer text-accent-yellow [&::-webkit-details-marker]:hidden`}>待处理 {pendingHeaderCount}</summary><div className={`${POPOVER_PANEL} absolute right-0 top-full mt-2 max-h-56 w-72 space-y-1 overflow-y-auto p-3 leading-5`}>{incompleteRequired.length > 0 && <div><p className="mb-1 text-text-secondary">未完成必要任务</p>{incompleteRequired.map(task => <button key={task.id} type="button" className={MENU_ITEM} onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); void selectTask(task.id); }}>{task.name}</button>)}</div>}{health.issues.map(issue => <button key={issue.code} type="button" className={MENU_ITEM} onClick={event => { event.currentTarget.closest('details')?.removeAttribute('open'); focusIssue(issue.code); }}>{issue.label} · 去处理</button>)}</div></details>}
-      </div>
       {readonly && <p role="status" className="mx-4 mb-1.5 rounded-md border border-border bg-bg-light px-2 py-1 text-2xs text-text-secondary">{project.deletedAt && project.mergedInto ? `已合并到 ${projects.find(item => item.id === project.mergedInto)?.name || project.mergedInto} · ` : ''}只读，恢复后可编辑</p>}
       {(localError || storeError) && <p role="alert" className="mx-4 mb-1.5 rounded-md border border-accent-red/25 px-2 py-1 text-xs text-accent-red">{localError || storeError}</p>}
-      <nav className="flex gap-1 overflow-x-auto border-t border-border/40 px-4" aria-label="项目详情导航">{tabs.map(item => <button key={item.id} aria-current={tab === item.id ? 'page' : undefined} onClick={() => changeTab(item.id)} className={`${PAGE_TAB} ${tab === item.id ? PAGE_TAB_ACTIVE : PAGE_TAB_IDLE}`}><item.icon className="h-3.5 w-3.5" />{item.label}</button>)}</nav>
+      <nav className="flex gap-1 overflow-x-auto border-t border-border/40 px-4" aria-label="项目详情导航">{tabs.map(item => <button key={item.id} aria-current={tab === item.id ? 'page' : undefined} aria-label={item.ariaLabel} onClick={() => changeTab(item.id)} className={`${PAGE_TAB} ${tab === item.id ? PAGE_TAB_ACTIVE : PAGE_TAB_IDLE}`}><item.icon className="hidden h-3.5 w-3.5 sm:block" />{item.label}</button>)}</nav>
     </div>
-    <div className="relative flex min-h-0 flex-1 overflow-hidden">
-      <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${tab === 'workflow' ? 'overflow-hidden p-2' : 'overflow-y-auto p-4 md:p-6'}`}>
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden xl:flex-row">
+      <div className={`order-2 flex min-h-0 min-w-0 flex-1 flex-col xl:order-1 ${tab === 'workflow' ? 'overflow-hidden p-2' : 'overflow-y-auto p-4 md:p-6'}`}>
         <div className={tab === 'workflow' ? 'flex min-h-0 flex-1 flex-col' : 'mx-auto w-full max-w-[1040px]'}>
         {tab === 'background' && <div className="flex flex-col gap-4">
-          <section aria-label="下一步工作" className="order-none rounded-xl border border-border/60 bg-bg-light/30 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="min-w-0"><h3 className="text-xs font-medium text-text-muted">{work.label}</h3><p className="mt-1 text-sm font-medium text-text-primary">{work.nextTask?.name || (summary.allTasksComplete ? project.goalConfirmed ? '全部必要任务完成，交付已验收' : '必要任务完成，等待你核对交付物' : '把项目拆成明确、可追踪的任务')}</p></div>
-              <div className="flex shrink-0 items-center gap-2"><button className={BUTTON_GHOST} onClick={() => work.nextTask ? void selectTask(work.nextTask.id) : void changeTab('tasks')}><ListTodo className="h-3.5 w-3.5" />{work.nextTask ? '查看任务' : '管理任务'}</button>{work.nextTask && <button className={button} disabled={editBusy || !canStartProjectChat} title={!canStartProjectChat ? '先设置项目工作目录' : editDisabledReason ?? '仅生成任务对话草稿，核对后由你发送'} onClick={() => startProjectChat(work.nextTask!.id)}><MessageSquarePlus className="h-3.5 w-3.5" />准备任务对话<ArrowRight className="h-3.5 w-3.5" /></button>}</div>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-secondary"><span className="flex items-center gap-1.5"><CircleDot className="h-3.5 w-3.5 text-accent-blue" />进行中 {work.active.length}</span><span>未开始 {work.pending.length}</span>{work.blocked.length > 0 && <span className="text-accent-yellow">前置未完成 {work.blocked.length}</span>}<span>已完成 {completedRequired}/{requiredTasks.length}</span></div>
-            {work.nextTask && work.blocked.some(task => task.id === work.nextTask!.id) && <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-accent-yellow"><span>需核对前置：</span>{work.nextTask.dependsOn.filter(id => project.tasks.find(task => task.id === id)?.status !== 'completed').map(id => <button key={id} className="underline underline-offset-2" onClick={() => void selectTask(id)}>{project.tasks.find(task => task.id === id)?.name || `缺失任务 ${id}`}</button>)}</div>}
-            <p className="mt-2 text-xs leading-5 text-text-muted">{work.note}</p>
-          </section>
-          <section className="order-2 glass-panel rounded-xl p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-4"><h3 className="text-sm font-medium text-text-primary">档案概览</h3><span className="text-xs text-text-secondary">档案导出与生命周期操作在右上角「更多」中</span></div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              <div className="rounded-lg bg-bg-light p-3"><div className="text-text-secondary">首次工作</div><div className="mt-1 text-text-primary">{timeRange.first ? new Date(timeRange.first).toLocaleDateString() : '未知'}</div></div>
-              <div className="rounded-lg bg-bg-light p-3"><div className="text-text-secondary">最后工作</div><div className="mt-1 text-text-primary">{timeRange.last ? new Date(timeRange.last).toLocaleDateString() : '未知'}</div></div>
-              <div className="rounded-lg bg-bg-light p-3"><div className="text-text-secondary">活跃天数 / 会话</div><div className="mt-1 font-mono text-text-primary">{timeRange.activeDays} / {timeRange.sessions}</div></div>
-              <div className="rounded-lg bg-bg-light p-3"><div className="text-text-secondary">置顶 / 标签</div><div className="mt-1 text-text-primary">{project.pinned ? '已置顶' : '未置顶'} · {(project.tags || []).length} 个标签</div></div>
-            </div>
-            {!!project.tags?.length && <div className="flex flex-wrap gap-1.5 mt-3">{project.tags.map(tag => <span key={tag} className="rounded bg-bg-lighter px-1.5 py-0.5 text-2xs text-text-secondary">{tag}</span>)}</div>}
+          {/* 下一步压缩成一行 callout：状态、任务与操作同排，详细统计在右侧侧栏。 */}
+          <section aria-label="下一步工作" title={work.note} className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border-l-2 border-accent-cyan/60 bg-bg-light/20 px-3 py-2">
+            <span className="shrink-0 text-2xs uppercase tracking-wide text-text-muted">{work.label}</span>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+              {work.nextTask?.name || (summary.allTasksComplete ? project.goalConfirmed ? '全部必要任务完成，交付已验收' : '必要任务完成，等待你核对交付物' : '把项目拆成明确、可追踪的任务')}
+            </span>
+            {work.nextTask && work.blocked.some(task => task.id === work.nextTask!.id) && <span className="shrink-0 text-2xs text-accent-yellow" title={work.nextTask.dependsOn.filter(id => project.tasks.find(task => task.id === id)?.status !== 'completed').map(id => project.tasks.find(task => task.id === id)?.name || `缺失任务 ${id}`).join('、')}>需核对前置</span>}
+            <button className={`${BUTTON_SM_GHOST} shrink-0`} onClick={() => work.nextTask ? void selectTask(work.nextTask.id) : void changeTab('tasks')}><ListTodo className="h-3.5 w-3.5" />{work.nextTask ? '查看任务' : '管理任务'}</button>
+            {work.nextTask && <button className={`${BUTTON_SM} shrink-0`} disabled={editBusy || !canStartProjectChat} title={!canStartProjectChat ? '先设置项目工作目录' : editDisabledReason ?? '仅生成任务对话草稿，核对后由你发送'} onClick={() => startProjectChat(work.nextTask!.id)}><MessageSquarePlus className="h-3.5 w-3.5" />准备任务对话</button>}
           </section>
           <section className="order-3 glass-panel rounded-xl p-5 space-y-3">
             <h3 className="text-sm font-medium text-text-primary">关联对话与进展</h3>
@@ -366,15 +361,6 @@ export function ProjectDetail({ project, onBack, onSource, onPreview, onReveal }
               <p className="text-xs text-accent-orange">只填写已知信息。变更项目目标或交付标准后需要重新验收。可选任务的取消或删除不会撤销验收。</p><button className={`${button} text-accent-cyan border-accent-cyan/30`} type="submit" disabled={editBusy}><Save className="w-4 h-4" />{busy ? '保存中…' : '保存背景'}</button>
             </form> : <dl className="space-y-4 selectable-text">{([['goal', '项目目标'], ['background', '需求背景'], ['constraints', '约束条件'], ['decisions', '关键决策'], ['deliverables', '预期交付物']] as const).map(([key, label]) => <div key={key}><dt className="text-xs text-text-secondary mb-1.5">{label}{project.fieldProvenance?.[key] && <span className="ml-2 rounded bg-bg-lighter px-1.5 py-0.5 text-2xs text-text-dim">{PROVENANCE_LABELS[project.fieldProvenance[key]!]}</span>}</dt><dd className={`text-sm whitespace-pre-wrap break-words leading-6 ${project[key] ? 'text-text-primary' : 'text-text-secondary italic'}`}>{project[key] || '历史未提供，待确认。可在编辑背景中补充。'}</dd>{key !== 'goal' && <FieldEvidence project={project} field={key} onSource={onSource} />}</div>)}</dl>}
               {!editing && <div className="mt-4 text-xs text-text-secondary">项目工作目录：<span className="font-mono break-all selectable-text">{project.workingDirectory || '未设置，请编辑背景显式指定后再新建对话。'}</span></div>}
-            {/* 交付验收：把后果、当前范围和撤销条件集中展示 */}
-            <div className="mt-4 rounded-lg border border-border/60 bg-bg-light/30 p-3 text-xs">
-              <h4 className="font-medium text-text-primary">交付验收</h4>
-              <p className="mt-1 leading-5 text-text-secondary">必要任务 {completedRequired}/{requiredTasks.length} 已完成。确认后会记录验收时间与当时的必要任务范围，不会自动完成任务或产生执行记录。</p>
-              {project.acceptance && <p className="mt-1 text-accent-green">已验收：{new Date(project.acceptance.confirmedAt).toLocaleString()} · {project.acceptance.requiredTaskIds.length} 项必要任务</p>}
-              {!project.goalConfirmed && project.acceptanceInvalidatedReason && <p role="status" className="mt-1 text-accent-orange">上次验收已撤销：{project.acceptanceInvalidatedReason}</p>}
-              <p className="mt-1 leading-5 text-text-secondary">修改目标、交付物或新增必要任务会撤销验收；取消或删除可选任务不会撤销。</p>
-              {incompleteRequired.length > 0 && <p className="mt-1 leading-5 text-accent-yellow">未完成必要任务：{incompleteRequired.map(task => task.name).join('、')}</p>}
-            </div>
           </section>
           <section className="order-4 glass-panel rounded-xl p-5"><h3 className="text-sm font-medium text-text-primary mb-4">关联文件 <span className="text-text-secondary font-mono">{project.files.length}</span></h3><p className="text-xs text-text-secondary mb-4 leading-5">保留成功文件操作的来源和用途；工具写入不等于产物已验收。预览和定位均需当前系统可访问文件。</p>
             {!project.files.length && <p className="text-sm text-text-secondary">没有可靠的文件操作记录。任务中可手动登记已确认的输入与输出。</p>}
@@ -397,11 +383,61 @@ export function ProjectDetail({ project, onBack, onSource, onPreview, onReveal }
           })}<Pager page={safeTaskPage} total={tasks.length} size={24} onChange={setTaskPage} />
         </div>}
         {tab === 'workflow' && <ProjectWorkflow project={project} selectedTaskId={selectedTaskId} onSelectTask={selectTask} />}
-        {tab === 'audit' && <AuditView project={project} />}
         {tab === 'retrospective' && <RetrospectiveView project={project} save={save} busy={editBusy} />}
-        {tab === 'sources' && <section className="space-y-3"><h3 className="text-sm text-text-primary font-medium">可追溯的历史来源</h3><p className="text-xs text-text-secondary leading-5">GUI 会话可直接定位消息；已从 GUI 清理或仅在 Claude Code 本地保存的会话展示来源摘录与记录路径。整理结果保留在项目中，不依赖原会话仍被保留。</p>{!project.sources.length && <p className="text-sm text-text-secondary py-6">没有历史来源。</p>}{project.sources.slice(sourcePage * 20, (sourcePage + 1) * 20).map(item => <button className="w-full text-left p-4 glass-panel glass-panel-hover rounded-xl" key={item.id} onClick={() => onSource(item)}><p className="text-xs text-accent-cyan mb-2">{item.kind === 'gui' ? 'GUI 会话' : 'Claude Code 本地记录'} · {item.title || item.sessionId}</p><p className="text-xs text-text-secondary leading-6 whitespace-pre-wrap break-words line-clamp-4 selectable-text">{item.excerpt || '工具调用或执行结果来源（无文本摘要）'}</p><p className="mt-2 font-mono text-2xs text-text-secondary break-all">{item.path || item.cwd || '工作目录未记录'}</p></button>)}<Pager page={sourcePage} total={project.sources.length} size={20} onChange={setSourcePage} /></section>}
         </div>
       </div>
+      {/* 项目状态侧栏：验收、待处理、健康、来源与时间；窄窗口折叠成一行摘要 */}
+      <details key={wideRail ? 'wide-rail' : 'narrow-rail'} open={wideRail} aria-label="项目状态侧栏" className="group/rail order-1 shrink-0 border-b border-border/40 bg-bg-deep/30 xl:order-2 xl:w-[280px] xl:overflow-y-auto xl:border-b-0 xl:border-l">
+        <summary className="flex h-8 cursor-pointer list-none items-center gap-2 px-3 text-xs text-text-secondary [&::-webkit-details-marker]:hidden xl:hidden">
+          <span className="shrink-0 font-medium">项目状态</span>
+          <span className="min-w-0 truncate text-text-muted">必要任务 {completedRequired}/{requiredTasks.length}</span>
+          <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 transition-transform group-open/rail:rotate-90" />
+        </summary>
+        <div className="max-h-64 space-y-2.5 overflow-y-auto p-3 xl:max-h-none">
+          <section aria-label="项目状态" className="rounded-lg border border-border/50 bg-bg-light/20 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-xs font-medium text-text-muted">项目状态</h3>
+              <span className={`shrink-0 rounded px-1.5 py-0.5 text-2xs ${project.deletedAt ? 'bg-accent-red/10 text-accent-red' : project.archivedAt ? 'bg-bg-lighter text-text-secondary' : PROJECT_STATUS_STYLE[summary.status]}`}>{project.deletedAt ? '已删除' : project.archivedAt ? '已归档' : PROJECT_LABELS[summary.status]}</span>
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-xs text-text-secondary">
+              <div className="flex h-1.5 flex-1 overflow-hidden rounded-full bg-bg-lighter" role="progressbar" aria-label="必要任务进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={summary.requiredTotal ? summary.progress : undefined} aria-valuetext={progressLabel(summary)}><div className="h-full bg-accent-green" style={{ width: `${summary.requiredTotal ? summary.requiredCompleted / summary.requiredTotal * 100 : 0}%` }} /><div className="h-full bg-accent-blue" style={{ width: `${summary.requiredTotal ? work.active.length / summary.requiredTotal * 100 : 0}%` }} /></div>
+              <span className="shrink-0 tabular-nums">{progressLabel(summary)}</span>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-2xs text-text-muted">
+              <span>进行中 {work.active.length}</span><span>未开始 {work.pending.length}</span>
+              {work.blocked.length > 0 && <span className="text-accent-yellow">前置未完成 {work.blocked.length}</span>}
+            </div>
+            <label className={`mt-2.5 flex cursor-pointer items-center gap-2 rounded-md border px-2 py-1.5 text-xs ${summary.allTasksComplete ? 'border-accent-green/35 bg-accent-green/5 text-accent-green' : 'border-border/60 text-text-muted'}`} title={!summary.allTasksComplete ? `先完成必要任务；还差 ${incompleteRequired.length} 项。确认后记录验收时间与任务范围。` : '我已核对交付物，确认项目目标达成；确认后记录验收时间与当前必要任务范围'}>
+              <input type="checkbox" aria-label="我已核对交付物，确认项目目标达成" checked={project.goalConfirmed} disabled={editBusy || (!summary.allTasksComplete && !project.goalConfirmed)} onChange={event => { const goalConfirmed = event.target.checked; void runAction(() => save(project.id, { goalConfirmed }), '目标验收更改未保存。'); }} className="accent-accent-green" />
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />{project.goalConfirmed ? '交付已验收' : '确认交付验收'}
+            </label>
+            <p className="mt-1.5 text-2xs leading-4 text-text-muted">必要任务 {completedRequired}/{requiredTasks.length} 已完成；确认后记录验收时间与当时的任务范围，不会自动完成任务。{project.acceptance ? ` 已验收：${new Date(project.acceptance.confirmedAt).toLocaleDateString()}` : ''}</p>
+            {!project.goalConfirmed && project.acceptanceInvalidatedReason && <p role="status" className="mt-1 text-2xs leading-4 text-accent-orange">上次验收已撤销：{project.acceptanceInvalidatedReason}</p>}
+            {incompleteRequired.length > 0 && <p className="mt-1 text-2xs leading-4 text-accent-yellow">未完成：{incompleteRequired.map(task => task.name).join('、')}</p>}
+          </section>
+          {pendingHeaderCount > 0 && <details className="rounded-lg border border-accent-yellow/25 bg-accent-yellow/5 p-2.5 text-xs text-accent-yellow"><summary className="cursor-pointer">待处理 {pendingHeaderCount}</summary><div className="mt-2 max-h-56 space-y-1 overflow-y-auto leading-5">{incompleteRequired.length > 0 && <div><p className="mb-1 text-text-secondary">未完成必要任务</p>{incompleteRequired.map(task => <button key={task.id} type="button" className={MENU_ITEM} onClick={() => void selectTask(task.id)}>{task.name}</button>)}</div>}{health.issues.map(issue => <button key={issue.code} type="button" className={MENU_ITEM} onClick={() => focusIssue(issue.code)}>{issue.label} · 去处理</button>)}</div></details>}
+          <section aria-label="项目档案" className="rounded-lg border border-border/50 bg-bg-light/20 p-3">
+            <h3 className="text-xs font-medium text-text-muted">项目档案</h3>
+            <div className="mt-2 space-y-1">
+              <button type="button" className={`${MENU_ITEM} justify-between`} onClick={() => setArchiveView('sources')}><span className="flex items-center gap-2"><Search className="h-3.5 w-3.5" />历史来源</span><span className="tabular-nums text-text-muted">{project.sources.length}</span></button>
+              <button type="button" className={`${MENU_ITEM} justify-between`} onClick={() => setArchiveView('audit')}><span className="flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5" />识别审计</span><span className="text-text-muted">{project.audit ? (project.audit.mode === 'llm' ? 'LLM' : '规则') : '无'}</span></button>
+            </div>
+            <p className="mt-2 text-2xs leading-4 text-text-muted">
+              首次 {timeRange.first ? new Date(timeRange.first).toLocaleDateString() : '未知'} · 最后 {timeRange.last ? new Date(timeRange.last).toLocaleDateString() : '未知'}<br />
+              活跃 {timeRange.activeDays} 天 · {timeRange.sessions} 个会话 · {project.files.length} 个文件
+            </p>
+            {!!project.tags?.length && <div className="mt-2 flex flex-wrap gap-1">{project.tags.map(tag => <span key={tag} className="rounded bg-bg-lighter px-1.5 py-0.5 text-2xs text-text-secondary">{tag}</span>)}</div>}
+          </section>
+        </div>
+      </details>
+      {!!archiveView && <div className="absolute inset-0 z-30 flex justify-end bg-black/50" onClick={() => setArchiveView(null)}>
+        <section ref={archiveDialog} role="dialog" aria-modal="true" aria-label={archiveView === 'sources' ? '历史来源' : '识别审计'} className="flex h-full w-full max-w-[420px] flex-col overflow-hidden border-l border-border bg-bg-deep shadow-2xl" onClick={event => event.stopPropagation()}>
+          <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border/50 px-4 py-2"><h2 className="text-sm font-medium text-text-primary">{archiveView === 'sources' ? `历史来源 · ${project.sources.length}` : '识别审计'}</h2><button className={ICON_BUTTON} aria-label="关闭项目档案" onClick={() => setArchiveView(null)}><X className="h-4 w-4" /></button></header>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {archiveView === 'sources' ? <section className="space-y-3"><p className="text-xs leading-5 text-text-secondary">GUI 会话可直接定位消息；已从 GUI 清理或仅在 Claude Code 本地保存的会话展示来源摘录与记录路径。整理结果保留在项目中，不依赖原会话仍被保留。</p>{!project.sources.length && <p className="py-6 text-sm text-text-secondary">没有历史来源。</p>}{project.sources.slice(sourcePage * 20, (sourcePage + 1) * 20).map(item => <button className="w-full rounded-lg border border-border/60 bg-bg-light/30 p-3 text-left transition-colors hover:border-accent-cyan/40" key={item.id} onClick={() => onSource(item)}><p className="mb-1 text-xs text-accent-cyan">{item.kind === 'gui' ? 'GUI 会话' : 'Claude Code 本地记录'} · {item.title || item.sessionId}</p><p className="selectable-text line-clamp-4 whitespace-pre-wrap break-words text-xs leading-5 text-text-secondary">{item.excerpt || '工具调用或执行结果来源（无文本摘要）'}</p><p className="mt-1.5 break-all font-mono text-2xs text-text-muted">{item.path || item.cwd || '工作目录未记录'}</p></button>)}<Pager page={sourcePage} total={project.sources.length} size={20} onChange={setSourcePage} /></section> : <AuditView project={project} />}
+          </div>
+        </section>
+      </div>}
       {/* 任务详情只在任务/工作流语境出现，避免在背景页误导为页面切换 */}
       {selectedTask && (tab === 'tasks' || tab === 'workflow') && <ProjectTaskDetail key={selectedTask.id} project={project} task={selectedTask} onClose={() => setSelectedTaskId(null)} onSource={onSource} onSelectTask={selectTask} onStartTask={taskId => startProjectChat(taskId)} canStartChat={canStartProjectChat} />}
       {mergeOpen && <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={() => { if (!busy) setMergeOpen(false); }}><section ref={mergeDialog} role="dialog" aria-modal="true" aria-label="合并项目" aria-busy={busy} tabIndex={-1} className="w-full max-w-lg rounded-xl bg-bg-deep border border-border-light p-5" onClick={event => event.stopPropagation()}>

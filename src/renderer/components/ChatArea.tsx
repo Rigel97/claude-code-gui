@@ -35,7 +35,7 @@ export function ChatArea() {
     if (stickToBottom.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, streamingMessage, thinkingTokens]);
+  }, [messages, streamingMessage, thinkingTokens, conv?.activity?.phase]);
 
   // 用户发送新消息（含失败重试/后台队列续发）时强制回到底部
   useEffect(() => {
@@ -74,11 +74,8 @@ export function ChatArea() {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      {/* 对话标签栏：多会话并行；会话操作收进右侧弹层，避免常驻占用阅读高度 */}
+      {/* 对话标签栏：单标签折叠为薄会话头；会话操作收进右侧弹层 */}
       <TabBar trailing={conv ? <SessionActionsPopover conv={conv} /> : null} />
-
-      {/* 任务清单进度面板（会话内有 TodoWrite 调用时显示） */}
-      {conv && conv.todoList && conv.todoList.items.length > 0 && <TodoPanel conv={conv} />}
 
       {/* 消息流 */}
       <div
@@ -128,20 +125,23 @@ export function ChatArea() {
           )}
           {/* A waiting request must remain reachable even with a long transcript. */}
           {conv && <NamedApprovalPanel conv={conv} />}
+
+          {/* 活动反馈并入消息流末尾：阶段 + 计时 + 思考预览，不再占用固定横条 */}
+          {conv && (conv.status === 'streaming' || conv.status === 'starting') && (
+            <ActivityStrip conv={conv} />
+          )}
         </div>
       </div>
 
-      {/* 活动反馈条：阶段指示 + 计时 + 思考实时预览（生成中显示） */}
-      {conv && (conv.status === 'streaming' || conv.status === 'starting') && (
-        <ActivityStrip conv={conv} />
-      )}
+      {/* 任务清单：默认单行摘要，详情浮层展开 */}
+      {conv && conv.todoList && conv.todoList.items.length > 0 && <TodoPanel conv={conv} />}
 
-      {/* 阻塞提醒：审批/追问在长对话中可能滚出视野，这里固定提供入口 */}
+      {/* 阻塞提醒：压缩为单行入口 */}
       {approvals.length > 0 && (
-        <div className="flex shrink-0 items-center gap-2 border-t border-accent-yellow/25 bg-accent-yellow/5 px-4 py-1.5 text-xs text-accent-yellow" role="status">
-          <span className="font-medium">等待你的确认</span>
-          <span className="text-text-secondary">{approvals.length} 个审批或追问正在阻塞当前任务</span>
-          <button type="button" onClick={focusApproval} className="ml-auto inline-flex h-7 shrink-0 items-center rounded-md border border-accent-yellow/35 px-3 text-xs text-accent-yellow hover:bg-accent-yellow/10">
+        <div className="flex h-7 shrink-0 items-center gap-2 border-t border-accent-yellow/25 bg-accent-yellow/5 px-4 text-xs text-accent-yellow" role="status">
+          <span className="shrink-0 font-medium">等待确认</span>
+          <span className="min-w-0 flex-1 truncate text-text-secondary">{approvals.length} 项审批或追问正在阻塞当前任务</span>
+          <button type="button" onClick={focusApproval} className="inline-flex h-6 shrink-0 items-center rounded px-2 text-xs text-accent-yellow hover:bg-accent-yellow/10">
             查看
           </button>
         </div>

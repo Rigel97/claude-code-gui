@@ -121,6 +121,11 @@ async function open() {
 async function openView(name: string) {
   await page.getByRole('button', { name, exact: true }).click();
 }
+async function openMore() {
+  if (!(await page.getByRole('button', { name: '重新连接当前对话', exact: true }).isVisible().catch(() => false))) {
+    await page.locator('summary[aria-label="更多设置操作"]').click();
+  }
+}
 it('保存全局权限后以 conversationId+mode 更新 ready 对话，成功才刷新真实运行状态', async () => {
   await open();
   await openView('权限与安全');
@@ -147,6 +152,7 @@ it('显式重连等待 close 成功再 start，携带全局配置快照并保持
   await openView('权限与安全');
   await page.getByRole('button',{name:/只读规划/}).click();
   // 有未保存草稿时走“保存并重新连接”；独立重连只使用已保存配置。
+  await openMore();
   await page.getByRole('button',{name:'保存并重新连接',exact:true}).click();
   await expect.poll(() => calls('start')).toHaveLength(1);
   expect((await calls('close'))[0].args).toEqual(['chat-a']);
@@ -166,10 +172,12 @@ it('权限失败不伪造局部模式，busy 与 close 拒绝都不启动新进�
   expect(await page.evaluate(() => (window as any).chatStore.getState().conversations[0].permissionMode)).toBe('default');
   expect(await page.evaluate(() => (window as any).fixture.closed)).toBe(0);
   await page.evaluate(() => { (window as any).fixture.runtime.busy = true; });
+  await openMore();
   await page.getByRole('button',{name:'重新连接当前对话',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'不能重新连接'}).waitFor();
   expect(await calls('close')).toHaveLength(0);
   await page.evaluate(() => { const f = (window as any).fixture; f.runtime.busy = false; f.closeRejected = true; });
+  await openMore();
   await page.getByRole('button',{name:'重新连接当前对话',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'主进程拒绝关闭'}).waitFor();
   expect(await calls('start')).toHaveLength(0);
@@ -263,6 +271,7 @@ it('解密与权限失败不清配置；清错误只作用 UI，明确重试后�
   await page.getByRole('button',{name:'重新读取配置',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'运行时 API 不可用'}).waitFor();
   expect(await page.getByRole('button',{name:'覆盖此环境变量',exact:true}).isDisabled()).toBe(true);
+  await openMore();
   await page.getByRole('button',{name:'重新连接当前对话',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'重新连接 API 不可用'}).waitFor();
   expect(await calls('close')).toHaveLength(0);
@@ -291,14 +300,17 @@ it('原生功能只打开下个表单，interactive 仅受支持选项；其他 
 it('close 未完成不能 start，启动失败不伪造连接且可以显式重试已关闭对话', async () => {
   await open();
   await page.evaluate(() => { const f = (window as any).fixture; f.closePending = true; f.fail = 'start'; });
+  await openMore();
   await page.getByRole('button',{name:'重新连接当前对话',exact:true}).click();
   await page.waitForFunction(() => !!(window as any).fixture.resolveClose);
   expect(await calls('start')).toHaveLength(0);
+  await openMore();
   expect(await page.getByRole('button',{name:'重新连接当前对话',exact:true}).isDisabled()).toBe(true);
   await page.evaluate(() => { const f = (window as any).fixture; f.closePending = false; f.resolveClose(); });
   await page.getByRole('alert').filter({hasText:'重新连接失败'}).waitFor();
   expect(await page.evaluate(() => (window as any).chatStore.getState().conversations[0].protocolConnected)).toBe(false);
   await page.evaluate(() => { (window as any).fixture.fail = ''; });
+  await openMore();
   await page.getByRole('button',{name:'重新连接当前对话',exact:true}).click();
   await expect.poll(() => calls('start')).toHaveLength(2);
   await expect.poll(() => page.evaluate(() => (window as any).chatStore.getState().conversations[0].runtime.state)).toBe('ready');
@@ -402,6 +414,7 @@ it('独立重连不保存草稿；普通保存不调用 close/start，已保存�
   const model = page.getByPlaceholder('填写模型 ID，如 glm-5.3-m17');
   await model.fill('draft-model');
   await page.locator('#setting-model').getByText('待保存：draft-model', { exact: true }).waitFor();
+  await openMore();
   await page.getByRole('button', { name: '重新连接当前对话', exact: true }).click();
   await expect.poll(() => calls('start')).toHaveLength(1);
   expect((await calls('start'))[0].args[0].options).not.toHaveProperty('model');
@@ -429,7 +442,12 @@ it('低窗口分类与内容独立滚动，header/footer 不移动，运行环�
   expect(await dialog.locator('footer').boundingBox()).toEqual(footerBefore);
   expect(await page.getByLabel('搜索设置', { exact: true }).boundingBox()).toEqual(headerBefore);
   expect(await dialog.locator('main').evaluate(el => el.scrollWidth > el.clientWidth)).toBe(false);
-  for (const name of ['保存', '重新连接当前对话', '保存并重新连接']) {
+  const saveButton = page.getByRole('button', { name: '保存', exact: true });
+  expect(await saveButton.count()).toBe(1);
+  const saveBox = await saveButton.boundingBox();
+  expect(saveBox!.y + saveBox!.height).toBeLessThanOrEqual(480);
+  await openMore();
+  for (const name of ['放弃更改', '重新连接当前对话', '保存并重新连接']) {
     const button = page.getByRole('button', { name, exact: true });
     expect(await button.count()).toBe(1);
     const box = await button.boundingBox();
@@ -467,6 +485,7 @@ it('未保存状态可见，保存后归零，放弃更改恢复已保存值', a
   await page.getByText('所有更改已保存', { exact: true }).waitFor();
   expect(await page.evaluate(() => (window as any).chatStore.getState().effortLevel)).toBe('high');
   await page.getByRole('button', { name: '超高', exact: true }).click();
+  await openMore();
   await page.getByRole('button', { name: '放弃更改', exact: true }).click();
   expect(await page.evaluate(() => (window as any).chatStore.getState().effortLevel)).toBe('high');
   await page.getByText('所有更改已保存', { exact: true }).waitFor();

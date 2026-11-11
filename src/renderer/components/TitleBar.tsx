@@ -30,10 +30,13 @@ export function TitleBar() {
           </span>
         </div>
         <span className="ml-2 font-mono text-2xs text-text-dim">v{version}</span>
-        <span className="ml-1 hidden items-center gap-1.5 text-2xs text-text-secondary md:flex">
+        {/* 作用域唯一来源：目录只放进悬浮提示，不再占用标题栏宽度。 */}
+        <span
+          className="ml-1 hidden min-w-0 items-center gap-1.5 text-2xs text-text-secondary md:flex"
+          title={cwd ? `工作目录：${cwd}` : '未设置工作目录'}
+        >
           <span className="rounded bg-bg-light px-1.5 py-0.5 text-text-muted">{scopeLabel}</span>
-          <span className="max-w-[240px] truncate text-text-primary" title={scopeValue}>{scopeValue}</span>
-          {cwd && <span className="max-w-[180px] truncate font-mono text-text-dim" title={cwd}>· {cwd.split('/').pop()}</span>}
+          <span className="max-w-[280px] truncate text-text-primary">{scopeValue}</span>
         </span>
       </div>
 
