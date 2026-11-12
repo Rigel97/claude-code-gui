@@ -503,7 +503,7 @@ describe('SessionHistory offline public boundary', () => {
     await expect(broken.history.rename({ cwd: broken.cwd, sessionId: SID, title: 'Name' })).rejects.toThrow(/SDK unavailable/i);
     expect(broken.release).toHaveBeenCalledTimes(1);
   });
-  it('uses SDK 0.3.229 offline to fork fresh UUID chains and rename without altering the source', async () => {
+  it('uses SDK 0.3.322 offline to fork fresh UUID chains and rename without altering the source', async () => {
     const { root, cwd, home, acquireSession } = setup();
     const file = writeTranscript(root, cwd, { folder: cwd.replace(/[^a-zA-Z0-9]/g, '-') });
     fs.rmSync(path.join(root, 'projects', 'opaque-folder-no-path-guess'), { recursive: true });

@@ -231,7 +231,7 @@ async function fixture(body: (f: DesktopFixture) => Promise<void>) {
     expect(executable, 'Opt-in desktop regression requires the real installed CLI').not.toBe('');
     env.PATH = [dirname(executable), dirname(process.execPath), '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(delimiter);
     const version = await exec(executable, ['--version'], { env, cwd, timeout: 10_000 });
-    expect(version.stdout.trim()).toBe('2.1.229 (Claude Code)');
+    expect(version.stdout.trim()).toBe('2.1.322 (Claude Code)');
     // Only public startup fixture files are written, all inside the temporary tree.
     await writeFile(join(config, 'settings.json'), JSON.stringify({ permissions: { ask: ['Bash'] } }));
     await writeFile(join(userData, 'claude-gui-config.json'), JSON.stringify({ appState: {
@@ -401,7 +401,7 @@ desktop('production App → preload → main → native/SDK, Electron 33, local 
         expect(await f.page.getByRole('button', { name: permission, exact: false }).count(), permission).toBe(1);
       }
       await f.page.getByRole('button', { name: '刷新运行时诊断', exact: true }).click();
-      await f.wait(() => f.page.getByText('CLI 版本：2.1.229', { exact: true }).isVisible(), 'real executable version diagnostics');
+      await f.wait(() => f.page.getByText('CLI 版本：2.1.322', { exact: true }).isVisible(), 'real executable version diagnostics');
       expect(await f.page.getByLabel('环境变量值', { exact: true }).getAttribute('type')).toBe('password');
       expect(await f.page.getByLabel('环境变量值', { exact: true }).inputValue()).toBe('');
       expect(await f.page.locator('body').innerText()).not.toContain(KEY);

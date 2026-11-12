@@ -143,11 +143,11 @@ async function fixture(testBody) {
     }
     expect(executable, 'Opt-in requires an installed, executable claude on PATH').toBeTruthy();
     const { stdout } = await execFileAsync(executable, ['--version'], { env, cwd, timeout: 10000 });
-    expect(stdout.trim()).toBe('2.1.229 (Claude Code)');
+    expect(stdout.trim()).toBe('2.1.322 (Claude Code)');
     const sdkPackage = JSON.parse(await readFile(join(dirname(require.resolve('@anthropic-ai/claude-agent-sdk')), 'package.json'), 'utf8'));
-    expect(sdkPackage).toMatchObject({ version: '0.3.229', claudeCodeVersion: '2.1.229' });
+    expect(sdkPackage).toMatchObject({ version: '0.3.322', claudeCodeVersion: '2.1.322' });
     runner = new ClaudeRunner(`integration-${randomUUID()}`, {
-      getRuntime: async () => { runtimeCalls++; return { executable, env, version: '2.1.229' }; },
+      getRuntime: async () => { runtimeCalls++; return { executable, env, version: '2.1.322' }; },
       emitStream: event => events.push(event), emitStatus: event => statuses.push(event), ownerWebContentsId: 1,
     });
     const f = {
@@ -243,7 +243,7 @@ async function approval(f, name) {
   return request;
 }
 
-integration('installed SDK 0.3.229 + PATH CLI 2.1.229, local-only Messages API', () => {
+integration('installed SDK 0.3.322 + PATH CLI 2.1.322, local-only Messages API', () => {
   it('bootstraps through public SDK methods without a synthetic prompt or model call', async () => {
     await fixture(async f => {
       const boot = await f.boot();
@@ -409,7 +409,7 @@ integration('installed SDK 0.3.229 + PATH CLI 2.1.229, local-only Messages API',
       expect(await f.runner.send({ prompt: `Wait for the delayed response ${randomUUID()}`, userMessageId: randomUUID() })).toMatchObject({ success: true });
       await f.wait(() => Boolean(response), 'held HTTP model request');
       const result = await f.runner.interrupt();
-      // This suite pins the actual 2.1.229 receipt-capable CLI: a failed or
+      // This suite pins the actual 2.1.322 receipt-capable CLI: a failed or
       // unconfirmed interruption is a regression, never a passing alternative.
       expect(result, f.diagnostics()).toEqual({ success: true, stillQueued: [] });
       expect(await f.runner.close()).toEqual({ success: true });
